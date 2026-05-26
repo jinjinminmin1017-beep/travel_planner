@@ -1,0 +1,1086 @@
+{
+  "$defs": {
+    "BookingRedirect": {
+      "additionalProperties": false,
+      "properties": {
+        "redirect_id": {
+          "title": "Redirect Id",
+          "type": "string"
+        },
+        "redirect_type": {
+          "enum": [
+            "RAIL_12306",
+            "AIRLINE",
+            "OTA",
+            "MAP_NAVIGATION",
+            "RIDE_HAILING"
+          ],
+          "title": "Redirect Type",
+          "type": "string"
+        },
+        "transaction_boundary": {
+          "const": "REDIRECT_ONLY",
+          "default": "REDIRECT_ONLY",
+          "title": "Transaction Boundary",
+          "type": "string"
+        },
+        "url_available": {
+          "title": "Url Available",
+          "type": "boolean"
+        },
+        "url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Url"
+        },
+        "fallback_instruction": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Fallback Instruction"
+        },
+        "data_source": {
+          "$ref": "#/$defs/DataSourceMetadata"
+        },
+        "generated_at": {
+          "$ref": "#/$defs/TimePoint"
+        },
+        "expires_at": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TimePoint"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "redirect_id",
+        "redirect_type",
+        "url_available",
+        "data_source",
+        "generated_at"
+      ],
+      "title": "BookingRedirect",
+      "type": "object"
+    },
+    "CabinOption": {
+      "additionalProperties": false,
+      "properties": {
+        "option_id": {
+          "title": "Option Id",
+          "type": "string"
+        },
+        "cabin_type": {
+          "title": "Cabin Type",
+          "type": "string"
+        },
+        "price": {
+          "$ref": "#/$defs/Money"
+        },
+        "availability": {
+          "title": "Availability",
+          "type": "string"
+        },
+        "source_option_version": {
+          "title": "Source Option Version",
+          "type": "string"
+        },
+        "data_source": {
+          "$ref": "#/$defs/DataSourceMetadata"
+        }
+      },
+      "required": [
+        "option_id",
+        "cabin_type",
+        "price",
+        "availability",
+        "source_option_version",
+        "data_source"
+      ],
+      "title": "CabinOption",
+      "type": "object"
+    },
+    "ComfortScore": {
+      "additionalProperties": false,
+      "properties": {
+        "total_score": {
+          "maximum": 10.0,
+          "minimum": 0.0,
+          "title": "Total Score",
+          "type": "number"
+        },
+        "breakdown": {
+          "additionalProperties": {
+            "type": "number"
+          },
+          "title": "Breakdown",
+          "type": "object"
+        },
+        "score_vector": {
+          "$ref": "#/$defs/NormalizedScores"
+        },
+        "confidence": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "explanation": {
+          "title": "Explanation",
+          "type": "string"
+        }
+      },
+      "required": [
+        "total_score",
+        "breakdown",
+        "score_vector",
+        "confidence",
+        "explanation"
+      ],
+      "title": "ComfortScore",
+      "type": "object"
+    },
+    "CostBreakdown": {
+      "additionalProperties": false,
+      "properties": {
+        "total_cost": {
+          "$ref": "#/$defs/Money"
+        },
+        "items": {
+          "items": {
+            "$ref": "#/$defs/CostItem"
+          },
+          "title": "Items",
+          "type": "array"
+        }
+      },
+      "required": [
+        "total_cost",
+        "items"
+      ],
+      "title": "CostBreakdown",
+      "type": "object"
+    },
+    "CostItem": {
+      "additionalProperties": false,
+      "properties": {
+        "label": {
+          "title": "Label",
+          "type": "string"
+        },
+        "amount": {
+          "$ref": "#/$defs/Money"
+        },
+        "data_source": {
+          "$ref": "#/$defs/DataSourceMetadata"
+        }
+      },
+      "required": [
+        "label",
+        "amount",
+        "data_source"
+      ],
+      "title": "CostItem",
+      "type": "object"
+    },
+    "DataQuality": {
+      "additionalProperties": false,
+      "properties": {
+        "completeness_score": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Completeness Score",
+          "type": "number"
+        },
+        "missing_components": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Missing Components",
+          "type": "array"
+        },
+        "warnings": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Warnings",
+          "type": "array"
+        }
+      },
+      "required": [
+        "completeness_score"
+      ],
+      "title": "DataQuality",
+      "type": "object"
+    },
+    "DataSourceMetadata": {
+      "additionalProperties": false,
+      "properties": {
+        "source_id": {
+          "title": "Source Id",
+          "type": "string"
+        },
+        "source_name": {
+          "title": "Source Name",
+          "type": "string"
+        },
+        "source_type": {
+          "$ref": "#/$defs/DataSourceType"
+        },
+        "authority_level": {
+          "enum": [
+            "S",
+            "A",
+            "B",
+            "C"
+          ],
+          "title": "Authority Level",
+          "type": "string"
+        },
+        "license_status": {
+          "enum": [
+            "APPROVED",
+            "PENDING_REVIEW",
+            "REJECTED"
+          ],
+          "title": "License Status",
+          "type": "string"
+        },
+        "commercial_allowed": {
+          "title": "Commercial Allowed",
+          "type": "boolean"
+        },
+        "fetched_at": {
+          "$ref": "#/$defs/TimePoint"
+        },
+        "update_frequency": {
+          "title": "Update Frequency",
+          "type": "string"
+        },
+        "cacheable": {
+          "title": "Cacheable",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "source_id",
+        "source_name",
+        "source_type",
+        "authority_level",
+        "license_status",
+        "commercial_allowed",
+        "fetched_at",
+        "update_frequency",
+        "cacheable"
+      ],
+      "title": "DataSourceMetadata",
+      "type": "object"
+    },
+    "DataSourceType": {
+      "enum": [
+        "MOCK",
+        "MAP",
+        "RAIL",
+        "FLIGHT",
+        "TAXI",
+        "OTA",
+        "LLM",
+        "INTERNAL_CALCULATION"
+      ],
+      "title": "DataSourceType",
+      "type": "string"
+    },
+    "FlightSegment": {
+      "additionalProperties": false,
+      "properties": {
+        "segment_id": {
+          "title": "Segment Id",
+          "type": "string"
+        },
+        "segment_type": {
+          "const": "FLIGHT",
+          "default": "FLIGHT",
+          "title": "Segment Type",
+          "type": "string"
+        },
+        "flight_number": {
+          "title": "Flight Number",
+          "type": "string"
+        },
+        "origin_airport": {
+          "title": "Origin Airport",
+          "type": "string"
+        },
+        "destination_airport": {
+          "title": "Destination Airport",
+          "type": "string"
+        },
+        "departure_time": {
+          "$ref": "#/$defs/TimePoint"
+        },
+        "arrival_time": {
+          "$ref": "#/$defs/TimePoint"
+        },
+        "duration_minutes": {
+          "title": "Duration Minutes",
+          "type": "integer"
+        },
+        "cabin_options": {
+          "items": {
+            "$ref": "#/$defs/CabinOption"
+          },
+          "minItems": 1,
+          "title": "Cabin Options",
+          "type": "array"
+        },
+        "selected_cabin_option_id": {
+          "title": "Selected Cabin Option Id",
+          "type": "string"
+        },
+        "previous_flight_risk_available": {
+          "title": "Previous Flight Risk Available",
+          "type": "boolean"
+        },
+        "data_source": {
+          "$ref": "#/$defs/DataSourceMetadata"
+        }
+      },
+      "required": [
+        "segment_id",
+        "flight_number",
+        "origin_airport",
+        "destination_airport",
+        "departure_time",
+        "arrival_time",
+        "duration_minutes",
+        "cabin_options",
+        "selected_cabin_option_id",
+        "previous_flight_risk_available",
+        "data_source"
+      ],
+      "title": "FlightSegment",
+      "type": "object"
+    },
+    "LocalTransferSegment": {
+      "additionalProperties": false,
+      "properties": {
+        "segment_id": {
+          "title": "Segment Id",
+          "type": "string"
+        },
+        "segment_type": {
+          "const": "LOCAL_TRANSFER",
+          "default": "LOCAL_TRANSFER",
+          "title": "Segment Type",
+          "type": "string"
+        },
+        "origin": {
+          "title": "Origin",
+          "type": "string"
+        },
+        "destination": {
+          "title": "Destination",
+          "type": "string"
+        },
+        "transfer_mode": {
+          "$ref": "#/$defs/TransportMode"
+        },
+        "distance_meters": {
+          "title": "Distance Meters",
+          "type": "integer"
+        },
+        "duration_minutes": {
+          "title": "Duration Minutes",
+          "type": "integer"
+        },
+        "estimated_cost": {
+          "$ref": "#/$defs/Money"
+        },
+        "traffic_risk": {
+          "$ref": "#/$defs/RiskLevel"
+        },
+        "walking_distance_meters": {
+          "title": "Walking Distance Meters",
+          "type": "integer"
+        },
+        "option_id": {
+          "title": "Option Id",
+          "type": "string"
+        },
+        "available_options": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Available Options",
+          "type": "array"
+        },
+        "data_source": {
+          "$ref": "#/$defs/DataSourceMetadata"
+        },
+        "redirect_info": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BookingRedirect"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "segment_id",
+        "origin",
+        "destination",
+        "transfer_mode",
+        "distance_meters",
+        "duration_minutes",
+        "estimated_cost",
+        "traffic_risk",
+        "walking_distance_meters",
+        "option_id",
+        "data_source"
+      ],
+      "title": "LocalTransferSegment",
+      "type": "object"
+    },
+    "Money": {
+      "additionalProperties": false,
+      "properties": {
+        "amount_minor": {
+          "minimum": 0,
+          "title": "Amount Minor",
+          "type": "integer"
+        },
+        "currency": {
+          "default": "CNY",
+          "maxLength": 3,
+          "minLength": 3,
+          "title": "Currency",
+          "type": "string"
+        },
+        "scale": {
+          "default": 2,
+          "maximum": 6,
+          "minimum": 0,
+          "title": "Scale",
+          "type": "integer"
+        },
+        "is_estimated": {
+          "default": false,
+          "title": "Is Estimated",
+          "type": "boolean"
+        },
+        "display_text": {
+          "title": "Display Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "amount_minor",
+        "display_text"
+      ],
+      "title": "Money",
+      "type": "object"
+    },
+    "NormalizedScores": {
+      "additionalProperties": false,
+      "properties": {
+        "cost": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Cost",
+          "type": "number"
+        },
+        "duration": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Duration",
+          "type": "number"
+        },
+        "comfort": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Comfort",
+          "type": "number"
+        },
+        "risk": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Risk",
+          "type": "number"
+        }
+      },
+      "required": [
+        "cost",
+        "duration",
+        "comfort",
+        "risk"
+      ],
+      "title": "NormalizedScores",
+      "type": "object"
+    },
+    "PlanLifecycleStatus": {
+      "enum": [
+        "ACTIVE",
+        "EXPIRED",
+        "INVALIDATED"
+      ],
+      "title": "PlanLifecycleStatus",
+      "type": "string"
+    },
+    "PlanType": {
+      "enum": [
+        "DIRECT_RAIL",
+        "TRANSFER_RAIL",
+        "MULTI_TRANSFER_RAIL",
+        "RAIL_TICKET_ENHANCEMENT",
+        "DIRECT_FLIGHT",
+        "TRANSFER_FLIGHT",
+        "MULTI_AIRPORT_FLIGHT",
+        "FLIGHT_RAIL_MIXED"
+      ],
+      "title": "PlanType",
+      "type": "string"
+    },
+    "RailSegment": {
+      "additionalProperties": false,
+      "properties": {
+        "segment_id": {
+          "title": "Segment Id",
+          "type": "string"
+        },
+        "segment_type": {
+          "const": "RAIL",
+          "default": "RAIL",
+          "title": "Segment Type",
+          "type": "string"
+        },
+        "train_number": {
+          "title": "Train Number",
+          "type": "string"
+        },
+        "origin_station": {
+          "title": "Origin Station",
+          "type": "string"
+        },
+        "destination_station": {
+          "title": "Destination Station",
+          "type": "string"
+        },
+        "departure_time": {
+          "$ref": "#/$defs/TimePoint"
+        },
+        "arrival_time": {
+          "$ref": "#/$defs/TimePoint"
+        },
+        "duration_minutes": {
+          "title": "Duration Minutes",
+          "type": "integer"
+        },
+        "stop_sequence": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Stop Sequence",
+          "type": "array"
+        },
+        "seat_options": {
+          "items": {
+            "$ref": "#/$defs/SeatOption"
+          },
+          "minItems": 1,
+          "title": "Seat Options",
+          "type": "array"
+        },
+        "selected_seat_option_id": {
+          "title": "Selected Seat Option Id",
+          "type": "string"
+        },
+        "data_source": {
+          "$ref": "#/$defs/DataSourceMetadata"
+        }
+      },
+      "required": [
+        "segment_id",
+        "train_number",
+        "origin_station",
+        "destination_station",
+        "departure_time",
+        "arrival_time",
+        "duration_minutes",
+        "stop_sequence",
+        "seat_options",
+        "selected_seat_option_id",
+        "data_source"
+      ],
+      "title": "RailSegment",
+      "type": "object"
+    },
+    "RecommendationEligibility": {
+      "enum": [
+        "ELIGIBLE",
+        "NOT_RECOMMENDED",
+        "BLOCKED"
+      ],
+      "title": "RecommendationEligibility",
+      "type": "string"
+    },
+    "RiskAssessment": {
+      "additionalProperties": false,
+      "properties": {
+        "overall_risk_level": {
+          "$ref": "#/$defs/RiskLevel"
+        },
+        "recommendation_allowed": {
+          "title": "Recommendation Allowed",
+          "type": "boolean"
+        },
+        "risk_items": {
+          "items": {
+            "$ref": "#/$defs/RiskItem"
+          },
+          "title": "Risk Items",
+          "type": "array"
+        }
+      },
+      "required": [
+        "overall_risk_level",
+        "recommendation_allowed",
+        "risk_items"
+      ],
+      "title": "RiskAssessment",
+      "type": "object"
+    },
+    "RiskItem": {
+      "additionalProperties": false,
+      "properties": {
+        "risk_id": {
+          "title": "Risk Id",
+          "type": "string"
+        },
+        "risk_level": {
+          "$ref": "#/$defs/RiskLevel"
+        },
+        "title": {
+          "title": "Title",
+          "type": "string"
+        },
+        "message": {
+          "title": "Message",
+          "type": "string"
+        },
+        "data_source": {
+          "$ref": "#/$defs/DataSourceMetadata"
+        }
+      },
+      "required": [
+        "risk_id",
+        "risk_level",
+        "title",
+        "message",
+        "data_source"
+      ],
+      "title": "RiskItem",
+      "type": "object"
+    },
+    "RiskLevel": {
+      "enum": [
+        "LOW",
+        "MEDIUM",
+        "HIGH",
+        "BLOCKED"
+      ],
+      "title": "RiskLevel",
+      "type": "string"
+    },
+    "SeatOption": {
+      "additionalProperties": false,
+      "properties": {
+        "option_id": {
+          "title": "Option Id",
+          "type": "string"
+        },
+        "seat_type": {
+          "title": "Seat Type",
+          "type": "string"
+        },
+        "price": {
+          "$ref": "#/$defs/Money"
+        },
+        "availability": {
+          "title": "Availability",
+          "type": "string"
+        },
+        "source_option_version": {
+          "title": "Source Option Version",
+          "type": "string"
+        },
+        "data_source": {
+          "$ref": "#/$defs/DataSourceMetadata"
+        }
+      },
+      "required": [
+        "option_id",
+        "seat_type",
+        "price",
+        "availability",
+        "source_option_version",
+        "data_source"
+      ],
+      "title": "SeatOption",
+      "type": "object"
+    },
+    "TicketEnhancement": {
+      "additionalProperties": false,
+      "properties": {
+        "enhancement_id": {
+          "title": "Enhancement Id",
+          "type": "string"
+        },
+        "grade": {
+          "$ref": "#/$defs/TicketEnhancementGrade"
+        },
+        "actual_origin": {
+          "title": "Actual Origin",
+          "type": "string"
+        },
+        "actual_destination": {
+          "title": "Actual Destination",
+          "type": "string"
+        },
+        "ticket_origin": {
+          "title": "Ticket Origin",
+          "type": "string"
+        },
+        "ticket_destination": {
+          "title": "Ticket Destination",
+          "type": "string"
+        },
+        "ticket_covers_actual_route": {
+          "title": "Ticket Covers Actual Route",
+          "type": "boolean"
+        },
+        "requires_onboard_supplement": {
+          "title": "Requires Onboard Supplement",
+          "type": "boolean"
+        },
+        "unused_distance_ratio": {
+          "minimum": 0.0,
+          "title": "Unused Distance Ratio",
+          "type": "number"
+        },
+        "extra_cost": {
+          "$ref": "#/$defs/Money"
+        },
+        "extra_cost_ratio": {
+          "minimum": 0.0,
+          "title": "Extra Cost Ratio",
+          "type": "number"
+        },
+        "risk_level": {
+          "$ref": "#/$defs/RiskLevel"
+        },
+        "recommendation_message": {
+          "title": "Recommendation Message",
+          "type": "string"
+        },
+        "validation_source": {
+          "title": "Validation Source",
+          "type": "string"
+        },
+        "validation_rule_version": {
+          "title": "Validation Rule Version",
+          "type": "string"
+        },
+        "data_source": {
+          "$ref": "#/$defs/DataSourceMetadata"
+        }
+      },
+      "required": [
+        "enhancement_id",
+        "grade",
+        "actual_origin",
+        "actual_destination",
+        "ticket_origin",
+        "ticket_destination",
+        "ticket_covers_actual_route",
+        "requires_onboard_supplement",
+        "unused_distance_ratio",
+        "extra_cost",
+        "extra_cost_ratio",
+        "risk_level",
+        "recommendation_message",
+        "validation_source",
+        "validation_rule_version",
+        "data_source"
+      ],
+      "title": "TicketEnhancement",
+      "type": "object"
+    },
+    "TicketEnhancementGrade": {
+      "enum": [
+        "S",
+        "A",
+        "NOT_RECOMMENDED",
+        "BLOCKED"
+      ],
+      "title": "TicketEnhancementGrade",
+      "type": "string"
+    },
+    "TimePoint": {
+      "additionalProperties": false,
+      "properties": {
+        "datetime": {
+          "format": "date-time",
+          "title": "Datetime",
+          "type": "string"
+        },
+        "timezone": {
+          "default": "Asia/Shanghai",
+          "title": "Timezone",
+          "type": "string"
+        },
+        "source_timezone": {
+          "default": "Asia/Shanghai",
+          "title": "Source Timezone",
+          "type": "string"
+        }
+      },
+      "required": [
+        "datetime"
+      ],
+      "title": "TimePoint",
+      "type": "object"
+    },
+    "TransportMode": {
+      "enum": [
+        "RAIL",
+        "FLIGHT",
+        "TAXI",
+        "SUBWAY",
+        "BUS",
+        "WALK",
+        "AIRPORT_TRANSFER",
+        "RAIL_STATION_TRANSFER"
+      ],
+      "title": "TransportMode",
+      "type": "string"
+    },
+    "TravelPlan": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "1.15",
+          "default": "1.15",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "plan_id": {
+          "title": "Plan Id",
+          "type": "string"
+        },
+        "plan_name": {
+          "title": "Plan Name",
+          "type": "string"
+        },
+        "plan_type": {
+          "$ref": "#/$defs/PlanType"
+        },
+        "plan_lifecycle_status": {
+          "$ref": "#/$defs/PlanLifecycleStatus"
+        },
+        "recommendation_eligibility": {
+          "$ref": "#/$defs/RecommendationEligibility"
+        },
+        "can_be_selected_by_llm": {
+          "title": "Can Be Selected By Llm",
+          "type": "boolean"
+        },
+        "block_reason_code": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Block Reason Code"
+        },
+        "block_reason_message": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Block Reason Message"
+        },
+        "segments": {
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/LocalTransferSegment"
+              },
+              {
+                "$ref": "#/$defs/RailSegment"
+              },
+              {
+                "$ref": "#/$defs/FlightSegment"
+              }
+            ]
+          },
+          "title": "Segments",
+          "type": "array"
+        },
+        "ticket_enhancement": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TicketEnhancement"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "total_duration_minutes": {
+          "title": "Total Duration Minutes",
+          "type": "integer"
+        },
+        "departure_time": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TimePoint"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "arrival_time": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TimePoint"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "cost_breakdown": {
+          "$ref": "#/$defs/CostBreakdown"
+        },
+        "comfort_score": {
+          "$ref": "#/$defs/ComfortScore"
+        },
+        "risk_assessment": {
+          "$ref": "#/$defs/RiskAssessment"
+        },
+        "data_quality": {
+          "$ref": "#/$defs/DataQuality"
+        },
+        "data_sources": {
+          "items": {
+            "$ref": "#/$defs/DataSourceMetadata"
+          },
+          "minItems": 1,
+          "title": "Data Sources",
+          "type": "array"
+        },
+        "booking_redirects": {
+          "items": {
+            "$ref": "#/$defs/BookingRedirect"
+          },
+          "title": "Booking Redirects",
+          "type": "array"
+        }
+      },
+      "required": [
+        "plan_id",
+        "plan_name",
+        "plan_type",
+        "plan_lifecycle_status",
+        "recommendation_eligibility",
+        "can_be_selected_by_llm",
+        "segments",
+        "total_duration_minutes",
+        "cost_breakdown",
+        "comfort_score",
+        "risk_assessment",
+        "data_quality",
+        "data_sources"
+      ],
+      "title": "TravelPlan",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "1.15",
+      "default": "1.15",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "request_id": {
+      "title": "Request Id",
+      "type": "string"
+    },
+    "trace_id": {
+      "title": "Trace Id",
+      "type": "string"
+    },
+    "correlation_id": {
+      "title": "Correlation Id",
+      "type": "string"
+    },
+    "idempotency_key": {
+      "title": "Idempotency Key",
+      "type": "string"
+    },
+    "plan": {
+      "$ref": "#/$defs/TravelPlan"
+    },
+    "generated_at": {
+      "$ref": "#/$defs/TimePoint"
+    }
+  },
+  "required": [
+    "request_id",
+    "trace_id",
+    "correlation_id",
+    "idempotency_key",
+    "plan",
+    "generated_at"
+  ],
+  "title": "GetTravelPlanResponse",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "x-schema-version": "1.15"
+}

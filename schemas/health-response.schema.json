@@ -1,0 +1,68 @@
+{
+  "$defs": {
+    "TimePoint": {
+      "additionalProperties": false,
+      "properties": {
+        "datetime": {
+          "format": "date-time",
+          "title": "Datetime",
+          "type": "string"
+        },
+        "timezone": {
+          "default": "Asia/Shanghai",
+          "title": "Timezone",
+          "type": "string"
+        },
+        "source_timezone": {
+          "default": "Asia/Shanghai",
+          "title": "Source Timezone",
+          "type": "string"
+        }
+      },
+      "required": [
+        "datetime"
+      ],
+      "title": "TimePoint",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "1.15",
+      "default": "1.15",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "status": {
+      "enum": [
+        "OK",
+        "DEGRADED",
+        "DOWN"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "service_name": {
+      "title": "Service Name",
+      "type": "string"
+    },
+    "version": {
+      "title": "Version",
+      "type": "string"
+    },
+    "checked_at": {
+      "$ref": "#/$defs/TimePoint"
+    }
+  },
+  "required": [
+    "status",
+    "service_name",
+    "version",
+    "checked_at"
+  ],
+  "title": "HealthResponse",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "x-schema-version": "1.15"
+}

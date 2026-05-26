@@ -1,0 +1,85 @@
+{
+  "$defs": {
+    "TimePoint": {
+      "additionalProperties": false,
+      "properties": {
+        "datetime": {
+          "format": "date-time",
+          "title": "Datetime",
+          "type": "string"
+        },
+        "timezone": {
+          "default": "Asia/Shanghai",
+          "title": "Timezone",
+          "type": "string"
+        },
+        "source_timezone": {
+          "default": "Asia/Shanghai",
+          "title": "Source Timezone",
+          "type": "string"
+        }
+      },
+      "required": [
+        "datetime"
+      ],
+      "title": "TimePoint",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "1.15",
+      "default": "1.15",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "request_id": {
+      "title": "Request Id",
+      "type": "string"
+    },
+    "error_code": {
+      "title": "Error Code",
+      "type": "string"
+    },
+    "message": {
+      "title": "Message",
+      "type": "string"
+    },
+    "user_visible_message": {
+      "title": "User Visible Message",
+      "type": "string"
+    },
+    "retryable": {
+      "title": "Retryable",
+      "type": "boolean"
+    },
+    "details": {
+      "anyOf": [
+        {
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Details"
+    },
+    "generated_at": {
+      "$ref": "#/$defs/TimePoint"
+    }
+  },
+  "required": [
+    "request_id",
+    "error_code",
+    "message",
+    "user_visible_message",
+    "retryable",
+    "details",
+    "generated_at"
+  ],
+  "title": "ErrorResponse",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "x-schema-version": "1.15"
+}

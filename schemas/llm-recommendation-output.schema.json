@@ -1,0 +1,99 @@
+{
+  "$defs": {
+    "RecommendationSlot": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "1.15",
+          "default": "1.15",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "recommendation_type": {
+          "$ref": "#/$defs/RecommendationType"
+        },
+        "status": {
+          "$ref": "#/$defs/RecommendationSlotStatus"
+        },
+        "plan_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Plan Id"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        }
+      },
+      "required": [
+        "recommendation_type",
+        "status",
+        "plan_id",
+        "reason"
+      ],
+      "title": "RecommendationSlot",
+      "type": "object"
+    },
+    "RecommendationSlotStatus": {
+      "enum": [
+        "AVAILABLE",
+        "NOT_AVAILABLE",
+        "BLOCKED"
+      ],
+      "title": "RecommendationSlotStatus",
+      "type": "string"
+    },
+    "RecommendationType": {
+      "enum": [
+        "CHEAPEST",
+        "MOST_COMFORTABLE",
+        "BALANCED"
+      ],
+      "title": "RecommendationType",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "1.15",
+      "default": "1.15",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "selected_recommendations": {
+      "items": {
+        "$ref": "#/$defs/RecommendationSlot"
+      },
+      "maxItems": 3,
+      "minItems": 3,
+      "title": "Selected Recommendations",
+      "type": "array"
+    },
+    "validation_blockers": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Validation Blockers",
+      "type": "array"
+    },
+    "explanation": {
+      "title": "Explanation",
+      "type": "string"
+    }
+  },
+  "required": [
+    "selected_recommendations",
+    "explanation"
+  ],
+  "title": "LLMRecommendationOutput",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "x-schema-version": "1.15"
+}

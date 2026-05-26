@@ -1,0 +1,355 @@
+{
+  "$defs": {
+    "Money": {
+      "additionalProperties": false,
+      "properties": {
+        "amount_minor": {
+          "minimum": 0,
+          "title": "Amount Minor",
+          "type": "integer"
+        },
+        "currency": {
+          "default": "CNY",
+          "maxLength": 3,
+          "minLength": 3,
+          "title": "Currency",
+          "type": "string"
+        },
+        "scale": {
+          "default": 2,
+          "maximum": 6,
+          "minimum": 0,
+          "title": "Scale",
+          "type": "integer"
+        },
+        "is_estimated": {
+          "default": false,
+          "title": "Is Estimated",
+          "type": "boolean"
+        },
+        "display_text": {
+          "title": "Display Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "amount_minor",
+        "display_text"
+      ],
+      "title": "Money",
+      "type": "object"
+    },
+    "RecommendationType": {
+      "enum": [
+        "CHEAPEST",
+        "MOST_COMFORTABLE",
+        "BALANCED"
+      ],
+      "title": "RecommendationType",
+      "type": "string"
+    },
+    "TimePoint": {
+      "additionalProperties": false,
+      "properties": {
+        "datetime": {
+          "format": "date-time",
+          "title": "Datetime",
+          "type": "string"
+        },
+        "timezone": {
+          "default": "Asia/Shanghai",
+          "title": "Timezone",
+          "type": "string"
+        },
+        "source_timezone": {
+          "default": "Asia/Shanghai",
+          "title": "Source Timezone",
+          "type": "string"
+        }
+      },
+      "required": [
+        "datetime"
+      ],
+      "title": "TimePoint",
+      "type": "object"
+    },
+    "TransportMode": {
+      "enum": [
+        "RAIL",
+        "FLIGHT",
+        "TAXI",
+        "SUBWAY",
+        "BUS",
+        "WALK",
+        "AIRPORT_TRANSFER",
+        "RAIL_STATION_TRANSFER"
+      ],
+      "title": "TransportMode",
+      "type": "string"
+    },
+    "TravelHardConstraints": {
+      "additionalProperties": false,
+      "properties": {
+        "latest_arrival_time": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TimePoint"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "earliest_departure_time": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TimePoint"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "max_total_cost": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Money"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "allowed_transport_modes": {
+          "items": {
+            "$ref": "#/$defs/TransportMode"
+          },
+          "title": "Allowed Transport Modes",
+          "type": "array"
+        },
+        "excluded_transport_modes": {
+          "items": {
+            "$ref": "#/$defs/TransportMode"
+          },
+          "title": "Excluded Transport Modes",
+          "type": "array"
+        }
+      },
+      "title": "TravelHardConstraints",
+      "type": "object"
+    },
+    "TravelRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "1.15",
+          "default": "1.15",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "request_id": {
+          "title": "Request Id",
+          "type": "string"
+        },
+        "raw_user_input": {
+          "title": "Raw User Input",
+          "type": "string"
+        },
+        "origin_text": {
+          "title": "Origin Text",
+          "type": "string"
+        },
+        "destination_text": {
+          "title": "Destination Text",
+          "type": "string"
+        },
+        "travel_date": {
+          "format": "date",
+          "title": "Travel Date",
+          "type": "string"
+        },
+        "earliest_departure_time": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TimePoint"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "latest_arrival_time": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TimePoint"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "preferred_departure_time": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TimePoint"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "preferences": {
+          "items": {
+            "$ref": "#/$defs/RecommendationType"
+          },
+          "title": "Preferences",
+          "type": "array"
+        },
+        "preference_source": {
+          "default": "SYSTEM_DEFAULT",
+          "enum": [
+            "SYSTEM_DEFAULT",
+            "USER_EXPLICIT"
+          ],
+          "title": "Preference Source",
+          "type": "string"
+        },
+        "hard_constraints": {
+          "$ref": "#/$defs/TravelHardConstraints"
+        },
+        "soft_preferences": {
+          "$ref": "#/$defs/TravelSoftPreferences"
+        },
+        "preferred_rail_seat": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Preferred Rail Seat"
+        },
+        "preferred_flight_cabin": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Preferred Flight Cabin"
+        }
+      },
+      "required": [
+        "request_id",
+        "raw_user_input",
+        "origin_text",
+        "destination_text",
+        "travel_date",
+        "preferences",
+        "hard_constraints",
+        "soft_preferences"
+      ],
+      "title": "TravelRequest",
+      "type": "object"
+    },
+    "TravelSoftPreferences": {
+      "additionalProperties": false,
+      "properties": {
+        "prefer_low_cost": {
+          "default": false,
+          "title": "Prefer Low Cost",
+          "type": "boolean"
+        },
+        "prefer_comfort": {
+          "default": false,
+          "title": "Prefer Comfort",
+          "type": "boolean"
+        },
+        "accept_rail_transfer": {
+          "default": true,
+          "title": "Accept Rail Transfer",
+          "type": "boolean"
+        },
+        "accept_flight_transfer": {
+          "default": true,
+          "title": "Accept Flight Transfer",
+          "type": "boolean"
+        },
+        "accept_mixed_transport": {
+          "default": true,
+          "title": "Accept Mixed Transport",
+          "type": "boolean"
+        },
+        "accept_ticket_enhancement": {
+          "default": true,
+          "title": "Accept Ticket Enhancement",
+          "type": "boolean"
+        },
+        "passenger_notes": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Passenger Notes",
+          "type": "array"
+        }
+      },
+      "title": "TravelSoftPreferences",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "1.15",
+      "default": "1.15",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "request_id": {
+      "title": "Request Id",
+      "type": "string"
+    },
+    "trace_id": {
+      "title": "Trace Id",
+      "type": "string"
+    },
+    "correlation_id": {
+      "title": "Correlation Id",
+      "type": "string"
+    },
+    "idempotency_key": {
+      "title": "Idempotency Key",
+      "type": "string"
+    },
+    "travel_request": {
+      "$ref": "#/$defs/TravelRequest"
+    },
+    "generated_at": {
+      "$ref": "#/$defs/TimePoint"
+    }
+  },
+  "required": [
+    "request_id",
+    "trace_id",
+    "correlation_id",
+    "idempotency_key",
+    "travel_request",
+    "generated_at"
+  ],
+  "title": "ParseTravelRequestResponse",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "x-schema-version": "1.15"
+}

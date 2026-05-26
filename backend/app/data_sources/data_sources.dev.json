@@ -1,0 +1,58 @@
+[
+  {
+    "source_id": "mock_map",
+    "source_name": "Mock Map Provider",
+    "source_type": "MOCK",
+    "authority_level": "B",
+    "environment": "DEV",
+    "license_status": "APPROVED",
+    "commercial_allowed": false,
+    "enabled": true,
+    "qps_limit": 1000,
+    "sla_level": "MOCK",
+    "fallback_source_id": null,
+    "last_checked_at": null
+  },
+  {
+    "source_id": "mock_rail",
+    "source_name": "Mock Rail Provider",
+    "source_type": "MOCK",
+    "authority_level": "B",
+    "environment": "DEV",
+    "license_status": "APPROVED",
+    "commercial_allowed": false,
+    "enabled": true,
+    "qps_limit": 1000,
+    "sla_level": "MOCK",
+    "fallback_source_id": null,
+    "last_checked_at": null
+  },
+  {
+    "source_id": "mock_flight",
+    "source_name": "Mock Flight Provider",
+    "source_type": "MOCK",
+    "authority_level": "B",
+    "environment": "DEV",
+    "license_status": "APPROVED",
+    "commercial_allowed": false,
+    "enabled": true,
+    "qps_limit": 1000,
+    "sla_level": "MOCK",
+    "fallback_source_id": null,
+    "last_checked_at": null
+  },
+  {
+    "source_id": "mock_llm",
+    "source_name": "Mock LLM Provider",
+    "source_type": "MOCK",
+    "authority_level": "B",
+    "environment": "DEV",
+    "license_status": "APPROVED",
+    "commercial_allowed": false,
+    "enabled": true,
+    "qps_limit": 1000,
+    "sla_level": "MOCK",
+    "fallback_source_id": null,
+    "last_checked_at": null
+  }
+]

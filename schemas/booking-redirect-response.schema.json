@@ -1,0 +1,229 @@
+{
+  "$defs": {
+    "BookingRedirect": {
+      "additionalProperties": false,
+      "properties": {
+        "redirect_id": {
+          "title": "Redirect Id",
+          "type": "string"
+        },
+        "redirect_type": {
+          "enum": [
+            "RAIL_12306",
+            "AIRLINE",
+            "OTA",
+            "MAP_NAVIGATION",
+            "RIDE_HAILING"
+          ],
+          "title": "Redirect Type",
+          "type": "string"
+        },
+        "transaction_boundary": {
+          "const": "REDIRECT_ONLY",
+          "default": "REDIRECT_ONLY",
+          "title": "Transaction Boundary",
+          "type": "string"
+        },
+        "url_available": {
+          "title": "Url Available",
+          "type": "boolean"
+        },
+        "url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Url"
+        },
+        "fallback_instruction": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Fallback Instruction"
+        },
+        "data_source": {
+          "$ref": "#/$defs/DataSourceMetadata"
+        },
+        "generated_at": {
+          "$ref": "#/$defs/TimePoint"
+        },
+        "expires_at": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TimePoint"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "redirect_id",
+        "redirect_type",
+        "url_available",
+        "data_source",
+        "generated_at"
+      ],
+      "title": "BookingRedirect",
+      "type": "object"
+    },
+    "DataSourceMetadata": {
+      "additionalProperties": false,
+      "properties": {
+        "source_id": {
+          "title": "Source Id",
+          "type": "string"
+        },
+        "source_name": {
+          "title": "Source Name",
+          "type": "string"
+        },
+        "source_type": {
+          "$ref": "#/$defs/DataSourceType"
+        },
+        "authority_level": {
+          "enum": [
+            "S",
+            "A",
+            "B",
+            "C"
+          ],
+          "title": "Authority Level",
+          "type": "string"
+        },
+        "license_status": {
+          "enum": [
+            "APPROVED",
+            "PENDING_REVIEW",
+            "REJECTED"
+          ],
+          "title": "License Status",
+          "type": "string"
+        },
+        "commercial_allowed": {
+          "title": "Commercial Allowed",
+          "type": "boolean"
+        },
+        "fetched_at": {
+          "$ref": "#/$defs/TimePoint"
+        },
+        "update_frequency": {
+          "title": "Update Frequency",
+          "type": "string"
+        },
+        "cacheable": {
+          "title": "Cacheable",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "source_id",
+        "source_name",
+        "source_type",
+        "authority_level",
+        "license_status",
+        "commercial_allowed",
+        "fetched_at",
+        "update_frequency",
+        "cacheable"
+      ],
+      "title": "DataSourceMetadata",
+      "type": "object"
+    },
+    "DataSourceType": {
+      "enum": [
+        "MOCK",
+        "MAP",
+        "RAIL",
+        "FLIGHT",
+        "TAXI",
+        "OTA",
+        "LLM",
+        "INTERNAL_CALCULATION"
+      ],
+      "title": "DataSourceType",
+      "type": "string"
+    },
+    "TimePoint": {
+      "additionalProperties": false,
+      "properties": {
+        "datetime": {
+          "format": "date-time",
+          "title": "Datetime",
+          "type": "string"
+        },
+        "timezone": {
+          "default": "Asia/Shanghai",
+          "title": "Timezone",
+          "type": "string"
+        },
+        "source_timezone": {
+          "default": "Asia/Shanghai",
+          "title": "Source Timezone",
+          "type": "string"
+        }
+      },
+      "required": [
+        "datetime"
+      ],
+      "title": "TimePoint",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "1.15",
+      "default": "1.15",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "request_id": {
+      "title": "Request Id",
+      "type": "string"
+    },
+    "trace_id": {
+      "title": "Trace Id",
+      "type": "string"
+    },
+    "correlation_id": {
+      "title": "Correlation Id",
+      "type": "string"
+    },
+    "idempotency_key": {
+      "title": "Idempotency Key",
+      "type": "string"
+    },
+    "redirect": {
+      "$ref": "#/$defs/BookingRedirect"
+    },
+    "generated_at": {
+      "$ref": "#/$defs/TimePoint"
+    }
+  },
+  "required": [
+    "request_id",
+    "trace_id",
+    "correlation_id",
+    "idempotency_key",
+    "redirect",
+    "generated_at"
+  ],
+  "title": "BookingRedirectResponse",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "x-schema-version": "1.15"
+}

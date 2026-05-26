@@ -1,0 +1,333 @@
+{
+  "$defs": {
+    "DataSourceRuntimeStatus": {
+      "additionalProperties": false,
+      "properties": {
+        "source_id": {
+          "title": "Source Id",
+          "type": "string"
+        },
+        "source_name": {
+          "title": "Source Name",
+          "type": "string"
+        },
+        "source_type": {
+          "$ref": "#/$defs/DataSourceType"
+        },
+        "enabled": {
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "status": {
+          "enum": [
+            "OK",
+            "DEGRADED",
+            "DOWN"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "degraded": {
+          "title": "Degraded",
+          "type": "boolean"
+        },
+        "degraded_reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Degraded Reason"
+        },
+        "last_success_at": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TimePoint"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "last_failure_at": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TimePoint"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "latest_failure": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SourceFailure"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "average_latency_ms": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Average Latency Ms"
+        },
+        "checked_at": {
+          "$ref": "#/$defs/TimePoint"
+        }
+      },
+      "required": [
+        "source_id",
+        "source_name",
+        "source_type",
+        "enabled",
+        "status",
+        "degraded",
+        "checked_at"
+      ],
+      "title": "DataSourceRuntimeStatus",
+      "type": "object"
+    },
+    "DataSourceType": {
+      "enum": [
+        "MOCK",
+        "MAP",
+        "RAIL",
+        "FLIGHT",
+        "TAXI",
+        "OTA",
+        "LLM",
+        "INTERNAL_CALCULATION"
+      ],
+      "title": "DataSourceType",
+      "type": "string"
+    },
+    "PlanType": {
+      "enum": [
+        "DIRECT_RAIL",
+        "TRANSFER_RAIL",
+        "MULTI_TRANSFER_RAIL",
+        "RAIL_TICKET_ENHANCEMENT",
+        "DIRECT_FLIGHT",
+        "TRANSFER_FLIGHT",
+        "MULTI_AIRPORT_FLIGHT",
+        "FLIGHT_RAIL_MIXED"
+      ],
+      "title": "PlanType",
+      "type": "string"
+    },
+    "SourceFailure": {
+      "additionalProperties": false,
+      "properties": {
+        "failure_id": {
+          "title": "Failure Id",
+          "type": "string"
+        },
+        "request_id": {
+          "title": "Request Id",
+          "type": "string"
+        },
+        "trace_id": {
+          "title": "Trace Id",
+          "type": "string"
+        },
+        "correlation_id": {
+          "title": "Correlation Id",
+          "type": "string"
+        },
+        "source_id": {
+          "title": "Source Id",
+          "type": "string"
+        },
+        "source_used_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Used Id"
+        },
+        "fallback_source_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Fallback Source Id"
+        },
+        "fallback_reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Fallback Reason"
+        },
+        "fallback_used": {
+          "title": "Fallback Used",
+          "type": "boolean"
+        },
+        "failure_class": {
+          "$ref": "#/$defs/SourceFailureClass"
+        },
+        "message": {
+          "title": "Message",
+          "type": "string"
+        },
+        "final_handling_strategy": {
+          "$ref": "#/$defs/SourceFailureHandlingStrategy"
+        },
+        "impacted_plan_types": {
+          "items": {
+            "$ref": "#/$defs/PlanType"
+          },
+          "title": "Impacted Plan Types",
+          "type": "array"
+        },
+        "user_visible_message": {
+          "title": "User Visible Message",
+          "type": "string"
+        },
+        "occurred_at": {
+          "$ref": "#/$defs/TimePoint"
+        }
+      },
+      "required": [
+        "failure_id",
+        "request_id",
+        "trace_id",
+        "correlation_id",
+        "source_id",
+        "fallback_used",
+        "failure_class",
+        "message",
+        "final_handling_strategy",
+        "impacted_plan_types",
+        "user_visible_message",
+        "occurred_at"
+      ],
+      "title": "SourceFailure",
+      "type": "object"
+    },
+    "SourceFailureClass": {
+      "enum": [
+        "AUXILIARY",
+        "FALLBACK_USED",
+        "CORE_FACT",
+        "SAFETY_CRITICAL"
+      ],
+      "title": "SourceFailureClass",
+      "type": "string"
+    },
+    "SourceFailureHandlingStrategy": {
+      "enum": [
+        "USE_ORIGINAL",
+        "USE_FALLBACK",
+        "PARTIAL_RESULT",
+        "BLOCK_PLAN_TYPE"
+      ],
+      "title": "SourceFailureHandlingStrategy",
+      "type": "string"
+    },
+    "TimePoint": {
+      "additionalProperties": false,
+      "properties": {
+        "datetime": {
+          "format": "date-time",
+          "title": "Datetime",
+          "type": "string"
+        },
+        "timezone": {
+          "default": "Asia/Shanghai",
+          "title": "Timezone",
+          "type": "string"
+        },
+        "source_timezone": {
+          "default": "Asia/Shanghai",
+          "title": "Source Timezone",
+          "type": "string"
+        }
+      },
+      "required": [
+        "datetime"
+      ],
+      "title": "TimePoint",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "1.15",
+      "default": "1.15",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "request_id": {
+      "title": "Request Id",
+      "type": "string"
+    },
+    "trace_id": {
+      "title": "Trace Id",
+      "type": "string"
+    },
+    "correlation_id": {
+      "title": "Correlation Id",
+      "type": "string"
+    },
+    "idempotency_key": {
+      "title": "Idempotency Key",
+      "type": "string"
+    },
+    "sources": {
+      "items": {
+        "$ref": "#/$defs/DataSourceRuntimeStatus"
+      },
+      "title": "Sources",
+      "type": "array"
+    },
+    "generated_at": {
+      "$ref": "#/$defs/TimePoint"
+    }
+  },
+  "required": [
+    "request_id",
+    "trace_id",
+    "correlation_id",
+    "idempotency_key",
+    "sources",
+    "generated_at"
+  ],
+  "title": "DataSourceStatusResponse",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "x-schema-version": "1.15"
+}

@@ -1,0 +1,96 @@
+{
+  "$defs": {
+    "SelectedOption": {
+      "additionalProperties": false,
+      "properties": {
+        "option_type": {
+          "enum": [
+            "RAIL_SEAT",
+            "FLIGHT_CABIN",
+            "LOCAL_TRANSFER"
+          ],
+          "title": "Option Type",
+          "type": "string"
+        },
+        "option_id": {
+          "title": "Option Id",
+          "type": "string"
+        },
+        "option_value": {
+          "title": "Option Value",
+          "type": "string"
+        },
+        "source_option_version": {
+          "title": "Source Option Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "option_type",
+        "option_id",
+        "option_value",
+        "source_option_version"
+      ],
+      "title": "SelectedOption",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "1.15",
+      "default": "1.15",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "request_id": {
+      "title": "Request Id",
+      "type": "string"
+    },
+    "idempotency_key": {
+      "title": "Idempotency Key",
+      "type": "string"
+    },
+    "plan_id": {
+      "title": "Plan Id",
+      "type": "string"
+    },
+    "change_type": {
+      "enum": [
+        "RAIL_SEAT",
+        "FLIGHT_CABIN",
+        "LOCAL_TRANSFER"
+      ],
+      "title": "Change Type",
+      "type": "string"
+    },
+    "target_segment_id": {
+      "title": "Target Segment Id",
+      "type": "string"
+    },
+    "selected_option": {
+      "$ref": "#/$defs/SelectedOption"
+    },
+    "recalculate_scope": {
+      "default": "PLAN_TOTAL",
+      "enum": [
+        "SEGMENT_ONLY",
+        "PLAN_TOTAL"
+      ],
+      "title": "Recalculate Scope",
+      "type": "string"
+    }
+  },
+  "required": [
+    "request_id",
+    "idempotency_key",
+    "plan_id",
+    "change_type",
+    "target_segment_id",
+    "selected_option"
+  ],
+  "title": "RecalculateRequest",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "x-schema-version": "1.15"
+}
