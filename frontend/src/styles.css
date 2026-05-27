@@ -317,7 +317,7 @@ textarea:focus {
 
 .detail-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.45fr) minmax(320px, 0.85fr);
+  grid-template-columns: minmax(0, 1.2fr) minmax(360px, 0.8fr);
   gap: 18px;
   padding: 18px;
   margin-top: 14px;
@@ -434,8 +434,16 @@ textarea:focus {
 }
 
 .option-group-title {
+  display: flex;
+  justify-content: space-between;
+  align-items: start;
+  gap: 12px;
+}
+
+.option-group-title div {
   display: grid;
-  gap: 3px;
+  gap: 4px;
+  min-width: 0;
 }
 
 .option-group-title span {
@@ -453,6 +461,45 @@ textarea:focus {
   overflow-wrap: anywhere;
 }
 
+.expand-button {
+  width: 34px;
+  height: 34px;
+  display: inline-grid;
+  flex: 0 0 auto;
+  place-items: center;
+  padding: 0;
+}
+
+.selected-option-summary,
+.option-detail-panel {
+  display: grid;
+  gap: 8px;
+}
+
+.selected-option-summary {
+  border: 1px solid #e0e8e4;
+  border-radius: 8px;
+  padding: 10px;
+  background: #fbfdfc;
+}
+
+.selected-option-summary > div:first-child {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+
+.selected-option-summary strong {
+  font-size: 16px;
+}
+
+.selected-option-summary span {
+  color: var(--muted);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
 .option-buttons,
 .transfer-option-list {
   display: grid;
@@ -467,6 +514,11 @@ textarea:focus {
 .transfer-option button {
   padding: 8px 10px;
   min-height: 36px;
+}
+
+.option-group .expand-button {
+  min-height: 34px;
+  padding: 0;
 }
 
 .transfer-option {
@@ -506,6 +558,10 @@ textarea:focus {
   display: grid;
   gap: 5px;
   padding: 10px;
+}
+
+.transfer-route.compact {
+  padding: 0;
 }
 
 .transfer-route small {

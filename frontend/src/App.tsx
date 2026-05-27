@@ -1,4 +1,4 @@
-import { AlertTriangle, Clock, Database, ExternalLink, Plane, RefreshCw, Route, Search, Train, WalletCards } from "lucide-react";
+import { AlertTriangle, ChevronDown, ChevronUp, Clock, Database, ExternalLink, Plane, RefreshCw, Route, Search, Train, WalletCards } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { bookingRedirect, loadDataSources, planTrip, recalculate } from "./api/client";
 import type { DataSourceStatusResponse, LocalTransferOption, RecommendationSlot, Segment, TravelPlan, TravelPlanResponse } from "./types";
@@ -51,6 +51,21 @@ function segmentTitle(segment: Segment) {
   return `${transferModeLabel(segment.transfer_mode ?? "")} ${segment.origin} → ${segment.destination}`;
 }
 
+function segmentModeLabel(segment: Segment) {
+  if (segment.segment_type === "LOCAL_TRANSFER") return transferModeLabel(segment.transfer_mode ?? "");
+  if (segment.segment_type === "RAIL") return "高铁";
+  if (segment.segment_type === "FLIGHT") return "航班";
+  return segment.segment_type;
+}
+
+function planDisplayName(plan: TravelPlan) {
+  const originalParts = plan.plan_name.split("+").map((part) => part.trim());
+  if (originalParts.length === plan.segments.length) {
+    return plan.segments.map((segment, index) => (segment.segment_type === "LOCAL_TRANSFER" ? segmentModeLabel(segment) : originalParts[index])).join(" + ");
+  }
+  return plan.segments.map(segmentModeLabel).join(" + ");
+}
+
 function fallbackTransferOption(segment: Segment, optionId: string): LocalTransferOption {
   const mode = optionId.replace("transfer_", "").toUpperCase();
   const label = transferModeLabel(optionId);
@@ -70,6 +85,43 @@ function fallbackTransferOption(segment: Segment, optionId: string): LocalTransf
   };
 }
 
+function transferOptionsFor(segment: Segment) {
+  return segment.transfer_options?.length ? segment.transfer_options : segment.available_options?.map((option) => fallbackTransferOption(segment, option)) ?? [];
+}
+
+function selectedTransferOption(segment: Segment) {
+  return transferOptionsFor(segment).find((option) => option.option_id === segment.option_id) ?? transferOptionsFor(segment)[0] ?? null;
+}
+
+function selectedRailSeat(segment: Segment) {
+  return segment.seat_options?.find((option) => option.option_id === segment.selected_seat_option_id) ?? segment.seat_options?.[0] ?? null;
+}
+
+function selectedFlightCabin(segment: Segment) {
+  return segment.cabin_options?.find((option) => option.option_id === segment.selected_cabin_option_id) ?? segment.cabin_options?.[0] ?? null;
+}
+
+function TransferRouteSummary({ option, detailed = false }: { option: LocalTransferOption; detailed?: boolean }) {
+  return (
+    <div className={detailed ? "transfer-route" : "transfer-route compact"}>
+      {(option.access_station || option.egress_station) && (
+        <small>
+          {option.access_station ?? "上车点"} → {option.egress_station ?? "下车点"}
+        </small>
+      )}
+      {detailed ? (
+        <>
+          <p>{option.access_instruction}</p>
+          <p>{option.ride_instruction}</p>
+          <p>{option.egress_instruction}</p>
+        </>
+      ) : (
+        <p>{option.access_instruction} {option.ride_instruction} {option.egress_instruction}</p>
+      )}
+    </div>
+  );
+}
+
 function RecommendationCard({ slot, plan, selected, onSelect }: { slot: RecommendationSlot; plan: TravelPlan | null; selected: boolean; onSelect: (plan: TravelPlan) => void }) {
   return (
     <section className={selected ? "card recommendation-card selected" : "card recommendation-card"}>
@@ -79,7 +131,7 @@ function RecommendationCard({ slot, plan, selected, onSelect }: { slot: Recommen
       </div>
       {plan ? (
         <>
-          <h2>{plan.plan_name}</h2>
+          <h2>{planDisplayName(plan)}</h2>
           <span className="plan-type">{planTypeLabel(plan.plan_type)}</span>
           <div className="metric-row">
             <span><WalletCards size={16} />{formatMoney(plan.cost_breakdown.total_cost)}</span>
@@ -120,6 +172,12 @@ function SegmentTimeline({ segments }: { segments: Segment[] }) {
 function DetailPanel({ plan, onRecalculated }: { plan: TravelPlan; onRecalculated: (plan: TravelPlan) => void }) {
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
+  const [expandedSegments, setExpandedSegments] = useState<Record<string, boolean>>({});
+  const displayName = planDisplayName(plan);
+
+  function toggleSegment(segmentId: string) {
+    setExpandedSegments((current) => ({ ...current, [segmentId]: !current[segmentId] }));
+  }
 
   async function applyOption(segment: Segment, changeType: "RAIL_SEAT" | "FLIGHT_CABIN" | "LOCAL_TRANSFER", optionId: string, label: string) {
     setBusy(true);
@@ -159,7 +217,7 @@ function DetailPanel({ plan, onRecalculated }: { plan: TravelPlan; onRecalculate
         <div className="section-heading">
           <div>
             <span className="eyebrow">{planTypeLabel(plan.plan_type)}</span>
-            <h2>{plan.plan_name}</h2>
+            <h2>{displayName}</h2>
           </div>
           <button title="生成跳转" className="icon-button" onClick={openRedirect} disabled={busy}><ExternalLink size={18} /></button>
         </div>
@@ -196,54 +254,83 @@ function DetailPanel({ plan, onRecalculated }: { plan: TravelPlan; onRecalculate
           ))}
         </div>
         <div className="option-groups">
-          {plan.segments.map((segment, index) => (
-            <div key={segment.segment_id} className="option-group">
-              <div className="option-group-title">
-                <span>第 {index + 1} 段</span>
-                <strong>{segmentTitle(segment)}</strong>
-              </div>
-              {segment.seat_options && (
-                <div className="option-buttons">
-                  {segment.seat_options.map((option) => (
-                    <button key={option.option_id} disabled={busy || option.option_id === segment.selected_seat_option_id} onClick={() => applyOption(segment, "RAIL_SEAT", option.option_id, option.seat_type)}>
-                      {option.seat_type} {formatMoney(option.price)}
-                    </button>
-                  ))}
+          {plan.segments.map((segment, index) => {
+            const expanded = Boolean(expandedSegments[segment.segment_id]);
+            const transferOption = segment.segment_type === "LOCAL_TRANSFER" ? selectedTransferOption(segment) : null;
+            const railSeat = segment.segment_type === "RAIL" ? selectedRailSeat(segment) : null;
+            const flightCabin = segment.segment_type === "FLIGHT" ? selectedFlightCabin(segment) : null;
+            return (
+              <div key={segment.segment_id} className="option-group">
+                <div className="option-group-title">
+                  <div>
+                    <span>第 {index + 1} 段</span>
+                    <strong>{segmentTitle(segment)}</strong>
+                  </div>
+                  <button className="expand-button" type="button" title={expanded ? "收起详情" : "展开详情"} onClick={() => toggleSegment(segment.segment_id)}>
+                    {expanded ? <ChevronUp size={18} /> : <ChevronDown size={18} />}
+                  </button>
                 </div>
-              )}
-              {segment.cabin_options && (
-                <div className="option-buttons">
-                  {segment.cabin_options.map((option) => (
-                    <button key={option.option_id} disabled={busy || option.option_id === segment.selected_cabin_option_id} onClick={() => applyOption(segment, "FLIGHT_CABIN", option.option_id, option.cabin_type)}>
-                      {option.cabin_type} {formatMoney(option.price)}
-                    </button>
-                  ))}
-                </div>
-              )}
-              {segment.segment_type === "LOCAL_TRANSFER" && (
-                <div className="transfer-option-list">
-                  {(segment.transfer_options?.length ? segment.transfer_options : segment.available_options?.map((option) => fallbackTransferOption(segment, option)) ?? []).map((option) => (
-                    <div className={option.option_id === segment.option_id ? "transfer-option selected" : "transfer-option"} key={option.option_id}>
-                      <button disabled={busy || option.option_id === segment.option_id} onClick={() => applyOption(segment, "LOCAL_TRANSFER", option.option_id, option.label)}>
-                        {option.label}
-                        <span>{formatMoney(option.estimated_cost)} · {minutesToText(option.duration_minutes)}</span>
-                      </button>
-                      <div className="transfer-route">
-                        {(option.access_station || option.egress_station) && (
-                          <small>
-                            {option.access_station ?? "上车点"} → {option.egress_station ?? "下车点"}
-                          </small>
-                        )}
-                        <p>{option.access_instruction}</p>
-                        <p>{option.ride_instruction}</p>
-                        <p>{option.egress_instruction}</p>
+                <div className="selected-option-summary">
+                  {transferOption && (
+                    <>
+                      <div>
+                        <strong>{transferOption.label}</strong>
+                        <span>{formatMoney(transferOption.estimated_cost)} · {minutesToText(transferOption.duration_minutes)}</span>
                       </div>
+                      <TransferRouteSummary option={transferOption} />
+                    </>
+                  )}
+                  {railSeat && (
+                    <div>
+                      <strong>{railSeat.seat_type}</strong>
+                      <span>{formatMoney(railSeat.price)}</span>
                     </div>
-                  ))}
+                  )}
+                  {flightCabin && (
+                    <div>
+                      <strong>{flightCabin.cabin_type}</strong>
+                      <span>{formatMoney(flightCabin.price)}</span>
+                    </div>
+                  )}
                 </div>
-              )}
-            </div>
-          ))}
+                {expanded && (
+                  <div className="option-detail-panel">
+                    {segment.seat_options && (
+                      <div className="option-buttons">
+                        {segment.seat_options.map((option) => (
+                          <button key={option.option_id} disabled={busy || option.option_id === segment.selected_seat_option_id} onClick={() => applyOption(segment, "RAIL_SEAT", option.option_id, option.seat_type)}>
+                            {option.seat_type} {formatMoney(option.price)}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                    {segment.cabin_options && (
+                      <div className="option-buttons">
+                        {segment.cabin_options.map((option) => (
+                          <button key={option.option_id} disabled={busy || option.option_id === segment.selected_cabin_option_id} onClick={() => applyOption(segment, "FLIGHT_CABIN", option.option_id, option.cabin_type)}>
+                            {option.cabin_type} {formatMoney(option.price)}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                    {segment.segment_type === "LOCAL_TRANSFER" && (
+                      <div className="transfer-option-list">
+                        {transferOptionsFor(segment).map((option) => (
+                          <div className={option.option_id === segment.option_id ? "transfer-option selected" : "transfer-option"} key={option.option_id}>
+                            <button disabled={busy || option.option_id === segment.option_id} onClick={() => applyOption(segment, "LOCAL_TRANSFER", option.option_id, option.label)}>
+                              {option.label}
+                              <span>{formatMoney(option.estimated_cost)} · {minutesToText(option.duration_minutes)}</span>
+                            </button>
+                            <TransferRouteSummary option={option} detailed />
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
         {message && <p className="inline-message">{message}</p>}
       </aside>
@@ -358,7 +445,7 @@ export default function App() {
             {response.plans.map((plan) => (
               <button key={plan.plan_id} className={plan.plan_id === selectedPlan?.plan_id ? "candidate active" : "candidate"} onClick={() => setSelectedPlanId(plan.plan_id)}>
                 <span className="candidate-title">
-                  {plan.plan_name}
+                  {planDisplayName(plan)}
                   <small>{planTypeLabel(plan.plan_type)} · {riskLabel(plan.risk_assessment.overall_risk_level)}</small>
                 </span>
                 <strong>{formatMoney(plan.cost_breakdown.total_cost)}</strong>
@@ -372,7 +459,7 @@ export default function App() {
               <h2>备选与阻断说明</h2>
               {response.plans.filter((plan) => !plan.can_be_selected_by_llm).map((plan) => (
                 <p key={plan.plan_id}>
-                  <strong>{plan.plan_name}</strong>
+                  <strong>{planDisplayName(plan)}</strong>
                   <span>{plan.block_reason_message ?? "该方案不进入三张主推荐卡。"}</span>
                 </p>
               ))}
