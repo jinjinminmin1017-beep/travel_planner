@@ -1,7 +1,7 @@
-import { AlertTriangle, ChevronDown, ChevronUp, Clock, Database, ExternalLink, Plane, RefreshCw, Route, Search, Train, WalletCards } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
-import { bookingRedirect, loadDataSources, planTrip, recalculate } from "./api/client";
-import type { DataSourceStatusResponse, LocalTransferOption, RecommendationSlot, Segment, TravelPlan, TravelPlanResponse } from "./types";
+import { AlertTriangle, ChevronDown, ChevronUp, Clock, ExternalLink, Plane, RefreshCw, Route, Search, Train, WalletCards } from "lucide-react";
+import { useMemo, useState } from "react";
+import { bookingRedirect, planTrip, recalculate } from "./api/client";
+import type { LocalTransferOption, RecommendationSlot, Segment, TravelPlan, TravelPlanResponse } from "./types";
 import { formatMoney, minutesToText, riskLabel, slotLabel } from "./utils/format";
 
 const SAMPLE_INPUT = "我 2026 年 5 月 21 日上午 9 点后，从上海嘉定南翔格林公馆出发，到青岛金水假日酒店，帮我找最舒服和最便宜的方式。";
@@ -232,12 +232,6 @@ function DetailPanel({ plan, onRecalculated }: { plan: TravelPlan; onRecalculate
           <span>总费用</span>
           <strong>{formatMoney(plan.cost_breakdown.total_cost)}</strong>
         </div>
-        <h3 className="subheading">数据来源</h3>
-        <div className="source-chips">
-          {plan.data_sources.map((source) => (
-            <span key={source.source_id}>{source.source_name} · {source.source_type}</span>
-          ))}
-        </div>
       </div>
       <aside className="detail-side">
         <div className="risk-box">
@@ -334,13 +328,8 @@ export default function App() {
   const [rawInput, setRawInput] = useState(SAMPLE_INPUT);
   const [response, setResponse] = useState<TravelPlanResponse | null>(null);
   const [selectedPlanId, setSelectedPlanId] = useState<string | null>(null);
-  const [dataSources, setDataSources] = useState<DataSourceStatusResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-
-  useEffect(() => {
-    loadDataSources().then(setDataSources).catch(() => undefined);
-  }, []);
 
   const selectedPlan = useMemo(() => {
     const explicit = findPlan(response, selectedPlanId);
@@ -378,7 +367,6 @@ export default function App() {
           <h1>AI 出行规划器</h1>
           <p>Mock DEV / TEST · Schema 1.15 · REDIRECT_ONLY</p>
         </div>
-        <button className="icon-button" title="刷新数据源状态" onClick={() => loadDataSources().then(setDataSources)}><Database size={20} /></button>
       </section>
 
       <section className="query-panel">
@@ -407,14 +395,6 @@ export default function App() {
             <div>
               <span>主推荐</span>
               <strong>{response.recommendation_result?.recommendations.filter((slot) => slot.plan_id).length ?? 0}</strong>
-            </div>
-            <div>
-              <span>备选/阻断</span>
-              <strong>{response.plans.filter((plan) => !plan.can_be_selected_by_llm).length}</strong>
-            </div>
-            <div>
-              <span>数据缺失</span>
-              <strong>{response.source_failures.length}</strong>
             </div>
           </section>
 
@@ -446,38 +426,8 @@ export default function App() {
             ))}
           </section>
 
-          {response.plans.some((plan) => !plan.can_be_selected_by_llm) && (
-            <section className="blocked-panel">
-              <h2>备选与阻断说明</h2>
-              {response.plans.filter((plan) => !plan.can_be_selected_by_llm).map((plan) => (
-                <p key={plan.plan_id}>
-                  <strong>{planDisplayName(plan)}</strong>
-                  <span>{plan.block_reason_message ?? "该方案不进入三张主推荐卡。"}</span>
-                </p>
-              ))}
-            </section>
-          )}
-
-          {response.source_failures.length > 0 && (
-            <section className="source-failures">
-              <h2>数据缺失</h2>
-              {response.source_failures.map((failure) => <p key={failure.failure_id}>{failure.user_visible_message}</p>)}
-            </section>
-          )}
         </>
       )}
-
-      <section className="data-sources">
-        <div className="section-heading">
-          <h2>数据源状态</h2>
-          <button className="icon-button" title="刷新数据源状态" onClick={() => loadDataSources().then(setDataSources)}><RefreshCw size={16} /></button>
-        </div>
-        <div>
-          {dataSources?.sources.map((source) => (
-            <span className={`source-status ${source.status}`} key={source.source_id}>{source.source_name}: {source.status}</span>
-          ))}
-        </div>
-      </section>
     </main>
   );
 }

@@ -65,7 +65,7 @@ test("plans Shanghai to Qingdao, shows details, recalculates, and redirects", as
   await expect(page.getByText("最舒适")).toBeVisible();
   await expect(page.getByText("综合推荐")).toBeVisible();
   await expect(page.getByRole("heading", { name: "候选方案" })).toBeVisible();
-  await expect(page.locator(".blocked-panel").getByText("安全关键数据缺失，不能进入推荐候选池。")).toBeVisible();
+  await expect(page.getByRole("button", { name: /BLOCKED/ })).toBeVisible();
 
   await page.getByRole("button", { name: /查看详情/ }).first().click();
   await expect(page.getByText("费用明细")).toBeVisible();
