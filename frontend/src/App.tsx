@@ -1,4 +1,4 @@
-import { AlertTriangle, Clock, Database, ExternalLink, Plane, RefreshCw, Search, ShieldCheck, Train, WalletCards } from "lucide-react";
+import { AlertTriangle, Clock, Database, ExternalLink, Plane, RefreshCw, Route, Search, ShieldCheck, Train, WalletCards } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { bookingRedirect, loadDataSources, planTrip, recalculate } from "./api/client";
 import type { DataSourceStatusResponse, RecommendationSlot, Segment, TravelPlan, TravelPlanResponse } from "./types";
@@ -17,9 +17,23 @@ function findPlan(response: TravelPlanResponse | null, planId: string | null) {
   return response.plans.find((plan) => plan.plan_id === planId) ?? null;
 }
 
-function RecommendationCard({ slot, plan, onSelect }: { slot: RecommendationSlot; plan: TravelPlan | null; onSelect: (plan: TravelPlan) => void }) {
+function planTypeLabel(type: string) {
+  const labels: Record<string, string> = {
+    DIRECT_RAIL: "高铁直达",
+    TRANSFER_RAIL: "高铁中转",
+    MULTI_TRANSFER_RAIL: "多段高铁",
+    RAIL_TICKET_ENHANCEMENT: "票源增强",
+    DIRECT_FLIGHT: "航班直飞",
+    TRANSFER_FLIGHT: "航班中转",
+    MULTI_AIRPORT_FLIGHT: "多机场",
+    FLIGHT_RAIL_MIXED: "空铁混合"
+  };
+  return labels[type] ?? type;
+}
+
+function RecommendationCard({ slot, plan, selected, onSelect }: { slot: RecommendationSlot; plan: TravelPlan | null; selected: boolean; onSelect: (plan: TravelPlan) => void }) {
   return (
-    <section className="card recommendation-card">
+    <section className={selected ? "card recommendation-card selected" : "card recommendation-card"}>
       <div className="card-topline">
         <span className="eyebrow">{slotLabel(slot.recommendation_type)}</span>
         <span className={`risk ${plan?.risk_assessment.overall_risk_level ?? slot.status}`}>{plan ? riskLabel(plan.risk_assessment.overall_risk_level) : slot.status}</span>
@@ -27,6 +41,7 @@ function RecommendationCard({ slot, plan, onSelect }: { slot: RecommendationSlot
       {plan ? (
         <>
           <h2>{plan.plan_name}</h2>
+          <span className="plan-type">{planTypeLabel(plan.plan_type)}</span>
           <div className="metric-row">
             <span><WalletCards size={16} />{formatMoney(plan.cost_breakdown.total_cost)}</span>
             <span><Clock size={16} />{minutesToText(plan.total_duration_minutes)}</span>
@@ -105,8 +120,17 @@ function DetailPanel({ plan, onRecalculated }: { plan: TravelPlan; onRecalculate
     <section className="detail-grid">
       <div className="detail-main">
         <div className="section-heading">
-          <h2>{plan.plan_name}</h2>
+          <div>
+            <span className="eyebrow">{planTypeLabel(plan.plan_type)}</span>
+            <h2>{plan.plan_name}</h2>
+          </div>
           <button title="生成跳转" className="icon-button" onClick={openRedirect} disabled={busy}><ExternalLink size={18} /></button>
+        </div>
+        <div className="detail-metrics">
+          <span><WalletCards size={16} />{formatMoney(plan.cost_breakdown.total_cost)}</span>
+          <span><Clock size={16} />{minutesToText(plan.total_duration_minutes)}</span>
+          <span><ShieldCheck size={16} />{plan.comfort_score.total_score.toFixed(1)} / 10</span>
+          <span><AlertTriangle size={16} />{riskLabel(plan.risk_assessment.overall_risk_level)}</span>
         </div>
         <SegmentTimeline segments={plan.segments} />
         <h3 className="subheading">费用明细</h3>
@@ -239,14 +263,33 @@ export default function App() {
       {response && (
         <>
           <section className="status-strip">
-            <span>{response.travel_request.origin_text} → {response.travel_request.destination_text}</span>
+            <span><Route size={16} />{response.travel_request.origin_text} → {response.travel_request.destination_text}</span>
             <span>{response.planning_status} · {response.progress}%</span>
             <span>trace {response.trace_id}</span>
           </section>
 
+          <section className="route-overview">
+            <div>
+              <span>候选方案</span>
+              <strong>{response.plans.length}</strong>
+            </div>
+            <div>
+              <span>主推荐</span>
+              <strong>{response.recommendation_result?.recommendations.filter((slot) => slot.plan_id).length ?? 0}</strong>
+            </div>
+            <div>
+              <span>备选/阻断</span>
+              <strong>{response.plans.filter((plan) => !plan.can_be_selected_by_llm).length}</strong>
+            </div>
+            <div>
+              <span>数据缺失</span>
+              <strong>{response.source_failures.length}</strong>
+            </div>
+          </section>
+
           <section className="recommendation-grid">
             {response.recommendation_result?.recommendations.map((slot) => (
-              <RecommendationCard key={slot.recommendation_type} slot={slot} plan={findPlan(response, slot.plan_id)} onSelect={(plan) => setSelectedPlanId(plan.plan_id)} />
+              <RecommendationCard key={slot.recommendation_type} slot={slot} plan={findPlan(response, slot.plan_id)} selected={slot.plan_id === selectedPlan?.plan_id} onSelect={(plan) => setSelectedPlanId(plan.plan_id)} />
             ))}
           </section>
 
@@ -262,7 +305,10 @@ export default function App() {
             <div className="section-heading"><h2>候选方案</h2></div>
             {response.plans.map((plan) => (
               <button key={plan.plan_id} className={plan.plan_id === selectedPlan?.plan_id ? "candidate active" : "candidate"} onClick={() => setSelectedPlanId(plan.plan_id)}>
-                <span>{plan.plan_name}</span>
+                <span className="candidate-title">
+                  {plan.plan_name}
+                  <small>{planTypeLabel(plan.plan_type)} · {riskLabel(plan.risk_assessment.overall_risk_level)}</small>
+                </span>
                 <strong>{formatMoney(plan.cost_breakdown.total_cost)}</strong>
                 {!plan.can_be_selected_by_llm && <em>{plan.risk_assessment.overall_risk_level === "BLOCKED" ? "BLOCKED" : "备选"} · {plan.block_reason_message ?? "不进入主推荐"}</em>}
               </button>
@@ -291,10 +337,13 @@ export default function App() {
       )}
 
       <section className="data-sources">
-        <h2>数据源状态</h2>
+        <div className="section-heading">
+          <h2>数据源状态</h2>
+          <button className="icon-button" title="刷新数据源状态" onClick={() => loadDataSources().then(setDataSources)}><RefreshCw size={16} /></button>
+        </div>
         <div>
           {dataSources?.sources.map((source) => (
-            <span key={source.source_id}>{source.source_name}: {source.status}</span>
+            <span className={`source-status ${source.status}`} key={source.source_id}>{source.source_name}: {source.status}</span>
           ))}
         </div>
       </section>
