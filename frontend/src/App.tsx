@@ -1,4 +1,4 @@
-import { AlertTriangle, Clock, Database, ExternalLink, Plane, RefreshCw, Route, Search, ShieldCheck, Train, WalletCards } from "lucide-react";
+import { AlertTriangle, Clock, Database, ExternalLink, Plane, RefreshCw, Route, Search, Train, WalletCards } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { bookingRedirect, loadDataSources, planTrip, recalculate } from "./api/client";
 import type { DataSourceStatusResponse, RecommendationSlot, Segment, TravelPlan, TravelPlanResponse } from "./types";
@@ -31,6 +31,12 @@ function planTypeLabel(type: string) {
   return labels[type] ?? type;
 }
 
+function displayRecommendationReason(reason: string) {
+  return reason
+    .replace("舒适度评分最高", "出行体验更好")
+    .replace("和舒适度之间", "和出行体验之间");
+}
+
 function RecommendationCard({ slot, plan, selected, onSelect }: { slot: RecommendationSlot; plan: TravelPlan | null; selected: boolean; onSelect: (plan: TravelPlan) => void }) {
   return (
     <section className={selected ? "card recommendation-card selected" : "card recommendation-card"}>
@@ -45,15 +51,14 @@ function RecommendationCard({ slot, plan, selected, onSelect }: { slot: Recommen
           <div className="metric-row">
             <span><WalletCards size={16} />{formatMoney(plan.cost_breakdown.total_cost)}</span>
             <span><Clock size={16} />{minutesToText(plan.total_duration_minutes)}</span>
-            <span><ShieldCheck size={16} />{plan.comfort_score.total_score.toFixed(1)} / 10</span>
           </div>
-          <p>{slot.reason}</p>
+          <p>{displayRecommendationReason(slot.reason)}</p>
           <button className="primary-action" onClick={() => onSelect(plan)}>查看详情</button>
         </>
       ) : (
         <>
           <h2>{slot.status}</h2>
-          <p>{slot.reason}</p>
+          <p>{displayRecommendationReason(slot.reason)}</p>
         </>
       )}
     </section>
@@ -129,7 +134,6 @@ function DetailPanel({ plan, onRecalculated }: { plan: TravelPlan; onRecalculate
         <div className="detail-metrics">
           <span><WalletCards size={16} />{formatMoney(plan.cost_breakdown.total_cost)}</span>
           <span><Clock size={16} />{minutesToText(plan.total_duration_minutes)}</span>
-          <span><ShieldCheck size={16} />{plan.comfort_score.total_score.toFixed(1)} / 10</span>
           <span><AlertTriangle size={16} />{riskLabel(plan.risk_assessment.overall_risk_level)}</span>
         </div>
         <SegmentTimeline segments={plan.segments} />
@@ -154,19 +158,6 @@ function DetailPanel({ plan, onRecalculated }: { plan: TravelPlan; onRecalculate
         </div>
       </div>
       <aside className="detail-side">
-        <div className="score-block">
-          <span>舒适度</span>
-          <strong>{plan.comfort_score.total_score.toFixed(1)} / 10</strong>
-          <p>{plan.comfort_score.explanation}</p>
-        </div>
-        <div className="breakdown">
-          {Object.entries(plan.comfort_score.breakdown).map(([key, value]) => (
-            <div key={key}>
-              <span>{key}</span>
-              <meter min="0" max="10" value={value} />
-            </div>
-          ))}
-        </div>
         <div className="risk-box">
           {plan.risk_assessment.risk_items.map((risk) => (
             <p key={risk.risk_id}><AlertTriangle size={16} />{risk.title}: {risk.message}</p>

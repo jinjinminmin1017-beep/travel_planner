@@ -387,37 +387,12 @@ textarea:focus {
   align-content: start;
 }
 
-.score-block,
-.breakdown,
 .risk-box,
 .option-groups {
   border: 1px solid #e0e8e4;
   border-radius: 8px;
   padding: 14px;
   background: #fbfdfc;
-}
-
-.score-block strong {
-  display: block;
-  font-size: 28px;
-  margin: 6px 0;
-  color: var(--green);
-}
-
-.breakdown {
-  display: grid;
-  gap: 9px;
-}
-
-.breakdown div {
-  display: grid;
-  grid-template-columns: 110px 1fr;
-  gap: 8px;
-  align-items: center;
-}
-
-meter {
-  width: 100%;
 }
 
 .risk-box {
