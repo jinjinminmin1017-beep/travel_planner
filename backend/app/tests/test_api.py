@@ -30,6 +30,15 @@ def test_parse_travel_request():
     assert "CHEAPEST" in body["travel_request"]["preferences"]
 
 
+def test_parse_most_comfortable_as_primary_preference():
+    raw = "我 2026 年 5 月 21 日上午 9 点后，从上海嘉定南翔格林公馆出发，到青岛金水假日酒店，帮我找最舒服的方式。"
+    response = client.post("/api/travel/parse", json={"raw_user_input": raw})
+    assert response.status_code == 200
+    request = response.json()["travel_request"]
+    assert request["preference_source"] == "USER_EXPLICIT"
+    assert request["preferences"][0] == "MOST_COMFORTABLE"
+
+
 def test_plan_recommendations_and_blocked_filter():
     response = client.post("/api/travel/plan", json={"raw_user_input": RAW_INPUT})
     assert response.status_code == 200

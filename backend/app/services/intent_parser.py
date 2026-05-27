@@ -76,11 +76,30 @@ def parse_travel_request(raw: str, ctx: RequestContext) -> TravelRequest:
 
     preferences = [RecommendationType.CHEAPEST, RecommendationType.MOST_COMFORTABLE, RecommendationType.BALANCED]
     preference_source = "SYSTEM_DEFAULT"
+    cheap_markers = ["最便宜", "最优惠", "低价", "省钱"]
+    comfort_markers = ["最舒服", "最舒适", "舒服", "舒适"]
+    wants_cheap = any(marker in raw for marker in cheap_markers)
+    wants_comfort = any(marker in raw for marker in comfort_markers)
     if "只要最便宜" in raw or "指定最便宜" in raw:
         preferences = [RecommendationType.CHEAPEST]
         preference_source = "USER_EXPLICIT"
-    elif "只要最舒服" in raw or "指定最舒服" in raw:
+    elif "只要最舒服" in raw or "指定最舒服" in raw or "只要最舒适" in raw or "指定最舒适" in raw:
         preferences = [RecommendationType.MOST_COMFORTABLE]
+        preference_source = "USER_EXPLICIT"
+    elif wants_comfort and not wants_cheap:
+        preferences = [RecommendationType.MOST_COMFORTABLE, RecommendationType.BALANCED, RecommendationType.CHEAPEST]
+        preference_source = "USER_EXPLICIT"
+    elif wants_cheap and not wants_comfort:
+        preferences = [RecommendationType.CHEAPEST, RecommendationType.BALANCED, RecommendationType.MOST_COMFORTABLE]
+        preference_source = "USER_EXPLICIT"
+    elif wants_comfort and wants_cheap:
+        first_comfort = min((raw.find(marker) for marker in comfort_markers if marker in raw), default=10**9)
+        first_cheap = min((raw.find(marker) for marker in cheap_markers if marker in raw), default=10**9)
+        preferences = (
+            [RecommendationType.MOST_COMFORTABLE, RecommendationType.CHEAPEST, RecommendationType.BALANCED]
+            if first_comfort < first_cheap
+            else [RecommendationType.CHEAPEST, RecommendationType.MOST_COMFORTABLE, RecommendationType.BALANCED]
+        )
         preference_source = "USER_EXPLICIT"
 
     earliest = _extract_hour(raw, "后|以后|之后")

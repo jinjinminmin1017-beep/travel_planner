@@ -17,6 +17,13 @@ function findPlan(response: TravelPlanResponse | null, planId: string | null) {
   return response.plans.find((plan) => plan.plan_id === planId) ?? null;
 }
 
+function preferredRecommendationPlanId(response: TravelPlanResponse | null) {
+  if (!response) return null;
+  const recommendations = response.recommendation_result?.recommendations ?? [];
+  const preferredType = response.travel_request.preferences.find((preference) => recommendations.some((slot) => slot.recommendation_type === preference && slot.plan_id));
+  return recommendations.find((slot) => slot.recommendation_type === preferredType)?.plan_id ?? recommendations.find((slot) => slot.plan_id)?.plan_id ?? null;
+}
+
 function planTypeLabel(type: string) {
   const labels: Record<string, string> = {
     DIRECT_RAIL: "高铁直达",
@@ -334,8 +341,7 @@ export default function App() {
   const selectedPlan = useMemo(() => {
     const explicit = findPlan(response, selectedPlanId);
     if (explicit) return explicit;
-    const firstRecommended = response?.recommendation_result?.recommendations.find((slot) => slot.plan_id)?.plan_id ?? null;
-    return findPlan(response, firstRecommended);
+    return findPlan(response, preferredRecommendationPlanId(response));
   }, [response, selectedPlanId]);
 
   const recommendedPlanIds = useMemo(() => new Set(response?.recommendation_result?.recommendations.map((slot) => slot.plan_id).filter(Boolean) ?? []), [response]);
@@ -347,7 +353,7 @@ export default function App() {
     try {
       const result = await planTrip(rawInput);
       setResponse(result);
-      setSelectedPlanId(result.recommendation_result?.recommendations.find((slot) => slot.plan_id)?.plan_id ?? null);
+      setSelectedPlanId(preferredRecommendationPlanId(result));
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "请求失败");
     } finally {
