@@ -1,7 +1,7 @@
 import { AlertTriangle, Clock, Database, ExternalLink, Plane, RefreshCw, Route, Search, Train, WalletCards } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { bookingRedirect, loadDataSources, planTrip, recalculate } from "./api/client";
-import type { DataSourceStatusResponse, RecommendationSlot, Segment, TravelPlan, TravelPlanResponse } from "./types";
+import type { DataSourceStatusResponse, LocalTransferOption, RecommendationSlot, Segment, TravelPlan, TravelPlanResponse } from "./types";
 import { formatMoney, minutesToText, riskLabel, slotLabel } from "./utils/format";
 
 const SAMPLE_INPUT = "我 2026 年 5 月 21 日上午 9 点后，从上海嘉定南翔格林公馆出发，到青岛金水假日酒店，帮我找最舒服和最便宜的方式。";
@@ -37,6 +37,39 @@ function displayRecommendationReason(reason: string) {
     .replace("和舒适度之间", "和出行体验之间");
 }
 
+function transferModeLabel(mode: string) {
+  const normalized = mode.replace("transfer_", "").toUpperCase();
+  if (normalized === "TAXI") return "打车";
+  if (normalized === "SUBWAY") return "地铁";
+  if (normalized === "BUS") return "公交";
+  return mode.replace("transfer_", "");
+}
+
+function segmentTitle(segment: Segment) {
+  if (segment.segment_type === "RAIL") return `${segment.train_number} ${segment.origin_station} → ${segment.destination_station}`;
+  if (segment.segment_type === "FLIGHT") return `${segment.flight_number} ${segment.origin_airport} → ${segment.destination_airport}`;
+  return `${transferModeLabel(segment.transfer_mode ?? "")} ${segment.origin} → ${segment.destination}`;
+}
+
+function fallbackTransferOption(segment: Segment, optionId: string): LocalTransferOption {
+  const mode = optionId.replace("transfer_", "").toUpperCase();
+  const label = transferModeLabel(optionId);
+  return {
+    option_id: optionId,
+    transfer_mode: mode,
+    label,
+    estimated_cost: segment.estimated_cost ?? { amount_minor: 0, currency: "CNY", scale: 2, is_estimated: true, display_text: "待估算" },
+    duration_minutes: segment.duration_minutes,
+    access_station: mode === "TAXI" ? null : `${segment.origin ?? "出发地"}附近${mode === "SUBWAY" ? "地铁站" : "公交站"}`,
+    egress_station: mode === "TAXI" ? null : `${segment.destination ?? "目的地"}附近${mode === "SUBWAY" ? "地铁站" : "公交站"}`,
+    access_instruction: mode === "TAXI" ? `从 ${segment.origin} 上车。` : `从 ${segment.origin} 前往上车站点。`,
+    ride_instruction: mode === "TAXI" ? `直达 ${segment.destination}。` : `乘坐${label}到下车站点。`,
+    egress_instruction: mode === "TAXI" ? `在 ${segment.destination} 下车。` : `从下车站点前往 ${segment.destination}。`,
+    walking_distance_meters: 0,
+    data_source: segment.data_source
+  };
+}
+
 function RecommendationCard({ slot, plan, selected, onSelect }: { slot: RecommendationSlot; plan: TravelPlan | null; selected: boolean; onSelect: (plan: TravelPlan) => void }) {
   return (
     <section className={selected ? "card recommendation-card selected" : "card recommendation-card"}>
@@ -68,15 +101,14 @@ function RecommendationCard({ slot, plan, selected, onSelect }: { slot: Recommen
 function SegmentTimeline({ segments }: { segments: Segment[] }) {
   return (
     <div className="timeline">
-      {segments.map((segment) => (
+      {segments.map((segment, index) => (
         <div className="timeline-row" key={segment.segment_id}>
-          <span className="timeline-icon"><SegmentIcon type={segment.segment_type} /></span>
+          <span className="timeline-icon">
+            <SegmentIcon type={segment.segment_type} />
+            <small>{index + 1}</small>
+          </span>
           <div>
-            <strong>
-              {segment.segment_type === "RAIL" && `${segment.train_number} ${segment.origin_station} → ${segment.destination_station}`}
-              {segment.segment_type === "FLIGHT" && `${segment.flight_number} ${segment.origin_airport} → ${segment.destination_airport}`}
-              {segment.segment_type === "LOCAL_TRANSFER" && `${segment.transfer_mode} ${segment.origin} → ${segment.destination}`}
-            </strong>
+            <strong>{segmentTitle(segment)}</strong>
             <span>{minutesToText(segment.duration_minutes)}</span>
           </div>
         </div>
@@ -164,23 +196,52 @@ function DetailPanel({ plan, onRecalculated }: { plan: TravelPlan; onRecalculate
           ))}
         </div>
         <div className="option-groups">
-          {plan.segments.map((segment) => (
+          {plan.segments.map((segment, index) => (
             <div key={segment.segment_id} className="option-group">
-              {segment.seat_options?.map((option) => (
-                <button key={option.option_id} disabled={busy || option.option_id === segment.selected_seat_option_id} onClick={() => applyOption(segment, "RAIL_SEAT", option.option_id, option.seat_type)}>
-                  {option.seat_type} {formatMoney(option.price)}
-                </button>
-              ))}
-              {segment.cabin_options?.map((option) => (
-                <button key={option.option_id} disabled={busy || option.option_id === segment.selected_cabin_option_id} onClick={() => applyOption(segment, "FLIGHT_CABIN", option.option_id, option.cabin_type)}>
-                  {option.cabin_type} {formatMoney(option.price)}
-                </button>
-              ))}
-              {segment.segment_type === "LOCAL_TRANSFER" && segment.available_options?.map((option) => (
-                <button key={option} disabled={busy || option === segment.option_id} onClick={() => applyOption(segment, "LOCAL_TRANSFER", option, option)}>
-                  {option.replace("transfer_", "")}
-                </button>
-              ))}
+              <div className="option-group-title">
+                <span>第 {index + 1} 段</span>
+                <strong>{segmentTitle(segment)}</strong>
+              </div>
+              {segment.seat_options && (
+                <div className="option-buttons">
+                  {segment.seat_options.map((option) => (
+                    <button key={option.option_id} disabled={busy || option.option_id === segment.selected_seat_option_id} onClick={() => applyOption(segment, "RAIL_SEAT", option.option_id, option.seat_type)}>
+                      {option.seat_type} {formatMoney(option.price)}
+                    </button>
+                  ))}
+                </div>
+              )}
+              {segment.cabin_options && (
+                <div className="option-buttons">
+                  {segment.cabin_options.map((option) => (
+                    <button key={option.option_id} disabled={busy || option.option_id === segment.selected_cabin_option_id} onClick={() => applyOption(segment, "FLIGHT_CABIN", option.option_id, option.cabin_type)}>
+                      {option.cabin_type} {formatMoney(option.price)}
+                    </button>
+                  ))}
+                </div>
+              )}
+              {segment.segment_type === "LOCAL_TRANSFER" && (
+                <div className="transfer-option-list">
+                  {(segment.transfer_options?.length ? segment.transfer_options : segment.available_options?.map((option) => fallbackTransferOption(segment, option)) ?? []).map((option) => (
+                    <div className={option.option_id === segment.option_id ? "transfer-option selected" : "transfer-option"} key={option.option_id}>
+                      <button disabled={busy || option.option_id === segment.option_id} onClick={() => applyOption(segment, "LOCAL_TRANSFER", option.option_id, option.label)}>
+                        {option.label}
+                        <span>{formatMoney(option.estimated_cost)} · {minutesToText(option.duration_minutes)}</span>
+                      </button>
+                      <div className="transfer-route">
+                        {(option.access_station || option.egress_station) && (
+                          <small>
+                            {option.access_station ?? "上车点"} → {option.egress_station ?? "下车点"}
+                          </small>
+                        )}
+                        <p>{option.access_instruction}</p>
+                        <p>{option.ride_instruction}</p>
+                        <p>{option.egress_instruction}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           ))}
         </div>

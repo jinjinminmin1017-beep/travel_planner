@@ -378,6 +378,86 @@
       "title": "FlightSegment",
       "type": "object"
     },
+    "LocalTransferOption": {
+      "additionalProperties": false,
+      "properties": {
+        "option_id": {
+          "title": "Option Id",
+          "type": "string"
+        },
+        "transfer_mode": {
+          "$ref": "#/$defs/TransportMode"
+        },
+        "label": {
+          "title": "Label",
+          "type": "string"
+        },
+        "estimated_cost": {
+          "$ref": "#/$defs/Money"
+        },
+        "duration_minutes": {
+          "title": "Duration Minutes",
+          "type": "integer"
+        },
+        "access_station": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Access Station"
+        },
+        "egress_station": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Egress Station"
+        },
+        "access_instruction": {
+          "title": "Access Instruction",
+          "type": "string"
+        },
+        "ride_instruction": {
+          "title": "Ride Instruction",
+          "type": "string"
+        },
+        "egress_instruction": {
+          "title": "Egress Instruction",
+          "type": "string"
+        },
+        "walking_distance_meters": {
+          "title": "Walking Distance Meters",
+          "type": "integer"
+        },
+        "data_source": {
+          "$ref": "#/$defs/DataSourceMetadata"
+        }
+      },
+      "required": [
+        "option_id",
+        "transfer_mode",
+        "label",
+        "estimated_cost",
+        "duration_minutes",
+        "access_instruction",
+        "ride_instruction",
+        "egress_instruction",
+        "walking_distance_meters",
+        "data_source"
+      ],
+      "title": "LocalTransferOption",
+      "type": "object"
+    },
     "LocalTransferSegment": {
       "additionalProperties": false,
       "properties": {
@@ -429,6 +509,13 @@
             "type": "string"
           },
           "title": "Available Options",
+          "type": "array"
+        },
+        "transfer_options": {
+          "items": {
+            "$ref": "#/$defs/LocalTransferOption"
+          },
+          "title": "Transfer Options",
           "type": "array"
         },
         "data_source": {

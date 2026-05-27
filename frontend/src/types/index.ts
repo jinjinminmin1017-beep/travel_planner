@@ -75,6 +75,21 @@ export type BookingRedirect = {
   generated_at: TimePoint;
 };
 
+export type LocalTransferOption = {
+  option_id: string;
+  transfer_mode: string;
+  label: string;
+  estimated_cost: Money;
+  duration_minutes: number;
+  access_station: string | null;
+  egress_station: string | null;
+  access_instruction: string;
+  ride_instruction: string;
+  egress_instruction: string;
+  walking_distance_meters: number;
+  data_source: DataSourceMetadata;
+};
+
 export type Segment = {
   segment_id: string;
   segment_type: "LOCAL_TRANSFER" | "RAIL" | "FLIGHT";
@@ -85,6 +100,7 @@ export type Segment = {
   estimated_cost?: Money;
   option_id?: string;
   available_options?: string[];
+  transfer_options?: LocalTransferOption[];
   train_number?: string;
   origin_station?: string;
   destination_station?: string;

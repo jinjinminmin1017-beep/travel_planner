@@ -330,6 +330,21 @@ class CabinOption(StrictModel):
     data_source: DataSourceMetadata
 
 
+class LocalTransferOption(StrictModel):
+    option_id: str
+    transfer_mode: TransportMode
+    label: str
+    estimated_cost: Money
+    duration_minutes: int
+    access_station: str | None = None
+    egress_station: str | None = None
+    access_instruction: str
+    ride_instruction: str
+    egress_instruction: str
+    walking_distance_meters: int
+    data_source: DataSourceMetadata
+
+
 class LocalTransferSegment(StrictModel):
     segment_id: str
     segment_type: Literal["LOCAL_TRANSFER"] = "LOCAL_TRANSFER"
@@ -343,6 +358,7 @@ class LocalTransferSegment(StrictModel):
     walking_distance_meters: int
     option_id: str
     available_options: list[str] = Field(default_factory=list)
+    transfer_options: list[LocalTransferOption] = Field(default_factory=list)
     data_source: DataSourceMetadata
     redirect_info: BookingRedirect | None = None
 

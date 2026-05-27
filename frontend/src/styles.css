@@ -365,6 +365,23 @@ textarea:focus {
   border-radius: 999px;
   background: #e8f4ef;
   color: #1f6f55;
+  position: relative;
+}
+
+.timeline-icon small {
+  position: absolute;
+  right: -5px;
+  bottom: -6px;
+  width: 17px;
+  height: 17px;
+  display: grid;
+  place-items: center;
+  border: 1px solid #c2d7cd;
+  border-radius: 999px;
+  background: #ffffff;
+  color: var(--green);
+  font-size: 10px;
+  font-weight: 800;
 }
 
 .cost-list {
@@ -404,18 +421,102 @@ textarea:focus {
 
 .option-groups {
   display: grid;
-  gap: 10px;
+  gap: 12px;
 }
 
 .option-group {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid #dce8e2;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.option-group-title {
+  display: grid;
+  gap: 3px;
+}
+
+.option-group-title span {
+  width: fit-content;
+  border-radius: 999px;
+  padding: 3px 8px;
+  background: #e8f4ef;
+  color: var(--green);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.option-group-title strong {
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.option-buttons,
+.transfer-option-list {
+  display: grid;
   gap: 8px;
 }
 
-.option-group button {
+.option-buttons {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.option-group button,
+.transfer-option button {
   padding: 8px 10px;
   min-height: 36px;
+}
+
+.transfer-option {
+  border: 1px solid #dde8e3;
+  border-radius: 8px;
+  background: #fbfdfc;
+  overflow: hidden;
+}
+
+.transfer-option.selected {
+  border-color: var(--green);
+  box-shadow: 0 0 0 2px rgba(31, 111, 85, 0.1);
+}
+
+.transfer-option button {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  border-width: 0 0 1px;
+  border-color: #dde8e3;
+  border-radius: 0;
+  background: #ffffff;
+  font-weight: 800;
+  text-align: left;
+}
+
+.transfer-option button span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.transfer-route {
+  display: grid;
+  gap: 5px;
+  padding: 10px;
+}
+
+.transfer-route small {
+  color: var(--blue);
+  font-weight: 800;
+}
+
+.transfer-route p {
+  color: #46534b;
+  font-size: 13px;
+  line-height: 1.45;
 }
 
 .inline-message {
@@ -612,5 +713,14 @@ textarea:focus {
   .timeline-row div {
     grid-template-columns: 1fr;
     gap: 4px;
+  }
+
+  .option-buttons {
+    grid-template-columns: 1fr;
+  }
+
+  .transfer-option button {
+    align-items: flex-start;
+    flex-direction: column;
   }
 }

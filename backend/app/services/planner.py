@@ -18,6 +18,7 @@ from app.models.schemas import (
     FlightSegment,
     GeoPoint,
     LLMRecommendationInput,
+    LocalTransferOption,
     LocalTransferSegment,
     MissingPlanExplanation,
     NormalizedScores,
@@ -116,19 +117,111 @@ def _cabin_options(base_minor: int) -> list[CabinOption]:
     ]
 
 
+def _nearby_station(place: str, mode: TransportMode, side: str) -> str:
+    if mode == TransportMode.SUBWAY:
+        known = {
+            "上海嘉定南翔格林公馆": "南翔站",
+            "上海虹桥站": "虹桥火车站",
+            "上海虹桥机场": "虹桥2号航站楼站",
+            "上海浦东机场": "浦东1号2号航站楼站",
+            "青岛北站": "青岛北站",
+            "青岛站": "青岛站",
+            "青岛胶东机场": "胶东机场站",
+            "青岛金水假日酒店": "枣山路站",
+            "北京": "前门站" if side == "origin" else "北京西站",
+            "北京西站": "北京西站",
+            "北京首都机场": "首都机场T3站",
+            "广州": "公园前站",
+            "广州南": "广州南站",
+            "广州白云机场": "机场南站",
+        }
+        return known.get(place, f"{place}附近地铁站")
+    known_bus = {
+        "上海嘉定南翔格林公馆": "南翔格林公馆公交站",
+        "上海虹桥站": "虹桥西交通中心公交站",
+        "上海虹桥机场": "虹桥枢纽东交通中心公交站",
+        "上海浦东机场": "浦东机场T2公交站",
+        "青岛北站": "铁路青岛北站东广场公交站",
+        "青岛站": "青岛火车站公交站",
+        "青岛胶东机场": "胶东机场公交换乘站",
+        "青岛金水假日酒店": "金水路酒店公交站",
+        "北京": "前门公交站",
+        "北京西站": "北京西站南广场公交站",
+        "北京首都机场": "首都机场T3公交站",
+        "广州": "公园前公交站",
+        "广州南": "广州南站公交总站",
+        "广州白云机场": "白云机场公交站",
+    }
+    return known_bus.get(place, f"{place}附近公交站")
+
+
+def _transfer_options(origin: str, destination: str, minutes: int, cost_minor: int) -> list[LocalTransferOption]:
+    subway_origin = _nearby_station(origin, TransportMode.SUBWAY, "origin")
+    subway_destination = _nearby_station(destination, TransportMode.SUBWAY, "destination")
+    bus_origin = _nearby_station(origin, TransportMode.BUS, "origin")
+    bus_destination = _nearby_station(destination, TransportMode.BUS, "destination")
+    subway_minutes = minutes + 18
+    bus_minutes = minutes + 28
+    return [
+        LocalTransferOption(
+            option_id="transfer_taxi",
+            transfer_mode=TransportMode.TAXI,
+            label="打车",
+            estimated_cost=money(cost_minor, estimated=True),
+            duration_minutes=minutes,
+            access_instruction=f"从 {origin} 上车，直达 {destination}。",
+            ride_instruction="按 mock 路况估算行驶。",
+            egress_instruction=f"在 {destination} 下车。",
+            walking_distance_meters=120,
+            data_source=TAXI_SOURCE,
+        ),
+        LocalTransferOption(
+            option_id="transfer_subway",
+            transfer_mode=TransportMode.SUBWAY,
+            label="地铁",
+            estimated_cost=money(900, estimated=True),
+            duration_minutes=subway_minutes,
+            access_station=subway_origin,
+            egress_station=subway_destination,
+            access_instruction=f"从 {origin} 步行/短驳至 {subway_origin}。",
+            ride_instruction=f"乘坐地铁 mock 线路至 {subway_destination}。",
+            egress_instruction=f"从 {subway_destination} 步行/短驳至 {destination}。",
+            walking_distance_meters=780,
+            data_source=TAXI_SOURCE,
+        ),
+        LocalTransferOption(
+            option_id="transfer_bus",
+            transfer_mode=TransportMode.BUS,
+            label="公交",
+            estimated_cost=money(500, estimated=True),
+            duration_minutes=bus_minutes,
+            access_station=bus_origin,
+            egress_station=bus_destination,
+            access_instruction=f"从 {origin} 步行至 {bus_origin}。",
+            ride_instruction=f"乘坐公交 mock 线路至 {bus_destination}。",
+            egress_instruction=f"从 {bus_destination} 步行/短驳至 {destination}。",
+            walking_distance_meters=980,
+            data_source=TAXI_SOURCE,
+        ),
+    ]
+
+
 def _taxi(segment_id: str, origin: str, destination: str, minutes: int, cost_minor: int, option_id: str = "transfer_taxi") -> LocalTransferSegment:
+    options = _transfer_options(origin, destination, minutes, cost_minor)
+    selected = next(option for option in options if option.option_id == option_id)
     return LocalTransferSegment(
         segment_id=segment_id,
         origin=origin,
         destination=destination,
-        transfer_mode=TransportMode.TAXI,
+        transfer_mode=selected.transfer_mode,
         distance_meters=minutes * 650,
-        duration_minutes=minutes,
-        estimated_cost=money(cost_minor, estimated=True),
+        duration_minutes=selected.duration_minutes,
+        estimated_cost=selected.estimated_cost,
         traffic_risk=RiskLevel.MEDIUM if minutes > 50 else RiskLevel.LOW,
-        walking_distance_meters=120,
+        walking_distance_meters=selected.walking_distance_meters,
         option_id=option_id,
-        available_options=["transfer_taxi", "transfer_subway", "transfer_bus"],
+        available_options=[option.option_id for option in options],
+        transfer_options=options,
         data_source=TAXI_SOURCE,
         redirect_info=_redirect("RIDE_HAILING"),
     )
@@ -538,21 +631,16 @@ def recalculate_plan(existing: TravelPlan, request: RecalculateRequest, ctx: Req
         if not isinstance(target, LocalTransferSegment):
             raise ValueError("target segment does not support local transfer options")
         assert_option_available(target, request.selected_option.option_id)
+        selected_transfer = next(option for option in target.transfer_options if option.option_id == request.selected_option.option_id)
+        target.transfer_mode = selected_transfer.transfer_mode
+        target.estimated_cost = selected_transfer.estimated_cost
+        target.duration_minutes = selected_transfer.duration_minutes
+        target.walking_distance_meters = selected_transfer.walking_distance_meters
+        target.option_id = selected_transfer.option_id
         if request.selected_option.option_id == "transfer_subway":
-            target.transfer_mode = TransportMode.SUBWAY
-            target.estimated_cost = money(900, estimated=True)
-            target.duration_minutes += 18
-            target.option_id = "transfer_subway"
             plan.comfort_score.total_score = max(0, plan.comfort_score.total_score - 0.5)
         elif request.selected_option.option_id == "transfer_bus":
-            target.transfer_mode = TransportMode.BUS
-            target.estimated_cost = money(500, estimated=True)
-            target.duration_minutes += 28
-            target.option_id = "transfer_bus"
             plan.comfort_score.total_score = max(0, plan.comfort_score.total_score - 0.9)
-        else:
-            target.transfer_mode = TransportMode.TAXI
-            target.option_id = "transfer_taxi"
 
     plan.cost_breakdown = _cost_items(plan.segments, plan.ticket_enhancement)
     plan.total_duration_minutes = sum(segment.duration_minutes for segment in plan.segments)
