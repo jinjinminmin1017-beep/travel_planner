@@ -338,6 +338,9 @@ export default function App() {
     return findPlan(response, firstRecommended);
   }, [response, selectedPlanId]);
 
+  const recommendedPlanIds = useMemo(() => new Set(response?.recommendation_result?.recommendations.map((slot) => slot.plan_id).filter(Boolean) ?? []), [response]);
+  const candidatePlans = useMemo(() => response?.plans.filter((plan) => !recommendedPlanIds.has(plan.plan_id)) ?? [], [response, recommendedPlanIds]);
+
   async function submit() {
     setLoading(true);
     setError("");
@@ -390,7 +393,7 @@ export default function App() {
           <section className="route-overview">
             <div>
               <span>候选方案</span>
-              <strong>{response.plans.length}</strong>
+              <strong>{candidatePlans.length}</strong>
             </div>
             <div>
               <span>主推荐</span>
@@ -414,7 +417,7 @@ export default function App() {
 
           <section className="candidate-list">
             <div className="section-heading"><h2>候选方案</h2></div>
-            {response.plans.map((plan) => (
+            {candidatePlans.map((plan) => (
               <button key={plan.plan_id} className={plan.plan_id === selectedPlan?.plan_id ? "candidate active" : "candidate"} onClick={() => setSelectedPlanId(plan.plan_id)}>
                 <span className="candidate-title">
                   {planDisplayName(plan)}
