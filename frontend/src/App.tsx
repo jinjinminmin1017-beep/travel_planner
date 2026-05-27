@@ -31,12 +31,6 @@ function planTypeLabel(type: string) {
   return labels[type] ?? type;
 }
 
-function displayRecommendationReason(reason: string) {
-  return reason
-    .replace("舒适度评分最高", "出行体验更好")
-    .replace("和舒适度之间", "和出行体验之间");
-}
-
 function transferModeLabel(mode: string) {
   const normalized = mode.replace("transfer_", "").toUpperCase();
   if (normalized === "TAXI") return "打车";
@@ -137,13 +131,11 @@ function RecommendationCard({ slot, plan, selected, onSelect }: { slot: Recommen
             <span><WalletCards size={16} />{formatMoney(plan.cost_breakdown.total_cost)}</span>
             <span><Clock size={16} />{minutesToText(plan.total_duration_minutes)}</span>
           </div>
-          <p>{displayRecommendationReason(slot.reason)}</p>
           <button className="primary-action" onClick={() => onSelect(plan)}>查看详情</button>
         </>
       ) : (
         <>
           <h2>{slot.status}</h2>
-          <p>{displayRecommendationReason(slot.reason)}</p>
         </>
       )}
     </section>
