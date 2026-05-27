@@ -20,8 +20,9 @@ function findPlan(response: TravelPlanResponse | null, planId: string | null) {
 function preferredRecommendationPlanId(response: TravelPlanResponse | null) {
   if (!response) return null;
   const recommendations = response.recommendation_result?.recommendations ?? [];
-  const preferredType = response.travel_request.preferences.find((preference) => recommendations.some((slot) => slot.recommendation_type === preference && slot.plan_id));
-  return recommendations.find((slot) => slot.recommendation_type === preferredType)?.plan_id ?? recommendations.find((slot) => slot.plan_id)?.plan_id ?? null;
+  const availableRecommendations = recommendations.filter((slot) => slot.status === "AVAILABLE" && slot.plan_id);
+  const preferredType = response.travel_request.preferences.find((preference) => availableRecommendations.some((slot) => slot.recommendation_type === preference));
+  return availableRecommendations.find((slot) => slot.recommendation_type === preferredType)?.plan_id ?? availableRecommendations[0]?.plan_id ?? null;
 }
 
 function planTypeLabel(type: string) {

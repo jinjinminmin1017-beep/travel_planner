@@ -39,6 +39,49 @@ def test_parse_most_comfortable_as_primary_preference():
     assert request["preferences"][0] == "MOST_COMFORTABLE"
 
 
+def test_parse_cheapest_as_primary_preference():
+    raw = "我 2026 年 5 月 21 日上午 9 点后，从上海嘉定南翔格林公馆出发，到青岛金水假日酒店，帮我找最便宜的方式。"
+    response = client.post("/api/travel/parse", json={"raw_user_input": raw})
+    assert response.status_code == 200
+    request = response.json()["travel_request"]
+    assert request["preference_source"] == "USER_EXPLICIT"
+    assert request["preferences"][0] == "CHEAPEST"
+
+
+def test_parse_conflicting_preferences_by_text_order():
+    comfort_first = client.post(
+        "/api/travel/parse",
+        json={"raw_user_input": "我 2026 年 5 月 21 日上午 9 点后，从上海嘉定南翔格林公馆出发，到青岛金水假日酒店，帮我找最舒服和最便宜的方式。"},
+    )
+    cheapest_first = client.post(
+        "/api/travel/parse",
+        json={"raw_user_input": "我 2026 年 5 月 21 日上午 9 点后，从上海嘉定南翔格林公馆出发，到青岛金水假日酒店，帮我找最便宜和最舒服的方式。"},
+    )
+    assert comfort_first.status_code == 200
+    assert cheapest_first.status_code == 200
+    assert comfort_first.json()["travel_request"]["preferences"][:2] == ["MOST_COMFORTABLE", "CHEAPEST"]
+    assert cheapest_first.json()["travel_request"]["preferences"][:2] == ["CHEAPEST", "MOST_COMFORTABLE"]
+
+
+def test_parse_transport_constraints():
+    raw = "我 2026 年 5 月 21 日上午 9 点后，从上海嘉定南翔格林公馆出发，到青岛金水假日酒店，不坐飞机，只看高铁，不接受高铁中转。"
+    response = client.post("/api/travel/parse", json={"raw_user_input": raw})
+    assert response.status_code == 200
+    request = response.json()["travel_request"]
+    assert "FLIGHT" in request["hard_constraints"]["excluded_transport_modes"]
+    assert "RAIL" in request["hard_constraints"]["allowed_transport_modes"]
+    assert request["soft_preferences"]["accept_rail_transfer"] is False
+
+
+def test_parse_returns_error_for_missing_date_and_ambiguous_place():
+    missing_date = client.post("/api/travel/parse", json={"raw_user_input": "从上海到青岛，帮我找最舒服的方式。"})
+    ambiguous_place = client.post("/api/travel/parse", json={"raw_user_input": "我 2026 年 5 月 21 日上午 9 点后，从家里到酒店。"})
+    assert missing_date.status_code == 400
+    assert ambiguous_place.status_code == 400
+    assert missing_date.json()["error_code"] == "HTTP_400"
+    assert ambiguous_place.json()["error_code"] == "HTTP_400"
+
+
 def test_plan_recommendations_and_blocked_filter():
     response = client.post("/api/travel/plan", json={"raw_user_input": RAW_INPUT})
     assert response.status_code == 200

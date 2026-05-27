@@ -72,10 +72,38 @@ test("plans Shanghai to Qingdao, shows details, recalculates, and redirects", as
   await page.getByTitle("展开详情").nth(1).click();
   await page.getByRole("button", { name: /一等座/ }).first().click();
   await expect(page.getByText("+¥220.00")).toBeVisible();
+  await expect(page.locator(".detail-main h2")).toContainText("高铁直达");
 
   await page.getByTitle("生成跳转").click();
   await expect(page.getByText("请打开 12306 手动确认。")).toBeVisible();
 });
+
+test("defaults selected recommendation from parsed preference", async ({ page }) => {
+  await page.route("**/api/travel/plan", async (route) => {
+    const raw = String(route.request().postDataJSON()?.raw_user_input ?? "");
+    await route.fulfill({ json: buildPreferencePlanResponse(raw) });
+  });
+
+  await page.goto("/");
+
+  await submitAndExpectSelected(page, "我 2026 年 5 月 21 日上午 9 点后，从上海嘉定南翔格林公馆出发，到青岛金水假日酒店，帮我找最舒服的方式。", "最舒适", "航班直飞");
+  await submitAndExpectSelected(page, "我 2026 年 5 月 21 日上午 9 点后，从上海嘉定南翔格林公馆出发，到青岛金水假日酒店，帮我找最便宜的方式。", "最优惠", "高铁直达");
+  await submitAndExpectSelected(page, "我 2026 年 5 月 21 日上午 9 点后，从上海嘉定南翔格林公馆出发，到青岛金水假日酒店，帮我找最舒服和最便宜的方式。", "最舒适", "航班直飞");
+
+  await page.locator(".recommendation-card").filter({ hasText: "最优惠" }).getByRole("button", { name: "查看详情" }).click();
+  await expect(page.locator(".recommendation-card.selected")).toContainText("最优惠");
+  await expect(page.locator(".detail-main h2")).toContainText("高铁直达");
+  await expect(page.locator(".route-overview")).toContainText("候选方案");
+  await expect(page.locator(".route-overview")).toContainText("1");
+  await expect(page.locator(".candidate-list .candidate")).toHaveCount(1);
+});
+
+async function submitAndExpectSelected(page, input: string, selectedSlot: string, detailTitle: string) {
+  await page.getByRole("textbox").fill(input);
+  await page.getByRole("button", { name: /开始规划/ }).click();
+  await expect(page.locator(".recommendation-card.selected")).toContainText(selectedSlot);
+  await expect(page.locator(".detail-main h2")).toContainText(detailTitle);
+}
 
 function timePoint() {
   return { datetime: "2026-05-27T08:00:00+08:00", timezone: "Asia/Shanghai", source_timezone: "Asia/Shanghai" };
@@ -224,4 +252,46 @@ function buildPlanResponse() {
     blocked_plan_types: ["TRANSFER_RAIL"],
     user_visible_warnings: ["价格和余票以最终平台为准。"]
   };
+}
+
+function clone<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function preferenceOrder(raw: string) {
+  if (raw.includes("最舒服和最便宜")) return ["MOST_COMFORTABLE", "CHEAPEST", "BALANCED"];
+  if (raw.includes("最便宜和最舒服")) return ["CHEAPEST", "MOST_COMFORTABLE", "BALANCED"];
+  if (raw.includes("最舒服") || raw.includes("最舒适")) return ["MOST_COMFORTABLE", "BALANCED", "CHEAPEST"];
+  if (raw.includes("最便宜") || raw.includes("最优惠")) return ["CHEAPEST", "BALANCED", "MOST_COMFORTABLE"];
+  return ["CHEAPEST", "MOST_COMFORTABLE", "BALANCED"];
+}
+
+function buildPreferencePlanResponse(raw: string) {
+  const response = buildPlanResponse();
+  const cheapest = clone(response.plans[0]);
+  const comfortable = clone(response.plans[0]);
+  comfortable.plan_id = "plan_flight_direct_shqd";
+  comfortable.plan_name = "打车 + 航班直飞 + 打车";
+  comfortable.plan_type = "DIRECT_FLIGHT";
+  comfortable.total_duration_minutes = 206;
+  comfortable.cost_breakdown.total_cost = money(94000, "¥940.00");
+
+  const balanced = clone(response.plans[0]);
+  balanced.plan_id = "plan_ticket_enhancement_shqd";
+  balanced.plan_name = "打车 + 高铁 + 打车";
+  balanced.plan_type = "RAIL_TICKET_ENHANCEMENT";
+  balanced.total_duration_minutes = 415;
+  balanced.cost_breakdown.total_cost = money(74400, "¥744.00");
+
+  const blocked = clone(response.plans[1]);
+  response.travel_request.raw_user_input = raw;
+  response.travel_request.preferences = preferenceOrder(raw);
+  response.travel_request.preference_source = response.travel_request.preferences[0] === "CHEAPEST" && !raw.includes("最便宜") && !raw.includes("最优惠") ? "SYSTEM_DEFAULT" : "USER_EXPLICIT";
+  response.plans = [cheapest, comfortable, balanced, blocked];
+  response.recommendation_result.recommendations = [
+    { schema_version: "1.15", recommendation_type: "CHEAPEST", status: "AVAILABLE", plan_id: cheapest.plan_id, reason: "总费用最低。" },
+    { schema_version: "1.15", recommendation_type: "MOST_COMFORTABLE", status: "AVAILABLE", plan_id: comfortable.plan_id, reason: "出行体验更好。" },
+    { schema_version: "1.15", recommendation_type: "BALANCED", status: "AVAILABLE", plan_id: balanced.plan_id, reason: "综合平衡。" }
+  ];
+  return response;
 }
