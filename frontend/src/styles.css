@@ -1,17 +1,25 @@
 :root {
-  font-family: Inter, "Segoe UI", "Microsoft YaHei", sans-serif;
-  color: #172018;
-  background: #e9efee;
+  font-family: "Airbnb Cereal VF", Circular, Inter, "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+  color: #222222;
+  background: #f7f7f7;
   letter-spacing: 0;
-  --ink: #172018;
-  --muted: #647067;
-  --line: #d7e0dc;
+  --ink: #222222;
+  --body: #3f3f3f;
+  --muted: #6a6a6a;
+  --muted-soft: #929292;
+  --line: #dddddd;
+  --line-soft: #ebebeb;
   --panel: #ffffff;
-  --panel-soft: #f7faf8;
-  --green: #1f6f55;
-  --blue: #255f91;
+  --panel-soft: #f7f7f7;
+  --surface-strong: #f2f2f2;
+  --primary: #ff385c;
+  --primary-active: #e00b41;
+  --primary-soft: #fff0f3;
+  --green: #008a5a;
+  --blue: #395a9a;
   --amber: #a86d00;
-  --red: #a33228;
+  --red: #c13515;
+  --shadow-card: rgba(0, 0, 0, 0.02) 0 0 0 1px, rgba(0, 0, 0, 0.04) 0 2px 6px 0, rgba(0, 0, 0, 0.10) 0 4px 8px 0;
 }
 
 * {
@@ -21,6 +29,7 @@
 body {
   margin: 0;
   min-width: 320px;
+  background: var(--panel-soft);
 }
 
 button,
@@ -29,9 +38,9 @@ textarea {
 }
 
 main {
-  width: min(1220px, calc(100vw - 32px));
+  width: min(1280px, calc(100vw - 32px));
   margin: 0 auto;
-  padding: 18px 0 40px;
+  padding: 24px 0 48px;
 }
 
 .topbar,
@@ -43,15 +52,16 @@ main {
 .notice-row {
   background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: 20px;
 }
 
 .topbar {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 16px 18px;
-  box-shadow: 0 8px 26px rgba(21, 42, 35, 0.05);
+  min-height: 80px;
+  padding: 20px 28px;
+  box-shadow: none;
 }
 
 h1,
@@ -61,13 +71,15 @@ p {
 }
 
 h1 {
-  font-size: 24px;
-  line-height: 1.1;
+  font-size: 28px;
+  line-height: 1.2;
+  font-weight: 700;
 }
 
 h2 {
-  font-size: 18px;
-  line-height: 1.25;
+  font-size: 21px;
+  line-height: 1.28;
+  font-weight: 700;
 }
 
 .topbar p,
@@ -76,33 +88,35 @@ h2 {
 .notice-row,
 .candidate em {
   color: var(--muted);
-  font-size: 13px;
+  font-size: 14px;
 }
 
 .query-panel {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 148px;
+  grid-template-columns: minmax(0, 1fr) 160px;
   gap: 12px;
-  padding: 12px;
-  margin-top: 14px;
-  box-shadow: 0 10px 30px rgba(21, 42, 35, 0.06);
+  padding: 16px;
+  margin-top: 24px;
+  border-radius: 24px;
+  box-shadow: var(--shadow-card);
 }
 
 textarea {
-  min-height: 96px;
+  min-height: 92px;
   resize: vertical;
-  border: 1px solid #cbd8d2;
-  border-radius: 8px;
-  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  padding: 18px 20px;
   color: var(--ink);
-  line-height: 1.6;
+  line-height: 1.55;
   outline: none;
-  background: #fbfdfc;
+  background: var(--panel);
+  font-size: 16px;
 }
 
 textarea:focus {
-  border-color: var(--green);
-  box-shadow: 0 0 0 3px rgba(31, 111, 85, 0.12);
+  border-color: var(--ink);
+  box-shadow: inset 0 0 0 1px var(--ink);
 }
 
 .submit-button,
@@ -111,22 +125,24 @@ textarea:focus {
 .option-group button,
 .candidate {
   border: 1px solid #b8c8c0;
-  border-radius: 8px;
+  border-radius: 14px;
   background: var(--panel-soft);
   color: var(--ink);
   cursor: pointer;
 }
 
 .submit-button {
-  min-width: 132px;
+  min-width: 148px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
-  background: var(--green);
-  border-color: var(--green);
+  background: var(--primary);
+  border-color: var(--primary);
   color: #ffffff;
-  font-weight: 700;
+  font-weight: 600;
+  border-radius: 18px;
+  font-size: 16px;
 }
 
 .submit-button:disabled,
@@ -145,17 +161,17 @@ textarea:focus {
 .recommendation-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 14px;
-  margin-top: 14px;
+  gap: 16px;
+  margin-top: 20px;
 }
 
 .card {
   background: var(--panel);
   border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 16px;
+  border-radius: 20px;
+  padding: 20px;
   min-height: 214px;
-  box-shadow: 0 10px 28px rgba(21, 42, 35, 0.045);
+  box-shadow: none;
 }
 
 .recommendation-card {
@@ -166,8 +182,8 @@ textarea:focus {
 }
 
 .recommendation-card.selected {
-  border-color: var(--green);
-  box-shadow: 0 0 0 3px rgba(31, 111, 85, 0.12), 0 12px 28px rgba(21, 42, 35, 0.06);
+  border-color: var(--ink);
+  box-shadow: var(--shadow-card);
 }
 
 .card-topline,
@@ -182,8 +198,10 @@ textarea:focus {
 }
 
 .recommendation-card h2 {
-  margin-top: 10px;
+  margin-top: 12px;
   min-height: 46px;
+  font-size: 22px;
+  font-weight: 700;
 }
 
 .metric-row {
@@ -204,11 +222,11 @@ textarea:focus {
 .metric-row span,
 .detail-metrics span {
   min-height: 30px;
-  border: 1px solid #e1e9e5;
+  border: 1px solid var(--line-soft);
   border-radius: 999px;
-  padding: 5px 9px;
-  color: #334139;
-  background: #fbfdfc;
+  padding: 7px 11px;
+  color: var(--body);
+  background: var(--panel);
   font-size: 13px;
 }
 
@@ -216,16 +234,18 @@ textarea:focus {
   width: 100%;
   align-self: end;
   margin-top: 18px;
-  padding: 10px;
-  font-weight: 700;
+  padding: 13px 18px;
+  font-weight: 600;
+  background: var(--panel);
+  border-color: var(--ink);
 }
 
 .primary-action:hover,
 .candidate:hover,
 .option-group button:hover,
 .icon-button:hover {
-  border-color: var(--green);
-  background: #edf7f2;
+  border-color: var(--ink);
+  background: var(--panel-soft);
 }
 
 .risk {
@@ -238,8 +258,8 @@ textarea:focus {
 
 .risk.LOW,
 .risk.AVAILABLE {
-  background: #dff4e8;
-  color: #126b43;
+  background: #e8f6ef;
+  color: #007a52;
 }
 
 .risk.MEDIUM {
@@ -258,9 +278,9 @@ textarea:focus {
   width: fit-content;
   margin-top: 8px;
   border-radius: 999px;
-  padding: 5px 9px;
-  background: #e8eef8;
-  color: var(--blue);
+  padding: 6px 11px;
+  background: var(--primary-soft);
+  color: var(--primary-active);
   font-size: 12px;
   font-weight: 700;
 }
@@ -270,8 +290,8 @@ textarea:focus {
   display: flex;
   flex-wrap: wrap;
   gap: 14px;
-  padding: 10px 14px;
-  margin-top: 14px;
+  padding: 12px 18px;
+  margin-top: 20px;
   align-items: center;
 }
 
@@ -284,17 +304,17 @@ textarea:focus {
 .route-overview {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
-  margin-top: 14px;
+  gap: 16px;
+  margin-top: 16px;
 }
 
 .route-overview div {
   display: grid;
   gap: 4px;
-  min-height: 72px;
-  padding: 14px;
+  min-height: 82px;
+  padding: 18px 20px;
   border: 1px solid var(--line);
-  border-radius: 8px;
+  border-radius: 20px;
   background: var(--panel);
 }
 
@@ -311,10 +331,10 @@ textarea:focus {
 .detail-grid {
   display: grid;
   grid-template-columns: minmax(0, 1.2fr) minmax(360px, 0.8fr);
-  gap: 18px;
-  padding: 18px;
-  margin-top: 14px;
-  box-shadow: 0 10px 28px rgba(21, 42, 35, 0.045);
+  gap: 24px;
+  padding: 24px;
+  margin-top: 24px;
+  box-shadow: none;
 }
 
 .detail-metrics {
@@ -341,7 +361,7 @@ textarea:focus {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 12px;
-  border-bottom: 1px solid #e6eeea;
+  border-bottom: 1px solid var(--line-soft);
   padding-bottom: 10px;
 }
 
@@ -356,8 +376,8 @@ textarea:focus {
   display: grid;
   place-items: center;
   border-radius: 999px;
-  background: #e8f4ef;
-  color: #1f6f55;
+  background: var(--primary-soft);
+  color: var(--primary-active);
   position: relative;
 }
 
@@ -369,10 +389,10 @@ textarea:focus {
   height: 17px;
   display: grid;
   place-items: center;
-  border: 1px solid #c2d7cd;
+  border: 1px solid #ffd1da;
   border-radius: 999px;
   background: #ffffff;
-  color: var(--green);
+  color: var(--primary-active);
   font-size: 10px;
   font-weight: 800;
 }
@@ -384,7 +404,7 @@ textarea:focus {
 .cost-list div,
 .total-line {
   padding: 10px 0;
-  border-bottom: 1px solid #e6eeea;
+  border-bottom: 1px solid var(--line-soft);
 }
 
 .total-line strong {
@@ -399,17 +419,17 @@ textarea:focus {
 
 .risk-box,
 .option-groups {
-  border: 1px solid #e0e8e4;
-  border-radius: 8px;
+  border: 1px solid var(--line);
+  border-radius: 20px;
   padding: 14px;
-  background: #fbfdfc;
+  background: var(--panel);
 }
 
 .risk-box {
   display: grid;
   gap: 8px;
   color: #5b4630;
-  background: #fffaf0;
+  background: #fff8ef;
 }
 
 .option-groups {
@@ -421,8 +441,8 @@ textarea:focus {
   display: grid;
   gap: 10px;
   padding: 12px;
-  border: 1px solid #dce8e2;
-  border-radius: 8px;
+  border: 1px solid var(--line-soft);
+  border-radius: 18px;
   background: #ffffff;
 }
 
@@ -442,9 +462,9 @@ textarea:focus {
 .option-group-title span {
   width: fit-content;
   border-radius: 999px;
-  padding: 3px 8px;
-  background: #e8f4ef;
-  color: var(--green);
+  padding: 4px 10px;
+  background: var(--primary-soft);
+  color: var(--primary-active);
   font-size: 12px;
   font-weight: 800;
 }
@@ -470,10 +490,10 @@ textarea:focus {
 }
 
 .selected-option-summary {
-  border: 1px solid #e0e8e4;
-  border-radius: 8px;
+  border: 1px solid var(--line-soft);
+  border-radius: 14px;
   padding: 10px;
-  background: #fbfdfc;
+  background: var(--panel-soft);
 }
 
 .selected-option-summary > div:first-child {
@@ -515,15 +535,15 @@ textarea:focus {
 }
 
 .transfer-option {
-  border: 1px solid #dde8e3;
-  border-radius: 8px;
+  border: 1px solid var(--line-soft);
+  border-radius: 14px;
   background: #fbfdfc;
   overflow: hidden;
 }
 
 .transfer-option.selected {
-  border-color: var(--green);
-  box-shadow: 0 0 0 2px rgba(31, 111, 85, 0.1);
+  border-color: var(--ink);
+  box-shadow: rgba(0, 0, 0, 0.05) 0 2px 6px;
 }
 
 .transfer-option button {
@@ -533,7 +553,7 @@ textarea:focus {
   align-items: center;
   gap: 10px;
   border-width: 0 0 1px;
-  border-color: #dde8e3;
+  border-color: var(--line-soft);
   border-radius: 0;
   background: #ffffff;
   font-weight: 800;
@@ -570,13 +590,13 @@ textarea:focus {
 
 .inline-message {
   padding: 10px;
-  background: #e8f4ef;
-  border-radius: 8px;
+  background: var(--primary-soft);
+  border-radius: 14px;
 }
 
 .candidate-list {
-  margin-top: 14px;
-  padding: 16px;
+  margin-top: 24px;
+  padding: 18px;
 }
 
 .candidate-list {
@@ -586,7 +606,7 @@ textarea:focus {
 
 .candidate {
   width: 100%;
-  padding: 12px;
+  padding: 14px 16px;
   text-align: left;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto minmax(220px, 0.7fr);
@@ -594,8 +614,8 @@ textarea:focus {
 }
 
 .candidate.active {
-  border-color: var(--green);
-  background: #e8f4ef;
+  border-color: var(--ink);
+  background: var(--panel-soft);
 }
 
 .candidate-title {
