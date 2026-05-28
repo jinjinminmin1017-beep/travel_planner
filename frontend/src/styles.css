@@ -332,34 +332,41 @@ textarea:focus {
   display: grid;
   grid-template-columns: minmax(0, 1.2fr) minmax(360px, 0.8fr);
   gap: 22px;
-  padding: 0;
+  padding: 22px;
   margin-top: 24px;
   box-shadow: none;
   overflow: hidden;
-  background:
-    linear-gradient(112deg, rgba(255, 56, 92, 0.10) 0%, rgba(255, 255, 255, 0.86) 36%, #ffffff 62%),
-    linear-gradient(180deg, #ffffff 0%, #f7f7f7 100%);
+  background: #ffffff;
 }
 
 .detail-main {
-  padding: 28px 26px 28px 28px;
-  background:
-    linear-gradient(180deg, rgba(255, 240, 243, 0.72) 0%, rgba(255, 255, 255, 0) 190px),
-    linear-gradient(90deg, rgba(255, 56, 92, 0.08) 0, rgba(255, 255, 255, 0) 42%);
-  border-right: 1px solid var(--line-soft);
+  padding: 4px 8px 4px 4px;
+  background: transparent;
+}
+
+.detail-main > .section-heading {
+  padding: 18px;
+  border: 1px solid var(--line-soft);
+  border-radius: 20px;
+  background: #ffffff;
 }
 
 .detail-metrics {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  margin-top: 12px;
+  margin-top: 14px;
+  padding: 0 2px;
 }
 
 .timeline {
   display: grid;
   gap: 0;
-  margin-top: 24px;
+  margin-top: 18px;
+  padding: 16px;
+  border: 1px solid var(--line-soft);
+  border-radius: 20px;
+  background: var(--panel-soft);
   position: relative;
 }
 
@@ -371,7 +378,7 @@ textarea:focus {
   bottom: 20px;
   width: 2px;
   border-radius: 999px;
-  background: linear-gradient(180deg, rgba(255, 56, 92, 0.34), rgba(255, 56, 92, 0.08));
+  background: #dddddd;
 }
 
 .timeline-row {
@@ -402,11 +409,11 @@ textarea:focus {
   place-items: center;
   border-radius: 999px;
   background: #ffffff;
-  border: 1px solid #ffd1da;
-  color: var(--primary-active);
+  border: 1px solid var(--line);
+  color: var(--ink);
   position: relative;
   z-index: 1;
-  box-shadow: 0 2px 8px rgba(255, 56, 92, 0.12);
+  box-shadow: rgba(0, 0, 0, 0.04) 0 2px 6px;
 }
 
 .timeline-icon small {
@@ -417,10 +424,10 @@ textarea:focus {
   height: 17px;
   display: grid;
   place-items: center;
-  border: 1px solid #ffd1da;
+  border: 1px solid var(--line);
   border-radius: 999px;
   background: #ffffff;
-  color: var(--primary-active);
+  color: var(--muted);
   font-size: 10px;
   font-weight: 800;
 }
@@ -428,9 +435,9 @@ textarea:focus {
 .cost-list {
   margin-top: 10px;
   padding: 6px 18px;
-  border: 1px solid rgba(221, 221, 221, 0.72);
+  border: 1px solid var(--line-soft);
   border-radius: 18px;
-  background: rgba(255, 255, 255, 0.74);
+  background: #ffffff;
 }
 
 .cost-list div,
@@ -444,7 +451,7 @@ textarea:focus {
   padding: 16px 18px;
   border: 0;
   border-radius: 18px;
-  background: linear-gradient(90deg, #fff5f7, #ffffff);
+  background: #f7f7f7;
 }
 
 .total-line strong {
@@ -455,8 +462,8 @@ textarea:focus {
   display: grid;
   gap: 14px;
   align-content: start;
-  padding: 28px 28px 28px 0;
-  background: linear-gradient(180deg, rgba(247, 247, 247, 0.78), rgba(255, 255, 255, 0));
+  padding: 0;
+  background: transparent;
 }
 
 .risk-box,
@@ -471,16 +478,14 @@ textarea:focus {
   display: grid;
   gap: 8px;
   color: #5b4630;
-  background: linear-gradient(135deg, #fff8ef 0%, #fffdf9 100%);
+  background: #fffaf2;
 }
 
 .option-groups {
   display: grid;
   gap: 14px;
-  padding: 18px;
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.86), rgba(247, 247, 247, 0.78)),
-    linear-gradient(135deg, rgba(255, 56, 92, 0.08), rgba(255, 255, 255, 0));
+  padding: 14px;
+  background: var(--panel-soft);
 }
 
 .option-group {
@@ -489,8 +494,8 @@ textarea:focus {
   padding: 18px;
   border: 1px solid var(--line-soft);
   border-radius: 22px;
-  background: rgba(255, 255, 255, 0.90);
-  box-shadow: rgba(0, 0, 0, 0.03) 0 1px 3px;
+  background: #ffffff;
+  box-shadow: none;
 }
 
 .option-group-title {
@@ -510,8 +515,8 @@ textarea:focus {
   width: fit-content;
   border-radius: 999px;
   padding: 4px 10px;
-  background: var(--primary-soft);
-  color: var(--primary-active);
+  background: #f2f2f2;
+  color: var(--body);
   font-size: 12px;
   font-weight: 800;
 }
@@ -540,7 +545,7 @@ textarea:focus {
   border: 1px solid var(--line-soft);
   border-radius: 18px;
   padding: 14px;
-  background: linear-gradient(180deg, #f8f8f8, #ffffff);
+  background: #f7f7f7;
 }
 
 .selected-option-summary > div:first-child {
