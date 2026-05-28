@@ -331,10 +331,22 @@ textarea:focus {
 .detail-grid {
   display: grid;
   grid-template-columns: minmax(0, 1.2fr) minmax(360px, 0.8fr);
-  gap: 24px;
-  padding: 24px;
+  gap: 22px;
+  padding: 0;
   margin-top: 24px;
   box-shadow: none;
+  overflow: hidden;
+  background:
+    linear-gradient(112deg, rgba(255, 56, 92, 0.10) 0%, rgba(255, 255, 255, 0.86) 36%, #ffffff 62%),
+    linear-gradient(180deg, #ffffff 0%, #f7f7f7 100%);
+}
+
+.detail-main {
+  padding: 28px 26px 28px 28px;
+  background:
+    linear-gradient(180deg, rgba(255, 240, 243, 0.72) 0%, rgba(255, 255, 255, 0) 190px),
+    linear-gradient(90deg, rgba(255, 56, 92, 0.08) 0, rgba(255, 255, 255, 0) 42%);
+  border-right: 1px solid var(--line-soft);
 }
 
 .detail-metrics {
@@ -346,23 +358,36 @@ textarea:focus {
 
 .timeline {
   display: grid;
-  gap: 10px;
-  margin-top: 16px;
+  gap: 0;
+  margin-top: 24px;
+  position: relative;
+}
+
+.timeline::before {
+  content: "";
+  position: absolute;
+  left: 15px;
+  top: 18px;
+  bottom: 20px;
+  width: 2px;
+  border-radius: 999px;
+  background: linear-gradient(180deg, rgba(255, 56, 92, 0.34), rgba(255, 56, 92, 0.08));
 }
 
 .timeline-row {
   display: grid;
-  grid-template-columns: 34px 1fr;
-  gap: 10px;
+  grid-template-columns: 42px 1fr;
+  gap: 12px;
   align-items: start;
+  position: relative;
 }
 
 .timeline-row div {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 12px;
-  border-bottom: 1px solid var(--line-soft);
-  padding-bottom: 10px;
+  border-bottom: 1px solid rgba(221, 221, 221, 0.74);
+  padding: 12px 0;
 }
 
 .timeline-row strong {
@@ -371,14 +396,17 @@ textarea:focus {
 }
 
 .timeline-icon {
-  width: 30px;
-  height: 30px;
+  width: 32px;
+  height: 32px;
   display: grid;
   place-items: center;
   border-radius: 999px;
-  background: var(--primary-soft);
+  background: #ffffff;
+  border: 1px solid #ffd1da;
   color: var(--primary-active);
   position: relative;
+  z-index: 1;
+  box-shadow: 0 2px 8px rgba(255, 56, 92, 0.12);
 }
 
 .timeline-icon small {
@@ -398,23 +426,37 @@ textarea:focus {
 }
 
 .cost-list {
-  margin-top: 6px;
+  margin-top: 10px;
+  padding: 6px 18px;
+  border: 1px solid rgba(221, 221, 221, 0.72);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.74);
 }
 
 .cost-list div,
 .total-line {
-  padding: 10px 0;
+  padding: 12px 0;
   border-bottom: 1px solid var(--line-soft);
 }
 
+.total-line {
+  margin-top: 8px;
+  padding: 16px 18px;
+  border: 0;
+  border-radius: 18px;
+  background: linear-gradient(90deg, #fff5f7, #ffffff);
+}
+
 .total-line strong {
-  font-size: 22px;
+  font-size: 26px;
 }
 
 .detail-side {
   display: grid;
   gap: 14px;
   align-content: start;
+  padding: 28px 28px 28px 0;
+  background: linear-gradient(180deg, rgba(247, 247, 247, 0.78), rgba(255, 255, 255, 0));
 }
 
 .risk-box,
@@ -429,21 +471,26 @@ textarea:focus {
   display: grid;
   gap: 8px;
   color: #5b4630;
-  background: #fff8ef;
+  background: linear-gradient(135deg, #fff8ef 0%, #fffdf9 100%);
 }
 
 .option-groups {
   display: grid;
-  gap: 12px;
+  gap: 14px;
+  padding: 18px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.86), rgba(247, 247, 247, 0.78)),
+    linear-gradient(135deg, rgba(255, 56, 92, 0.08), rgba(255, 255, 255, 0));
 }
 
 .option-group {
   display: grid;
   gap: 10px;
-  padding: 12px;
+  padding: 18px;
   border: 1px solid var(--line-soft);
-  border-radius: 18px;
-  background: #ffffff;
+  border-radius: 22px;
+  background: rgba(255, 255, 255, 0.90);
+  box-shadow: rgba(0, 0, 0, 0.03) 0 1px 3px;
 }
 
 .option-group-title {
@@ -491,9 +538,9 @@ textarea:focus {
 
 .selected-option-summary {
   border: 1px solid var(--line-soft);
-  border-radius: 14px;
-  padding: 10px;
-  background: var(--panel-soft);
+  border-radius: 18px;
+  padding: 14px;
+  background: linear-gradient(180deg, #f8f8f8, #ffffff);
 }
 
 .selected-option-summary > div:first-child {
@@ -536,8 +583,8 @@ textarea:focus {
 
 .transfer-option {
   border: 1px solid var(--line-soft);
-  border-radius: 14px;
-  background: #fbfdfc;
+  border-radius: 18px;
+  background: #ffffff;
   overflow: hidden;
 }
 
