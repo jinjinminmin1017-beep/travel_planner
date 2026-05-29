@@ -117,6 +117,21 @@ function destinationThemeClass(response: TravelPlanResponse | null) {
   return "has-destination-theme destination-theme-generic";
 }
 
+function destinationDisplayName(response: TravelPlanResponse | null) {
+  if (!response) return "";
+  const destinationText = response.travel_request.destination_text?.trim() || "";
+  const destinationSignal = (destinationText || response.travel_request.raw_user_input).toLowerCase();
+  if (destinationSignal.includes("北京") || destinationSignal.includes("beijing")) return "北京";
+  if (destinationSignal.includes("上海") || destinationSignal.includes("shanghai")) return "上海";
+  if (destinationSignal.includes("青岛") || destinationSignal.includes("qingdao")) return "青岛";
+  if (destinationSignal.includes("广州") || destinationSignal.includes("guangzhou")) return "广州";
+  if (destinationSignal.includes("深圳") || destinationSignal.includes("shenzhen")) return "深圳";
+  if (destinationSignal.includes("成都") || destinationSignal.includes("chengdu")) return "成都";
+  if (destinationSignal.includes("杭州") || destinationSignal.includes("hangzhou")) return "杭州";
+  if (destinationSignal.includes("西安") || destinationSignal.includes("xian") || destinationSignal.includes("xi'an")) return "西安";
+  return destinationText || "目的地";
+}
+
 function TransferRouteSummary({ option, detailed = false }: { option: LocalTransferOption; detailed?: boolean }) {
   return (
     <div className={detailed ? "transfer-route" : "transfer-route compact"}>
@@ -360,6 +375,7 @@ export default function App() {
   }, [response, selectedPlanId]);
 
   const themeClass = useMemo(() => destinationThemeClass(response), [response]);
+  const destinationLabel = useMemo(() => destinationDisplayName(response), [response]);
   const recommendedPlanIds = useMemo(() => new Set(response?.recommendation_result?.recommendations.map((slot) => slot.plan_id).filter(Boolean) ?? []), [response]);
   const candidatePlans = useMemo(() => response?.plans.filter((plan) => !recommendedPlanIds.has(plan.plan_id)) ?? [], [response, recommendedPlanIds]);
 
@@ -387,11 +403,11 @@ export default function App() {
 
   return (
     <main className={themeClass ? `app-shell ${themeClass}` : "app-shell"}>
-      <div className="destination-backdrop" aria-hidden="true">
-        <span className="landmark palace" />
-        <span className="landmark wall" />
-        <span className="landmark gate" />
-        <span className="landmark ridge" />
+      <div className="destination-backdrop" aria-hidden="true" data-destination={destinationLabel}>
+        <span className="landmark primary" />
+        <span className="landmark secondary" />
+        <span className="landmark line" />
+        <span className="landmark terrain" />
       </div>
       <section className="topbar">
         <div>

@@ -56,6 +56,7 @@ main {
   --theme-primary: #0f766e;
   --theme-secondary: #2563eb;
   --theme-ink: #334155;
+  --theme-soft: #dff8f2;
   --theme-primary-rgb: 15, 118, 110;
   --theme-secondary-rgb: 37, 99, 235;
 }
@@ -68,16 +69,45 @@ main {
   pointer-events: none;
   overflow: hidden;
   background:
-    linear-gradient(180deg, rgba(248, 250, 252, 0.72), rgba(248, 250, 252, 0.94)),
-    radial-gradient(circle at 16% 18%, rgba(var(--theme-primary-rgb), 0.10), transparent 30%),
-    radial-gradient(circle at 86% 22%, rgba(var(--theme-secondary-rgb), 0.08), transparent 28%),
+    linear-gradient(180deg, rgba(248, 250, 252, 0.58), rgba(248, 250, 252, 0.82) 44%, rgba(248, 250, 252, 0.94)),
+    radial-gradient(circle at 18% 22%, rgba(var(--theme-primary-rgb), 0.20), transparent 30%),
+    radial-gradient(circle at 86% 18%, rgba(var(--theme-secondary-rgb), 0.18), transparent 28%),
     #f8fafc;
+}
+
+.has-destination-theme .destination-backdrop::before {
+  content: "";
+  position: absolute;
+  right: -6vw;
+  top: 64px;
+  width: min(760px, 52vw);
+  height: min(520px, 46vh);
+  border-radius: 999px;
+  background: rgba(var(--theme-primary-rgb), 0.16);
+  filter: blur(34px);
+}
+
+.has-destination-theme .destination-backdrop::after {
+  content: attr(data-destination);
+  position: absolute;
+  right: max(18px, 4vw);
+  top: 90px;
+  max-width: min(620px, 62vw);
+  color: var(--theme-primary);
+  opacity: 0.14;
+  font-size: clamp(76px, 11vw, 176px);
+  font-weight: 800;
+  line-height: 0.95;
+  letter-spacing: 0;
+  white-space: nowrap;
+  filter: blur(1px);
 }
 
 .destination-theme-shanghai {
   --theme-primary: #2563eb;
   --theme-secondary: #0f766e;
   --theme-ink: #1e293b;
+  --theme-soft: #dbeafe;
   --theme-primary-rgb: 37, 99, 235;
   --theme-secondary-rgb: 15, 118, 110;
 }
@@ -86,6 +116,7 @@ main {
   --theme-primary: #0284c7;
   --theme-secondary: #0f766e;
   --theme-ink: #334155;
+  --theme-soft: #e0f2fe;
   --theme-primary-rgb: 2, 132, 199;
   --theme-secondary-rgb: 15, 118, 110;
 }
@@ -95,6 +126,7 @@ main {
   --theme-primary: #0891b2;
   --theme-secondary: #059669;
   --theme-ink: #334155;
+  --theme-soft: #cffafe;
   --theme-primary-rgb: 8, 145, 178;
   --theme-secondary-rgb: 5, 150, 105;
 }
@@ -104,6 +136,7 @@ main {
   --theme-primary: #16a34a;
   --theme-secondary: #0ea5e9;
   --theme-ink: #365314;
+  --theme-soft: #dcfce7;
   --theme-primary-rgb: 22, 163, 74;
   --theme-secondary-rgb: 14, 165, 233;
 }
@@ -112,6 +145,7 @@ main {
   --theme-primary: #b45309;
   --theme-secondary: #475569;
   --theme-ink: #334155;
+  --theme-soft: #fef3c7;
   --theme-primary-rgb: 180, 83, 9;
   --theme-secondary-rgb: 71, 85, 105;
 }
@@ -124,8 +158,8 @@ main {
 .has-destination-theme .detail-grid,
 .has-destination-theme .candidate-list,
 .has-destination-theme .notice-row {
-  background: rgba(255, 255, 255, 0.94);
-  backdrop-filter: blur(14px);
+  background: rgba(255, 255, 255, 0.88);
+  backdrop-filter: blur(18px);
 }
 
 .app-shell > section {
@@ -136,20 +170,20 @@ main {
 .landmark {
   position: absolute;
   display: block;
-  opacity: 0.16;
-  filter: blur(5px);
+  opacity: 0.26;
+  filter: blur(1px);
 }
 
-.landmark.palace {
-  right: max(32px, calc((100vw - 1320px) / 2 - 30px));
-  top: 128px;
-  width: min(360px, 28vw);
-  height: 150px;
-  border-bottom: 18px solid var(--theme-primary);
+.landmark.primary {
+  right: max(18px, calc((100vw - 1320px) / 2 - 72px));
+  top: 138px;
+  width: clamp(260px, 38vw, 540px);
+  height: 240px;
+  border-bottom: 22px solid var(--theme-primary);
 }
 
-.landmark.palace::before,
-.landmark.palace::after {
+.landmark.primary::before,
+.landmark.primary::after {
   content: "";
   position: absolute;
   left: 0;
@@ -157,61 +191,62 @@ main {
   margin: auto;
 }
 
-.landmark.palace::before {
-  bottom: 18px;
+.landmark.primary::before {
+  bottom: 22px;
   width: 100%;
-  height: 76px;
+  height: 124px;
   background:
     linear-gradient(135deg, transparent 0 18%, var(--theme-primary) 18% 31%, transparent 31% 69%, var(--theme-primary) 69% 82%, transparent 82%),
-    linear-gradient(0deg, var(--theme-primary) 0 18px, transparent 18px);
-  clip-path: polygon(50% 0, 100% 48%, 90% 48%, 90% 100%, 10% 100%, 10% 48%, 0 48%);
+    linear-gradient(0deg, var(--theme-primary) 0 22px, transparent 22px);
+  clip-path: polygon(50% 0, 100% 46%, 90% 46%, 90% 100%, 10% 100%, 10% 46%, 0 46%);
 }
 
-.landmark.palace::after {
+.landmark.primary::after {
   bottom: 0;
-  width: 72%;
-  height: 74px;
-  border-left: 18px solid var(--theme-primary);
-  border-right: 18px solid var(--theme-primary);
-  background: repeating-linear-gradient(90deg, var(--theme-primary) 0 10px, transparent 10px 34px);
-}
-
-.landmark.wall {
-  left: max(24px, calc((100vw - 1320px) / 2 - 60px));
-  bottom: 108px;
-  width: min(520px, 42vw);
+  width: 68%;
   height: 118px;
-  border-bottom: 14px solid var(--theme-ink);
-  transform: rotate(-4deg);
+  border-left: 24px solid var(--theme-primary);
+  border-right: 24px solid var(--theme-primary);
+  background: repeating-linear-gradient(90deg, var(--theme-primary) 0 12px, transparent 12px 42px);
 }
 
-.landmark.wall::before {
+.landmark.secondary {
+  left: max(-36px, calc((100vw - 1320px) / 2 - 118px));
+  bottom: 96px;
+  width: clamp(320px, 50vw, 680px);
+  height: 186px;
+  opacity: 0.22;
+  border-bottom: 18px solid var(--theme-ink);
+  transform: rotate(-3deg);
+}
+
+.landmark.secondary::before {
   content: "";
   position: absolute;
   left: 0;
   right: 0;
-  bottom: 14px;
-  height: 52px;
+  bottom: 18px;
+  height: 76px;
   background:
-    repeating-linear-gradient(90deg, var(--theme-ink) 0 34px, transparent 34px 54px),
+    repeating-linear-gradient(90deg, var(--theme-ink) 0 42px, transparent 42px 66px),
     linear-gradient(var(--theme-ink), var(--theme-ink));
-  background-size: auto, 100% 16px;
-  background-position: 0 0, 0 36px;
+  background-size: auto, 100% 20px;
+  background-position: 0 0, 0 52px;
   background-repeat: repeat-x, no-repeat;
 }
 
-.landmark.gate {
-  left: 48%;
-  top: 45%;
-  width: min(260px, 22vw);
-  height: 140px;
-  opacity: 0.10;
-  border-bottom: 16px solid var(--theme-ink);
-  transform: translateX(-50%);
+.landmark.line {
+  left: 40%;
+  top: 42%;
+  width: clamp(260px, 36vw, 520px);
+  height: 170px;
+  opacity: 0.15;
+  border-bottom: 18px solid var(--theme-secondary);
+  transform: translateX(-50%) rotate(1deg);
 }
 
-.landmark.gate::before,
-.landmark.gate::after {
+.landmark.line::before,
+.landmark.line::after {
   content: "";
   position: absolute;
   left: 0;
@@ -219,37 +254,87 @@ main {
   margin: auto;
 }
 
-.landmark.gate::before {
-  bottom: 16px;
+.landmark.line::before {
+  bottom: 18px;
   width: 100%;
-  height: 48px;
-  background: var(--theme-ink);
-  clip-path: polygon(50% 0, 100% 58%, 88% 58%, 88% 100%, 12% 100%, 12% 58%, 0 58%);
-}
-
-.landmark.gate::after {
-  bottom: 0;
-  width: 66%;
-  height: 68px;
-  background: repeating-linear-gradient(90deg, var(--theme-ink) 0 12px, transparent 12px 32px);
-}
-
-.landmark.ridge {
-  right: 7%;
-  bottom: 48px;
-  width: 360px;
   height: 72px;
-  opacity: 0.08;
-  border-bottom: 4px solid var(--theme-secondary);
-  transform: rotate(2deg);
+  background: repeating-linear-gradient(90deg, transparent 0 24px, var(--theme-secondary) 24px 30px, transparent 30px 58px);
+  clip-path: polygon(0 82%, 12% 44%, 26% 62%, 42% 28%, 58% 64%, 75% 36%, 100% 76%, 100% 100%, 0 100%);
 }
 
-.landmark.ridge::before {
+.landmark.line::after {
+  bottom: 0;
+  width: 76%;
+  height: 78px;
+  background: repeating-linear-gradient(90deg, var(--theme-secondary) 0 12px, transparent 12px 36px);
+}
+
+.landmark.terrain {
+  right: 4vw;
+  bottom: 42px;
+  width: clamp(300px, 44vw, 620px);
+  height: 118px;
+  opacity: 0.18;
+  border-bottom: 8px solid var(--theme-secondary);
+  transform: rotate(1deg);
+}
+
+.landmark.terrain::before {
   content: "";
   position: absolute;
   inset: 0;
-  background: repeating-linear-gradient(135deg, transparent 0 28px, var(--theme-secondary) 28px 33px, transparent 33px 58px);
+  background: repeating-linear-gradient(135deg, transparent 0 28px, var(--theme-secondary) 28px 34px, transparent 34px 60px);
   clip-path: polygon(0 70%, 12% 34%, 26% 62%, 38% 24%, 52% 58%, 66% 30%, 82% 66%, 100% 40%, 100% 100%, 0 100%);
+}
+
+.destination-theme-qingdao .landmark.primary {
+  height: 260px;
+  border-bottom: 18px solid var(--theme-primary);
+}
+
+.destination-theme-qingdao .landmark.primary::before {
+  height: 150px;
+  background:
+    radial-gradient(circle at 24% 24%, transparent 0 22px, var(--theme-primary) 23px 30px, transparent 31px),
+    linear-gradient(82deg, transparent 0 38%, var(--theme-primary) 38% 44%, transparent 44%),
+    linear-gradient(98deg, transparent 0 56%, var(--theme-primary) 56% 62%, transparent 62%);
+  clip-path: polygon(18% 100%, 22% 16%, 32% 16%, 36% 100%, 58% 100%, 62% 0, 74% 0, 78% 100%);
+}
+
+.destination-theme-qingdao .landmark.primary::after {
+  width: 100%;
+  height: 80px;
+  border: 0;
+  background:
+    radial-gradient(ellipse at 18% 100%, transparent 0 36px, var(--theme-secondary) 37px 43px, transparent 44px),
+    radial-gradient(ellipse at 45% 100%, transparent 0 42px, var(--theme-secondary) 43px 50px, transparent 51px),
+    radial-gradient(ellipse at 76% 100%, transparent 0 34px, var(--theme-secondary) 35px 41px, transparent 42px);
+}
+
+.destination-theme-shanghai .landmark.primary::before,
+.destination-theme-guangzhou .landmark.primary::before,
+.destination-theme-shenzhen .landmark.primary::before {
+  height: 170px;
+  background: repeating-linear-gradient(90deg, var(--theme-primary) 0 26px, transparent 26px 42px);
+  clip-path: polygon(0 100%, 0 38%, 12% 38%, 12% 8%, 22% 8%, 22% 100%, 38% 100%, 38% 20%, 48% 20%, 48% 0, 58% 20%, 58% 100%, 76% 100%, 76% 30%, 88% 30%, 88% 100%);
+}
+
+.destination-theme-chengdu .landmark.primary::before,
+.destination-theme-hangzhou .landmark.primary::before {
+  height: 134px;
+  background: var(--theme-primary);
+  clip-path: polygon(0 78%, 16% 46%, 28% 64%, 42% 22%, 58% 62%, 72% 34%, 100% 82%, 100% 100%, 0 100%);
+}
+
+.destination-theme-xian .landmark.primary::before {
+  height: 116px;
+  background:
+    linear-gradient(90deg, var(--theme-primary) 0 16%, transparent 16% 24%, var(--theme-primary) 24% 40%, transparent 40% 60%, var(--theme-primary) 60% 76%, transparent 76% 84%, var(--theme-primary) 84%),
+    linear-gradient(var(--theme-primary), var(--theme-primary));
+  background-size: 100% 72px, 100% 22px;
+  background-position: 0 44px, 0 0;
+  background-repeat: no-repeat;
+  clip-path: polygon(0 28%, 12% 28%, 12% 0, 28% 0, 28% 28%, 72% 28%, 72% 0, 88% 0, 88% 28%, 100% 28%, 100% 100%, 0 100%);
 }
 
 .topbar,
