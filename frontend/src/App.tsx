@@ -105,9 +105,16 @@ function selectedFlightCabin(segment: Segment) {
 
 function destinationThemeClass(response: TravelPlanResponse | null) {
   if (!response) return "";
-  const destinationSignal = `${response.travel_request.destination_text} ${response.travel_request.raw_user_input}`.toLowerCase();
-  if (destinationSignal.includes("北京") || destinationSignal.includes("beijing")) return "destination-theme-beijing";
-  return "";
+  const destinationSignal = (response.travel_request.destination_text || response.travel_request.raw_user_input).toLowerCase();
+  if (destinationSignal.includes("北京") || destinationSignal.includes("beijing")) return "has-destination-theme destination-theme-beijing";
+  if (destinationSignal.includes("上海") || destinationSignal.includes("shanghai")) return "has-destination-theme destination-theme-shanghai";
+  if (destinationSignal.includes("青岛") || destinationSignal.includes("qingdao")) return "has-destination-theme destination-theme-qingdao";
+  if (destinationSignal.includes("广州") || destinationSignal.includes("guangzhou")) return "has-destination-theme destination-theme-guangzhou";
+  if (destinationSignal.includes("深圳") || destinationSignal.includes("shenzhen")) return "has-destination-theme destination-theme-shenzhen";
+  if (destinationSignal.includes("成都") || destinationSignal.includes("chengdu")) return "has-destination-theme destination-theme-chengdu";
+  if (destinationSignal.includes("杭州") || destinationSignal.includes("hangzhou")) return "has-destination-theme destination-theme-hangzhou";
+  if (destinationSignal.includes("西安") || destinationSignal.includes("xian") || destinationSignal.includes("xi'an")) return "has-destination-theme destination-theme-xian";
+  return "has-destination-theme destination-theme-generic";
 }
 
 function TransferRouteSummary({ option, detailed = false }: { option: LocalTransferOption; detailed?: boolean }) {

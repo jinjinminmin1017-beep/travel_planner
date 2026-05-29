@@ -52,7 +52,15 @@ main {
   display: none;
 }
 
-.destination-theme-beijing .destination-backdrop {
+.has-destination-theme {
+  --theme-primary: #0f766e;
+  --theme-secondary: #2563eb;
+  --theme-ink: #334155;
+  --theme-primary-rgb: 15, 118, 110;
+  --theme-secondary-rgb: 37, 99, 235;
+}
+
+.has-destination-theme .destination-backdrop {
   display: block;
   position: fixed;
   inset: 0;
@@ -61,19 +69,61 @@ main {
   overflow: hidden;
   background:
     linear-gradient(180deg, rgba(248, 250, 252, 0.72), rgba(248, 250, 252, 0.94)),
-    radial-gradient(circle at 16% 18%, rgba(15, 118, 110, 0.10), transparent 30%),
-    radial-gradient(circle at 86% 22%, rgba(37, 99, 235, 0.08), transparent 28%),
+    radial-gradient(circle at 16% 18%, rgba(var(--theme-primary-rgb), 0.10), transparent 30%),
+    radial-gradient(circle at 86% 22%, rgba(var(--theme-secondary-rgb), 0.08), transparent 28%),
     #f8fafc;
 }
 
-.destination-theme-beijing .topbar,
-.destination-theme-beijing .query-panel,
-.destination-theme-beijing .status-strip,
-.destination-theme-beijing .route-overview div,
-.destination-theme-beijing .card,
-.destination-theme-beijing .detail-grid,
-.destination-theme-beijing .candidate-list,
-.destination-theme-beijing .notice-row {
+.destination-theme-shanghai {
+  --theme-primary: #2563eb;
+  --theme-secondary: #0f766e;
+  --theme-ink: #1e293b;
+  --theme-primary-rgb: 37, 99, 235;
+  --theme-secondary-rgb: 15, 118, 110;
+}
+
+.destination-theme-qingdao {
+  --theme-primary: #0284c7;
+  --theme-secondary: #0f766e;
+  --theme-ink: #334155;
+  --theme-primary-rgb: 2, 132, 199;
+  --theme-secondary-rgb: 15, 118, 110;
+}
+
+.destination-theme-guangzhou,
+.destination-theme-shenzhen {
+  --theme-primary: #0891b2;
+  --theme-secondary: #059669;
+  --theme-ink: #334155;
+  --theme-primary-rgb: 8, 145, 178;
+  --theme-secondary-rgb: 5, 150, 105;
+}
+
+.destination-theme-chengdu,
+.destination-theme-hangzhou {
+  --theme-primary: #16a34a;
+  --theme-secondary: #0ea5e9;
+  --theme-ink: #365314;
+  --theme-primary-rgb: 22, 163, 74;
+  --theme-secondary-rgb: 14, 165, 233;
+}
+
+.destination-theme-xian {
+  --theme-primary: #b45309;
+  --theme-secondary: #475569;
+  --theme-ink: #334155;
+  --theme-primary-rgb: 180, 83, 9;
+  --theme-secondary-rgb: 71, 85, 105;
+}
+
+.has-destination-theme .topbar,
+.has-destination-theme .query-panel,
+.has-destination-theme .status-strip,
+.has-destination-theme .route-overview div,
+.has-destination-theme .card,
+.has-destination-theme .detail-grid,
+.has-destination-theme .candidate-list,
+.has-destination-theme .notice-row {
   background: rgba(255, 255, 255, 0.94);
   backdrop-filter: blur(14px);
 }
@@ -95,7 +145,7 @@ main {
   top: 128px;
   width: min(360px, 28vw);
   height: 150px;
-  border-bottom: 18px solid #0f766e;
+  border-bottom: 18px solid var(--theme-primary);
 }
 
 .landmark.palace::before,
@@ -112,8 +162,8 @@ main {
   width: 100%;
   height: 76px;
   background:
-    linear-gradient(135deg, transparent 0 18%, #0f766e 18% 31%, transparent 31% 69%, #0f766e 69% 82%, transparent 82%),
-    linear-gradient(0deg, #0f766e 0 18px, transparent 18px);
+    linear-gradient(135deg, transparent 0 18%, var(--theme-primary) 18% 31%, transparent 31% 69%, var(--theme-primary) 69% 82%, transparent 82%),
+    linear-gradient(0deg, var(--theme-primary) 0 18px, transparent 18px);
   clip-path: polygon(50% 0, 100% 48%, 90% 48%, 90% 100%, 10% 100%, 10% 48%, 0 48%);
 }
 
@@ -121,9 +171,9 @@ main {
   bottom: 0;
   width: 72%;
   height: 74px;
-  border-left: 18px solid #0f766e;
-  border-right: 18px solid #0f766e;
-  background: repeating-linear-gradient(90deg, #0f766e 0 10px, transparent 10px 34px);
+  border-left: 18px solid var(--theme-primary);
+  border-right: 18px solid var(--theme-primary);
+  background: repeating-linear-gradient(90deg, var(--theme-primary) 0 10px, transparent 10px 34px);
 }
 
 .landmark.wall {
@@ -131,7 +181,7 @@ main {
   bottom: 108px;
   width: min(520px, 42vw);
   height: 118px;
-  border-bottom: 14px solid #334155;
+  border-bottom: 14px solid var(--theme-ink);
   transform: rotate(-4deg);
 }
 
@@ -143,8 +193,8 @@ main {
   bottom: 14px;
   height: 52px;
   background:
-    repeating-linear-gradient(90deg, #334155 0 34px, transparent 34px 54px),
-    linear-gradient(#334155, #334155);
+    repeating-linear-gradient(90deg, var(--theme-ink) 0 34px, transparent 34px 54px),
+    linear-gradient(var(--theme-ink), var(--theme-ink));
   background-size: auto, 100% 16px;
   background-position: 0 0, 0 36px;
   background-repeat: repeat-x, no-repeat;
@@ -156,7 +206,7 @@ main {
   width: min(260px, 22vw);
   height: 140px;
   opacity: 0.10;
-  border-bottom: 16px solid #0f172a;
+  border-bottom: 16px solid var(--theme-ink);
   transform: translateX(-50%);
 }
 
@@ -173,7 +223,7 @@ main {
   bottom: 16px;
   width: 100%;
   height: 48px;
-  background: #0f172a;
+  background: var(--theme-ink);
   clip-path: polygon(50% 0, 100% 58%, 88% 58%, 88% 100%, 12% 100%, 12% 58%, 0 58%);
 }
 
@@ -181,7 +231,7 @@ main {
   bottom: 0;
   width: 66%;
   height: 68px;
-  background: repeating-linear-gradient(90deg, #0f172a 0 12px, transparent 12px 32px);
+  background: repeating-linear-gradient(90deg, var(--theme-ink) 0 12px, transparent 12px 32px);
 }
 
 .landmark.ridge {
@@ -190,7 +240,7 @@ main {
   width: 360px;
   height: 72px;
   opacity: 0.08;
-  border-bottom: 4px solid #2563eb;
+  border-bottom: 4px solid var(--theme-secondary);
   transform: rotate(2deg);
 }
 
@@ -198,7 +248,7 @@ main {
   content: "";
   position: absolute;
   inset: 0;
-  background: repeating-linear-gradient(135deg, transparent 0 28px, #2563eb 28px 33px, transparent 33px 58px);
+  background: repeating-linear-gradient(135deg, transparent 0 28px, var(--theme-secondary) 28px 33px, transparent 33px 58px);
   clip-path: polygon(0 70%, 12% 34%, 26% 62%, 38% 24%, 52% 58%, 66% 30%, 82% 66%, 100% 40%, 100% 100%, 0 100%);
 }
 

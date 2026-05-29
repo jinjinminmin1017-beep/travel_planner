@@ -98,7 +98,7 @@ test("defaults selected recommendation from parsed preference", async ({ page })
   await expect(page.locator(".candidate-list .candidate")).toHaveCount(1);
 });
 
-test("shows Beijing destination backdrop after planning", async ({ page }) => {
+test("shows destination backdrop after planning", async ({ page }) => {
   await page.route("**/api/travel/plan", async (route) => {
     const response = buildPlanResponse();
     response.travel_request.destination_text = "北京";
@@ -109,6 +109,20 @@ test("shows Beijing destination backdrop after planning", async ({ page }) => {
   await page.goto("/");
   await page.locator(".submit-button").click();
   await expect(page.locator("main.destination-theme-beijing")).toBeVisible();
+  await expect(page.locator(".destination-backdrop .landmark")).toHaveCount(4);
+});
+
+test("uses a generic destination backdrop for unlisted cities", async ({ page }) => {
+  await page.route("**/api/travel/plan", async (route) => {
+    const response = buildPlanResponse();
+    response.travel_request.destination_text = "厦门";
+    response.travel_request.raw_user_input = "从上海到厦门，帮我规划出行。";
+    await route.fulfill({ json: response });
+  });
+
+  await page.goto("/");
+  await page.locator(".submit-button").click();
+  await expect(page.locator("main.has-destination-theme.destination-theme-generic")).toBeVisible();
   await expect(page.locator(".destination-backdrop .landmark")).toHaveCount(4);
 });
 
