@@ -48,6 +48,10 @@ main {
   isolation: isolate;
 }
 
+.app-shell {
+  min-height: calc(100vh - 28px);
+}
+
 .destination-backdrop {
   display: none;
 }
@@ -63,11 +67,12 @@ main {
 
 .has-destination-theme .destination-backdrop {
   display: block;
-  position: fixed;
+  position: absolute;
   inset: 0;
   z-index: 0;
   pointer-events: none;
   overflow: hidden;
+  border-radius: 12px;
   background:
     linear-gradient(180deg, rgba(248, 250, 252, 0.58), rgba(248, 250, 252, 0.82) 44%, rgba(248, 250, 252, 0.94)),
     radial-gradient(circle at 18% 22%, rgba(var(--theme-primary-rgb), 0.20), transparent 30%),
@@ -78,9 +83,9 @@ main {
 .has-destination-theme .destination-backdrop::before {
   content: "";
   position: absolute;
-  right: -6vw;
+  right: -70px;
   top: 64px;
-  width: min(760px, 52vw);
+  width: min(760px, 58%);
   height: min(520px, 46vh);
   border-radius: 999px;
   background: rgba(var(--theme-primary-rgb), 0.16);
@@ -90,9 +95,9 @@ main {
 .has-destination-theme .destination-backdrop::after {
   content: attr(data-destination);
   position: absolute;
-  right: max(18px, 4vw);
+  right: 32px;
   top: 90px;
-  max-width: min(620px, 62vw);
+  max-width: min(620px, calc(100% - 64px));
   color: var(--theme-primary);
   opacity: 0.14;
   font-size: clamp(76px, 11vw, 176px);
@@ -175,7 +180,7 @@ main {
 }
 
 .landmark.primary {
-  right: max(18px, calc((100vw - 1320px) / 2 - 72px));
+  right: -64px;
   top: 138px;
   width: clamp(260px, 38vw, 540px);
   height: 240px;
@@ -211,7 +216,7 @@ main {
 }
 
 .landmark.secondary {
-  left: max(-36px, calc((100vw - 1320px) / 2 - 118px));
+  left: -86px;
   bottom: 96px;
   width: clamp(320px, 50vw, 680px);
   height: 186px;
@@ -270,7 +275,7 @@ main {
 }
 
 .landmark.terrain {
-  right: 4vw;
+  right: 24px;
   bottom: 42px;
   width: clamp(300px, 44vw, 620px);
   height: 118px;
