@@ -44,6 +44,162 @@ main {
   width: min(1320px, calc(100vw - 48px));
   margin: 0 auto;
   padding: 28px 0 56px;
+  position: relative;
+  isolation: isolate;
+}
+
+.destination-backdrop {
+  display: none;
+}
+
+.destination-theme-beijing .destination-backdrop {
+  display: block;
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  overflow: hidden;
+  background:
+    linear-gradient(180deg, rgba(248, 250, 252, 0.72), rgba(248, 250, 252, 0.94)),
+    radial-gradient(circle at 16% 18%, rgba(15, 118, 110, 0.10), transparent 30%),
+    radial-gradient(circle at 86% 22%, rgba(37, 99, 235, 0.08), transparent 28%),
+    #f8fafc;
+}
+
+.destination-theme-beijing .topbar,
+.destination-theme-beijing .query-panel,
+.destination-theme-beijing .status-strip,
+.destination-theme-beijing .route-overview div,
+.destination-theme-beijing .card,
+.destination-theme-beijing .detail-grid,
+.destination-theme-beijing .candidate-list,
+.destination-theme-beijing .notice-row {
+  background: rgba(255, 255, 255, 0.94);
+  backdrop-filter: blur(14px);
+}
+
+.app-shell > section {
+  position: relative;
+  z-index: 1;
+}
+
+.landmark {
+  position: absolute;
+  display: block;
+  opacity: 0.16;
+  filter: blur(5px);
+}
+
+.landmark.palace {
+  right: max(32px, calc((100vw - 1320px) / 2 - 30px));
+  top: 128px;
+  width: min(360px, 28vw);
+  height: 150px;
+  border-bottom: 18px solid #0f766e;
+}
+
+.landmark.palace::before,
+.landmark.palace::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  margin: auto;
+}
+
+.landmark.palace::before {
+  bottom: 18px;
+  width: 100%;
+  height: 76px;
+  background:
+    linear-gradient(135deg, transparent 0 18%, #0f766e 18% 31%, transparent 31% 69%, #0f766e 69% 82%, transparent 82%),
+    linear-gradient(0deg, #0f766e 0 18px, transparent 18px);
+  clip-path: polygon(50% 0, 100% 48%, 90% 48%, 90% 100%, 10% 100%, 10% 48%, 0 48%);
+}
+
+.landmark.palace::after {
+  bottom: 0;
+  width: 72%;
+  height: 74px;
+  border-left: 18px solid #0f766e;
+  border-right: 18px solid #0f766e;
+  background: repeating-linear-gradient(90deg, #0f766e 0 10px, transparent 10px 34px);
+}
+
+.landmark.wall {
+  left: max(24px, calc((100vw - 1320px) / 2 - 60px));
+  bottom: 108px;
+  width: min(520px, 42vw);
+  height: 118px;
+  border-bottom: 14px solid #334155;
+  transform: rotate(-4deg);
+}
+
+.landmark.wall::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 14px;
+  height: 52px;
+  background:
+    repeating-linear-gradient(90deg, #334155 0 34px, transparent 34px 54px),
+    linear-gradient(#334155, #334155);
+  background-size: auto, 100% 16px;
+  background-position: 0 0, 0 36px;
+  background-repeat: repeat-x, no-repeat;
+}
+
+.landmark.gate {
+  left: 48%;
+  top: 45%;
+  width: min(260px, 22vw);
+  height: 140px;
+  opacity: 0.10;
+  border-bottom: 16px solid #0f172a;
+  transform: translateX(-50%);
+}
+
+.landmark.gate::before,
+.landmark.gate::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  margin: auto;
+}
+
+.landmark.gate::before {
+  bottom: 16px;
+  width: 100%;
+  height: 48px;
+  background: #0f172a;
+  clip-path: polygon(50% 0, 100% 58%, 88% 58%, 88% 100%, 12% 100%, 12% 58%, 0 58%);
+}
+
+.landmark.gate::after {
+  bottom: 0;
+  width: 66%;
+  height: 68px;
+  background: repeating-linear-gradient(90deg, #0f172a 0 12px, transparent 12px 32px);
+}
+
+.landmark.ridge {
+  right: 7%;
+  bottom: 48px;
+  width: 360px;
+  height: 72px;
+  opacity: 0.08;
+  border-bottom: 4px solid #2563eb;
+  transform: rotate(2deg);
+}
+
+.landmark.ridge::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(135deg, transparent 0 28px, #2563eb 28px 33px, transparent 33px 58px);
+  clip-path: polygon(0 70%, 12% 34%, 26% 62%, 38% 24%, 52% 58%, 66% 30%, 82% 66%, 100% 40%, 100% 100%, 0 100%);
 }
 
 .topbar,

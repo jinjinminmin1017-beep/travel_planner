@@ -103,6 +103,13 @@ function selectedFlightCabin(segment: Segment) {
   return segment.cabin_options?.find((option) => option.option_id === segment.selected_cabin_option_id) ?? segment.cabin_options?.[0] ?? null;
 }
 
+function destinationThemeClass(response: TravelPlanResponse | null) {
+  if (!response) return "";
+  const destinationSignal = `${response.travel_request.destination_text} ${response.travel_request.raw_user_input}`.toLowerCase();
+  if (destinationSignal.includes("北京") || destinationSignal.includes("beijing")) return "destination-theme-beijing";
+  return "";
+}
+
 function TransferRouteSummary({ option, detailed = false }: { option: LocalTransferOption; detailed?: boolean }) {
   return (
     <div className={detailed ? "transfer-route" : "transfer-route compact"}>
@@ -345,6 +352,7 @@ export default function App() {
     return findPlan(response, preferredRecommendationPlanId(response));
   }, [response, selectedPlanId]);
 
+  const themeClass = useMemo(() => destinationThemeClass(response), [response]);
   const recommendedPlanIds = useMemo(() => new Set(response?.recommendation_result?.recommendations.map((slot) => slot.plan_id).filter(Boolean) ?? []), [response]);
   const candidatePlans = useMemo(() => response?.plans.filter((plan) => !recommendedPlanIds.has(plan.plan_id)) ?? [], [response, recommendedPlanIds]);
 
@@ -371,7 +379,13 @@ export default function App() {
   }
 
   return (
-    <main>
+    <main className={themeClass ? `app-shell ${themeClass}` : "app-shell"}>
+      <div className="destination-backdrop" aria-hidden="true">
+        <span className="landmark palace" />
+        <span className="landmark wall" />
+        <span className="landmark gate" />
+        <span className="landmark ridge" />
+      </div>
       <section className="topbar">
         <div>
           <h1>AI 出行规划器</h1>

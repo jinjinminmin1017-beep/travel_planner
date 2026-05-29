@@ -98,6 +98,20 @@ test("defaults selected recommendation from parsed preference", async ({ page })
   await expect(page.locator(".candidate-list .candidate")).toHaveCount(1);
 });
 
+test("shows Beijing destination backdrop after planning", async ({ page }) => {
+  await page.route("**/api/travel/plan", async (route) => {
+    const response = buildPlanResponse();
+    response.travel_request.destination_text = "北京";
+    response.travel_request.raw_user_input = "从上海到北京，帮我规划出行。";
+    await route.fulfill({ json: response });
+  });
+
+  await page.goto("/");
+  await page.locator(".submit-button").click();
+  await expect(page.locator("main.destination-theme-beijing")).toBeVisible();
+  await expect(page.locator(".destination-backdrop .landmark")).toHaveCount(4);
+});
+
 async function submitAndExpectSelected(page, input: string, selectedSlot: string, detailTitle: string) {
   await page.getByRole("textbox").fill(input);
   await page.getByRole("button", { name: /开始规划/ }).click();
