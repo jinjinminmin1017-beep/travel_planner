@@ -64,6 +64,7 @@ main {
   --theme-primary-rgb: 15, 118, 110;
   --theme-secondary-rgb: 37, 99, 235;
   --destination-scene: url("/destination-scenes/generic.svg");
+  --destination-scene-size: 100% auto;
 }
 
 .has-destination-theme .destination-backdrop {
@@ -87,7 +88,7 @@ main {
   inset: -28px;
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0), rgba(248, 250, 252, 0.12)),
-    var(--destination-scene) center top / cover no-repeat;
+    var(--destination-scene) center top / var(--destination-scene-size) repeat-y;
   filter: blur(1.5px) saturate(138%);
   opacity: 1;
   transform: scale(1.04);
@@ -102,7 +103,7 @@ main {
   height: 38%;
   background:
     linear-gradient(180deg, transparent, rgba(248, 250, 252, 0.22)),
-    var(--destination-scene) center bottom / cover no-repeat;
+    var(--destination-scene) center bottom / var(--destination-scene-size) repeat-y;
   filter: blur(8px) saturate(120%);
   opacity: 0.62;
 }
@@ -124,7 +125,7 @@ main {
   --theme-soft: #e0f2fe;
   --theme-primary-rgb: 2, 132, 199;
   --theme-secondary-rgb: 15, 118, 110;
-  --destination-scene: url("/destination-scenes/qingdao.svg");
+  --destination-scene: url("/destination-scenes/qingdao-pier.jpg");
 }
 
 .destination-theme-guangzhou,
