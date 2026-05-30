@@ -1,4 +1,4 @@
-import { AlertTriangle, ChevronDown, ChevronUp, Clock, ExternalLink, Plane, RefreshCw, Route, Search, Train, WalletCards } from "lucide-react";
+import { AlertTriangle, ChevronDown, ChevronUp, Clock, ExternalLink, Plane, RefreshCw, Search, Train, WalletCards } from "lucide-react";
 import { useMemo, useState } from "react";
 import { bookingRedirect, planTrip, recalculate } from "./api/client";
 import type { LocalTransferOption, RecommendationSlot, Segment, TravelPlan, TravelPlanResponse } from "./types";
@@ -428,34 +428,11 @@ export default function App() {
 
       {response && (
         <>
-          <section className="status-strip">
-            <span><Route size={16} />{response.travel_request.origin_text} → {response.travel_request.destination_text}</span>
-            <span>{response.planning_status} · {response.progress}%</span>
-            <span>trace {response.trace_id}</span>
-          </section>
-
-          <section className="route-overview">
-            <div>
-              <span>候选方案</span>
-              <strong>{candidatePlans.length}</strong>
-            </div>
-            <div>
-              <span>主推荐</span>
-              <strong>{response.recommendation_result?.recommendations.filter((slot) => slot.plan_id).length ?? 0}</strong>
-            </div>
-          </section>
-
           <section className="recommendation-grid">
             {response.recommendation_result?.recommendations.map((slot) => (
               <RecommendationCard key={slot.recommendation_type} slot={slot} plan={findPlan(response, slot.plan_id)} selected={slot.plan_id === selectedPlan?.plan_id} onSelect={(plan) => setSelectedPlanId(plan.plan_id)} />
             ))}
           </section>
-
-          {response.user_visible_warnings.length > 0 && (
-            <section className="notice-row">
-              {response.user_visible_warnings.map((warning) => <span key={warning}>{warning}</span>)}
-            </section>
-          )}
 
           {selectedPlan && <DetailPanel plan={selectedPlan} onRecalculated={replacePlan} />}
 

@@ -93,8 +93,9 @@ test("defaults selected recommendation from parsed preference", async ({ page })
   await page.locator(".recommendation-card").filter({ hasText: "最优惠" }).getByRole("button", { name: "查看详情" }).click();
   await expect(page.locator(".recommendation-card.selected")).toContainText("最优惠");
   await expect(page.locator(".detail-main h2")).toContainText("高铁直达");
-  await expect(page.locator(".route-overview")).toContainText("候选方案");
-  await expect(page.locator(".route-overview")).toContainText("1");
+  await expect(page.locator(".route-overview")).toHaveCount(0);
+  await expect(page.locator(".status-strip")).toHaveCount(0);
+  await expect(page.locator(".notice-row")).toHaveCount(0);
   await expect(page.locator(".candidate-list .candidate")).toHaveCount(1);
 });
 
