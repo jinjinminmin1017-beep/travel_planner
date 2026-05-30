@@ -100,6 +100,7 @@ test("defaults selected recommendation from parsed preference", async ({ page })
 });
 
 test("shows destination backdrop after planning", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
   await page.route("**/api/travel/plan", async (route) => {
     const response = buildPlanResponse();
     response.travel_request.destination_text = "北京";
@@ -112,6 +113,7 @@ test("shows destination backdrop after planning", async ({ page }) => {
   await expect(page.locator("main.destination-theme-beijing")).toBeVisible();
   await expect(page.locator(".destination-backdrop")).toHaveAttribute("data-destination", "北京");
   await expect(page.locator(".destination-backdrop .landmark")).toHaveCount(4);
+  await expect(page.locator(".recommendation-rail")).toHaveCSS("position", "sticky");
 });
 
 test("uses a generic destination backdrop for unlisted cities", async ({ page }) => {

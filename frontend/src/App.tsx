@@ -428,26 +428,32 @@ export default function App() {
 
       {response && (
         <>
-          <section className="recommendation-grid">
-            {response.recommendation_result?.recommendations.map((slot) => (
-              <RecommendationCard key={slot.recommendation_type} slot={slot} plan={findPlan(response, slot.plan_id)} selected={slot.plan_id === selectedPlan?.plan_id} onSelect={(plan) => setSelectedPlanId(plan.plan_id)} />
-            ))}
-          </section>
+          <section className="results-shell">
+            <div className="results-main">
+              {selectedPlan && <DetailPanel plan={selectedPlan} onRecalculated={replacePlan} />}
 
-          {selectedPlan && <DetailPanel plan={selectedPlan} onRecalculated={replacePlan} />}
+              <section className="candidate-list">
+                <div className="section-heading"><h2>候选方案</h2></div>
+                {candidatePlans.map((plan) => (
+                  <button key={plan.plan_id} className={plan.plan_id === selectedPlan?.plan_id ? "candidate active" : "candidate"} onClick={() => setSelectedPlanId(plan.plan_id)}>
+                    <span className="candidate-title">
+                      {planDisplayName(plan)}
+                      <small>{planTypeLabel(plan.plan_type)} · {riskLabel(plan.risk_assessment.overall_risk_level)}</small>
+                    </span>
+                    <strong>{formatMoney(plan.cost_breakdown.total_cost)}</strong>
+                    {!plan.can_be_selected_by_llm && <em>{plan.risk_assessment.overall_risk_level === "BLOCKED" ? "BLOCKED" : "备选"} · {plan.block_reason_message ?? "不进入主推荐"}</em>}
+                  </button>
+                ))}
+              </section>
+            </div>
 
-          <section className="candidate-list">
-            <div className="section-heading"><h2>候选方案</h2></div>
-            {candidatePlans.map((plan) => (
-              <button key={plan.plan_id} className={plan.plan_id === selectedPlan?.plan_id ? "candidate active" : "candidate"} onClick={() => setSelectedPlanId(plan.plan_id)}>
-                <span className="candidate-title">
-                  {planDisplayName(plan)}
-                  <small>{planTypeLabel(plan.plan_type)} · {riskLabel(plan.risk_assessment.overall_risk_level)}</small>
-                </span>
-                <strong>{formatMoney(plan.cost_breakdown.total_cost)}</strong>
-                {!plan.can_be_selected_by_llm && <em>{plan.risk_assessment.overall_risk_level === "BLOCKED" ? "BLOCKED" : "备选"} · {plan.block_reason_message ?? "不进入主推荐"}</em>}
-              </button>
-            ))}
+            <aside className="recommendation-rail" aria-label="推荐方案">
+              <section className="recommendation-grid">
+                {response.recommendation_result?.recommendations.map((slot) => (
+                  <RecommendationCard key={slot.recommendation_type} slot={slot} plan={findPlan(response, slot.plan_id)} selected={slot.plan_id === selectedPlan?.plan_id} onSelect={(plan) => setSelectedPlanId(plan.plan_id)} />
+                ))}
+              </section>
+            </aside>
           </section>
 
         </>
