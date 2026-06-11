@@ -8,7 +8,7 @@ if ($Target -eq "backend") {
 }
 elseif ($Target -eq "frontend") {
   Push-Location frontend
-  npm run dev
+  npm run start
   Pop-Location
 }
 else {

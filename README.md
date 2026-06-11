@@ -1,20 +1,72 @@
 # AI Travel Planner
 
-Web App first travel planning prototype based on the provided PRD V2.1, architecture, Schema V1.15, data source governance, LLM prompt design, task breakdown, and execution plan.
+Mobile App travel planning prototype based on PRD V2.1, architecture, Schema V1.15, data source governance, LLM prompt design, task breakdown, and execution plan.
 
 ## Scope
 
-This repository implements the first-stage Web App development and test loop:
+The current implementation is moving from the earlier demo loop to real provider integration:
 
 - Natural-language travel input.
-- Deterministic mock data planning.
-- Door-to-door rail, flight, mixed, transfer, and ticket enhancement examples.
+- Expo / React Native app frontend for iOS and Android.
+- Real-provider based route, rail, flight, redirect, and LLM adapter interfaces.
+- Door-to-door plan composition with source metadata, source failures, blocked plan explanations, recalculation, and redirect-only booking handoff.
 - Three recommendation cards: cheapest, most comfortable, balanced.
-- Data source metadata, source failures, blocked plan explanations, recalculation, and mock redirect.
+- Deterministic internal calculation is still used for scoring, risk rules, and validation, but not for generating fallback recommendation cards and not as a fake transport data source.
+- OSRM Route Service is enabled in DEV / TEST as a no-key read-only route provider so map live smoke can run before commercial map keys are available. For production usage, self-host OSRM or use an approved commercial map provider.
+- Nominatim Search is enabled in DEV / TEST as a no-key read-only geocoding provider. Public usage requires a descriptive User-Agent and low-frequency calls.
+- Redirect-only providers for 12306, airline official websites, and AMap navigation are enabled in DEV / TEST and can be live-smoked without storing user credentials or creating orders.
+- OpenSky aircraft states are enabled in DEV / TEST as a no-key read-only flight status provider. They are not fare or ticket inventory data.
+- Open-Meteo forecast is enabled in DEV / TEST as a no-key read-only weather provider for weather risk assistance. It is not a fare, availability, or traffic source.
+- iRail Connections is enabled in DEV / TEST as a no-key read-only railway schedule provider. It proves the real rail schedule Provider path, but it is not a China rail fare, ticketing, or availability source.
 
-The first stage does not integrate real data sources, reverse-engineered APIs, automatic login, ticket grabbing, order submission, or payment.
+When a real provider is enabled but unavailable, unauthorized, missing credentials, or returns no usable result, the backend must surface a degraded status, source failure, business error, or blocked plan type. It must not silently replace the failed provider with simulated transport facts.
+
+The project still does not implement reverse-engineered APIs, automatic login, ticket grabbing, order submission, payment, or third-party credential storage.
+
+## Real API Configuration
+
+Copy `.env.example` to `.env` or your local environment manager and provide the credentials you are authorized to use. The backend loads `.env` from the repository root when present. Source enablement is controlled by `DataSourceConfig` plus environment overrides:
+
+Authorization requirements and provider onboarding steps are documented in `docs/PROVIDER_AUTHORIZATION_CHECKLIST.md`.
+
+```powershell
+$env:TRAVEL_SOURCE_AMAP_ROUTE_ENABLED="true"
+$env:TRAVEL_SOURCE_AMAP_ROUTE_LICENSE_STATUS="APPROVED"
+$env:AMAP_WEB_SERVICE_KEY="..."
+```
+
+For Amadeus, use `AMADEUS_BASE_URL=https://test.api.amadeus.com` with test keys. After Amadeus approves the production application, use `AMADEUS_BASE_URL=https://api.amadeus.com` with the production key pair.
+
+Run the configuration check before expecting live provider behavior:
+
+```powershell
+.\.venv\Scripts\python scripts\check_real_api_config.py
+```
+
+The check intentionally fails while required providers are disabled, pending review, or missing credentials.
+
+After the configuration check passes, run read-only live smoke checks:
+
+```powershell
+.\.venv\Scripts\python scripts\live_smoke_real_apis.py
+```
+
+You can test one provider at a time:
+
+```powershell
+.\.venv\Scripts\python scripts\live_smoke_real_apis.py --provider map
+.\.venv\Scripts\python scripts\live_smoke_real_apis.py --provider geocode
+.\.venv\Scripts\python scripts\live_smoke_real_apis.py --provider flight
+.\.venv\Scripts\python scripts\live_smoke_real_apis.py --provider flight-status
+.\.venv\Scripts\python scripts\live_smoke_real_apis.py --provider weather
+.\.venv\Scripts\python scripts\live_smoke_real_apis.py --provider rail-schedule
+.\.venv\Scripts\python scripts\live_smoke_real_apis.py --provider rail
+.\.venv\Scripts\python scripts\live_smoke_real_apis.py --provider redirect
+```
 
 ## Run
+
+This repository currently delivers the mobile client as an Expo / React Native app. There is no separate web frontend delivery path in this phase.
 
 ```powershell
 python -m venv .venv
@@ -25,8 +77,35 @@ python -m venv .venv
 ```powershell
 cd frontend
 npm install
-npm run dev
+npm run start
 ```
+
+The helper script uses the same commands:
+
+```powershell
+.\scripts\dev.ps1 -Target backend
+.\scripts\dev.ps1 -Target frontend
+.\scripts\dev.ps1 -Target test
+```
+
+## App API Base URL
+
+By default, the app chooses a local backend URL by platform:
+
+- Android emulator: `http://10.0.2.2:8000`
+- iOS simulator and local desktop previews: `http://127.0.0.1:8000`
+
+Override this with `EXPO_PUBLIC_API_BASE_URL` before starting Expo:
+
+```powershell
+cd frontend
+$env:EXPO_PUBLIC_API_BASE_URL="http://192.168.1.20:8000"
+npm run start
+```
+
+You can also copy `frontend/.env.example` to a local Expo env file and adjust the value for the target environment.
+
+Use that override for physical devices, staging, and production. For a physical device, the backend must listen on the host machine's LAN IP and the phone must be able to reach it on the same network. For staging or production, set `EXPO_PUBLIC_API_BASE_URL` to the deployed API origin before running the app build/export command.
 
 ## Test
 
@@ -37,9 +116,11 @@ npm run dev
 ```powershell
 cd frontend
 npm run typecheck
+```
+
+```powershell
+cd frontend
 npm run build
 ```
 
-## Current Phase
-
-The implemented stage is a mock-only Web App loop. Real source integration, production persistence, Redis, CI/CD, monitoring, and mobile App work are intentionally deferred.
+Automated tests may use explicit fake provider fixtures for deterministic assertions. Those fixtures are test-only and must not be wired into runtime provider fallback.

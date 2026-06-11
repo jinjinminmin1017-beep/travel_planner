@@ -295,10 +295,10 @@
     },
     "DataSourceType": {
       "enum": [
-        "MOCK",
         "MAP",
         "RAIL",
         "FLIGHT",
+        "WEATHER",
         "TAXI",
         "OTA",
         "LLM",
@@ -306,6 +306,75 @@
       ],
       "title": "DataSourceType",
       "type": "string"
+    },
+    "DestinationPresentation": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "1.15",
+          "default": "1.15",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "destination_key": {
+          "title": "Destination Key",
+          "type": "string"
+        },
+        "display_name": {
+          "title": "Display Name",
+          "type": "string"
+        },
+        "hero_image_url": {
+          "title": "Hero Image Url",
+          "type": "string"
+        },
+        "image_alt": {
+          "title": "Image Alt",
+          "type": "string"
+        },
+        "image_credit": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Image Credit"
+        },
+        "image_source": {
+          "default": "LOCAL_STATIC",
+          "enum": [
+            "LOCAL_STATIC",
+            "CLOUD_CDN",
+            "REMOTE_URL"
+          ],
+          "title": "Image Source",
+          "type": "string"
+        },
+        "focal_point": {
+          "default": "center",
+          "title": "Focal Point",
+          "type": "string"
+        },
+        "tags": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Tags",
+          "type": "array"
+        }
+      },
+      "required": [
+        "destination_key",
+        "display_name",
+        "hero_image_url",
+        "image_alt"
+      ],
+      "title": "DestinationPresentation",
+      "type": "object"
     },
     "FlightSegment": {
       "additionalProperties": false,
@@ -403,7 +472,6 @@
           "enum": [
             "USE_ORIGINAL",
             "REPAIRED",
-            "DETERMINISTIC_FALLBACK",
             "REJECTED"
           ],
           "title": "Final Strategy",
@@ -901,9 +969,7 @@
     },
     "RecommendationSource": {
       "enum": [
-        "LLM",
-        "MOCK_LLM",
-        "DETERMINISTIC_FALLBACK"
+        "LLM"
       ],
       "title": "RecommendationSource",
       "type": "string"
@@ -1694,6 +1760,17 @@
     },
     "travel_request": {
       "$ref": "#/$defs/TravelRequest"
+    },
+    "destination_presentation": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/DestinationPresentation"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     },
     "plans": {
       "items": {

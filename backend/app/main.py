@@ -1,12 +1,15 @@
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.core.context import get_context, new_context
 from app.data_sources.config_loader import runtime_statuses
+from app.data_sources.redirect_providers import create_booking_redirect
 from app.models.schemas import (
     BookingRedirectRequest,
     BookingRedirectResponse,
@@ -23,7 +26,7 @@ from app.models.schemas import (
     now_timepoint,
 )
 from app.services.intent_parser import parse_travel_request
-from app.services.planner import _redirect, plan_trip, recalculate_plan
+from app.services.planner import plan_trip, recalculate_plan
 from app.services.store import get_plan, save_response
 
 app = FastAPI(title="AI Travel Planner", version="0.1.0")
@@ -31,6 +34,7 @@ app = FastAPI(title="AI Travel Planner", version="0.1.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origin_regex=r"http://(localhost|127\.0\.0\.1):517\d",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -47,7 +51,15 @@ async def attach_context(request: Request, call_next):
     return response
 
 
-def error_payload(request: Request, code: str, message: str, user_message: str, status_code: int, details=None, retryable: bool = False) -> JSONResponse:
+def error_payload(
+    request: Request,
+    code: str,
+    message: str,
+    user_message: str,
+    status_code: int,
+    details=None,
+    retryable: bool = False,
+) -> JSONResponse:
     ctx = get_context(request)
     payload = ErrorResponse(
         request_id=ctx.request_id,
@@ -69,7 +81,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
         "Request validation failed",
         "输入结构不符合系统要求，请检查后重试。",
         422,
-        details={"errors": exc.errors()},
+        details={"errors": jsonable_encoder(exc.errors())},
     )
 
 
@@ -178,7 +190,7 @@ def booking_redirect(body: BookingRedirectRequest, request: Request) -> BookingR
     plan = get_plan(body.plan_id)
     if plan is None:
         raise HTTPException(status_code=404, detail="方案不存在，无法生成跳转。")
-    redirect = _redirect(body.redirect_type, available=body.redirect_type != "OTA")
+    redirect = create_booking_redirect(body, plan)
     return BookingRedirectResponse(
         request_id=ctx.request_id,
         trace_id=ctx.trace_id,
@@ -187,4 +199,3 @@ def booking_redirect(body: BookingRedirectRequest, request: Request) -> BookingR
         redirect=redirect,
         generated_at=now_timepoint(),
     )
-

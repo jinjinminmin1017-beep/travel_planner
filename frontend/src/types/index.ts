@@ -168,6 +168,18 @@ export type RecommendationSlot = {
   reason: string;
 };
 
+export type DestinationPresentation = {
+  schema_version: "1.15";
+  destination_key: string;
+  display_name: string;
+  hero_image_url: string;
+  image_alt: string;
+  image_credit: string | null;
+  image_source: "LOCAL_STATIC" | "CLOUD_CDN" | "REMOTE_URL";
+  focal_point: string;
+  tags: string[];
+};
+
 export type TravelPlanResponse = {
   schema_version: "1.15";
   request_id: string;
@@ -177,6 +189,7 @@ export type TravelPlanResponse = {
   planning_status: string;
   progress: number;
   travel_request: TravelRequest;
+  destination_presentation?: DestinationPresentation | null;
   plans: TravelPlan[];
   recommendation_result: { recommendations: RecommendationSlot[]; llm_validation_result: { final_strategy: string; invalid_reasons: string[] } } | null;
   source_failures: Array<{ failure_id: string; user_visible_message: string; impacted_plan_types: string[] }>;

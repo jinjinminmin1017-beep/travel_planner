@@ -137,8 +137,8 @@ def parse_travel_request(raw: str, ctx: RequestContext) -> TravelRequest:
         soft_preferences=TravelSoftPreferences(
             prefer_low_cost=RecommendationType.CHEAPEST in preferences,
             prefer_comfort=RecommendationType.MOST_COMFORTABLE in preferences,
-            accept_rail_transfer="不接受高铁中转" not in raw,
-            accept_flight_transfer="不接受航班中转" not in raw,
+            accept_rail_transfer="不接受中转" not in raw and "不要中转" not in raw and "不接受高铁中转" not in raw,
+            accept_flight_transfer="不接受中转" not in raw and "不要中转" not in raw and "不接受航班中转" not in raw,
             accept_mixed_transport="不接受多交通" not in raw,
             accept_ticket_enhancement="不接受票源增强" not in raw,
             passenger_notes=passenger_notes,

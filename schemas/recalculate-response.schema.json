@@ -295,10 +295,10 @@
     },
     "DataSourceType": {
       "enum": [
-        "MOCK",
         "MAP",
         "RAIL",
         "FLIGHT",
+        "WEATHER",
         "TAXI",
         "OTA",
         "LLM",
@@ -403,7 +403,6 @@
           "enum": [
             "USE_ORIGINAL",
             "REPAIRED",
-            "DETERMINISTIC_FALLBACK",
             "REJECTED"
           ],
           "title": "Final Strategy",
@@ -937,9 +936,7 @@
     },
     "RecommendationSource": {
       "enum": [
-        "LLM",
-        "MOCK_LLM",
-        "DETERMINISTIC_FALLBACK"
+        "LLM"
       ],
       "title": "RecommendationSource",
       "type": "string"

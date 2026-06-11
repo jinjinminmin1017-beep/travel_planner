@@ -1,7 +1,12 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+BACKEND = ROOT / "backend"
+sys.path.insert(0, str(BACKEND))
 
 from app.models.schemas import (
     BookingRedirectRequest,
@@ -19,7 +24,6 @@ from app.models.schemas import (
     TravelRequest,
 )
 
-ROOT = Path(__file__).resolve().parents[1]
 SCHEMA_DIR = ROOT / "schemas"
 
 SCHEMAS = {

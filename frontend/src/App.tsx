@@ -1,16 +1,28 @@
-import { AlertTriangle, ChevronDown, ChevronUp, Clock, ExternalLink, Plane, RefreshCw, Search, Train, WalletCards } from "lucide-react";
 import { useMemo, useState } from "react";
+import {
+  ActivityIndicator,
+  Alert,
+  ImageBackground,
+  type ImageSourcePropType,
+  Linking,
+  Pressable,
+  SafeAreaView,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View
+} from "react-native";
+import qingdaoHero from "../assets/destination-scenes/qingdao-pier.jpg";
 import { bookingRedirect, planTrip, recalculate } from "./api/client";
-import type { LocalTransferOption, RecommendationSlot, Segment, TravelPlan, TravelPlanResponse } from "./types";
+import type { DestinationPresentation, LocalTransferOption, RecommendationSlot, Segment, TravelPlan, TravelPlanResponse } from "./types";
 import { formatMoney, minutesToText, riskLabel, slotLabel } from "./utils/format";
 
 const SAMPLE_INPUT = "我 2026 年 5 月 21 日上午 9 点后，从上海嘉定南翔格林公馆出发，到青岛金水假日酒店，帮我找最舒服和最便宜的方式。";
 
-function SegmentIcon({ type }: { type: string }) {
-  if (type === "RAIL") return <Train size={18} />;
-  if (type === "FLIGHT") return <Plane size={18} />;
-  return <Clock size={18} />;
-}
+const HERO_IMAGES: Record<string, ImageSourcePropType> = {
+  qingdao: qingdaoHero
+};
 
 function findPlan(response: TravelPlanResponse | null, planId: string | null) {
   if (!response || !planId) return null;
@@ -33,8 +45,10 @@ function planTypeLabel(type: string) {
     RAIL_TICKET_ENHANCEMENT: "票源增强",
     DIRECT_FLIGHT: "航班直飞",
     TRANSFER_FLIGHT: "航班中转",
-    MULTI_AIRPORT_FLIGHT: "多机场",
-    FLIGHT_RAIL_MIXED: "空铁混合"
+    MULTI_AIRPORT_FLIGHT: "多机场组合",
+    FLIGHT_RAIL_MIXED: "空铁混合",
+    GROUND_ONLY: "地面交通",
+    MIXED: "混合方案"
   };
   return labels[type] ?? type;
 }
@@ -44,13 +58,14 @@ function transferModeLabel(mode: string) {
   if (normalized === "TAXI") return "打车";
   if (normalized === "SUBWAY") return "地铁";
   if (normalized === "BUS") return "公交";
+  if (normalized === "WALK") return "步行";
   return mode.replace("transfer_", "");
 }
 
 function segmentTitle(segment: Segment) {
-  if (segment.segment_type === "RAIL") return `${segment.train_number} ${segment.origin_station} → ${segment.destination_station}`;
-  if (segment.segment_type === "FLIGHT") return `${segment.flight_number} ${segment.origin_airport} → ${segment.destination_airport}`;
-  return `${transferModeLabel(segment.transfer_mode ?? "")} ${segment.origin} → ${segment.destination}`;
+  if (segment.segment_type === "RAIL") return `${segment.train_number} ${segment.origin_station} 到 ${segment.destination_station}`;
+  if (segment.segment_type === "FLIGHT") return `${segment.flight_number} ${segment.origin_airport} 到 ${segment.destination_airport}`;
+  return `${transferModeLabel(segment.transfer_mode ?? "")} ${segment.origin} 到 ${segment.destination}`;
 }
 
 function segmentModeLabel(segment: Segment) {
@@ -103,120 +118,101 @@ function selectedFlightCabin(segment: Segment) {
   return segment.cabin_options?.find((option) => option.option_id === segment.selected_cabin_option_id) ?? segment.cabin_options?.[0] ?? null;
 }
 
-function destinationThemeClass(response: TravelPlanResponse | null) {
-  if (!response) return "";
-  const destinationSignal = (response.travel_request.destination_text || response.travel_request.raw_user_input).toLowerCase();
-  if (destinationSignal.includes("北京") || destinationSignal.includes("beijing")) return "has-destination-theme destination-theme-beijing";
-  if (destinationSignal.includes("上海") || destinationSignal.includes("shanghai")) return "has-destination-theme destination-theme-shanghai";
-  if (destinationSignal.includes("青岛") || destinationSignal.includes("qingdao")) return "has-destination-theme destination-theme-qingdao";
-  if (destinationSignal.includes("广州") || destinationSignal.includes("guangzhou")) return "has-destination-theme destination-theme-guangzhou";
-  if (destinationSignal.includes("深圳") || destinationSignal.includes("shenzhen")) return "has-destination-theme destination-theme-shenzhen";
-  if (destinationSignal.includes("成都") || destinationSignal.includes("chengdu")) return "has-destination-theme destination-theme-chengdu";
-  if (destinationSignal.includes("杭州") || destinationSignal.includes("hangzhou")) return "has-destination-theme destination-theme-hangzhou";
-  if (destinationSignal.includes("西安") || destinationSignal.includes("xian") || destinationSignal.includes("xi'an")) return "has-destination-theme destination-theme-xian";
-  return "has-destination-theme destination-theme-generic";
-}
+function Hero({ presentation, plan }: { presentation: DestinationPresentation | null; plan: TravelPlan | null }) {
+  const destinationKey = presentation?.destination_key ?? "generic";
+  const imageSource = HERO_IMAGES[destinationKey];
+  const content = (
+    <View style={styles.heroShade}>
+      <Text style={styles.heroKicker}>目的地</Text>
+      <Text style={styles.heroTitle}>{presentation?.display_name ?? "出行搭子"}</Text>
+      {plan && (
+        <Text style={styles.heroMeta}>
+          {planDisplayName(plan)} · {minutesToText(plan.total_duration_minutes)} · {formatMoney(plan.cost_breakdown.total_cost)}
+        </Text>
+      )}
+    </View>
+  );
 
-function destinationDisplayName(response: TravelPlanResponse | null) {
-  if (!response) return "";
-  const destinationText = response.travel_request.destination_text?.trim() || "";
-  const destinationSignal = (destinationText || response.travel_request.raw_user_input).toLowerCase();
-  if (destinationSignal.includes("北京") || destinationSignal.includes("beijing")) return "北京";
-  if (destinationSignal.includes("上海") || destinationSignal.includes("shanghai")) return "上海";
-  if (destinationSignal.includes("青岛") || destinationSignal.includes("qingdao")) return "青岛";
-  if (destinationSignal.includes("广州") || destinationSignal.includes("guangzhou")) return "广州";
-  if (destinationSignal.includes("深圳") || destinationSignal.includes("shenzhen")) return "深圳";
-  if (destinationSignal.includes("成都") || destinationSignal.includes("chengdu")) return "成都";
-  if (destinationSignal.includes("杭州") || destinationSignal.includes("hangzhou")) return "杭州";
-  if (destinationSignal.includes("西安") || destinationSignal.includes("xian") || destinationSignal.includes("xi'an")) return "西安";
-  return destinationText || "目的地";
-}
-
-function TransferRouteSummary({ option, detailed = false }: { option: LocalTransferOption; detailed?: boolean }) {
+  if (!imageSource) {
+    return <View style={[styles.hero, styles.heroFallback]}>{content}</View>;
+  }
   return (
-    <div className={detailed ? "transfer-route" : "transfer-route compact"}>
-      {(option.access_station || option.egress_station) && (
-        <small>
-          {option.access_station ?? "上车点"} → {option.egress_station ?? "下车点"}
-        </small>
-      )}
-      {detailed ? (
-        <>
-          <p>{option.access_instruction}</p>
-          <p>{option.ride_instruction}</p>
-          <p>{option.egress_instruction}</p>
-        </>
-      ) : (
-        <p>{option.access_instruction} {option.ride_instruction} {option.egress_instruction}</p>
-      )}
-    </div>
+    <ImageBackground source={imageSource} style={styles.hero} imageStyle={styles.heroImage}>
+      {content}
+    </ImageBackground>
   );
 }
 
 function RecommendationCard({ slot, plan, selected, onSelect }: { slot: RecommendationSlot; plan: TravelPlan | null; selected: boolean; onSelect: (plan: TravelPlan) => void }) {
   return (
-    <section className={selected ? "card recommendation-card selected" : "card recommendation-card"}>
-      <div className="card-topline">
-        <span className="eyebrow">{slotLabel(slot.recommendation_type)}</span>
-        <span className={`risk ${plan?.risk_assessment.overall_risk_level ?? slot.status}`}>{plan ? riskLabel(plan.risk_assessment.overall_risk_level) : slot.status}</span>
-      </div>
+    <Pressable style={[styles.card, styles.recommendationCard, selected && styles.cardSelected]} disabled={!plan} onPress={() => plan && onSelect(plan)}>
+      <View style={styles.rowBetween}>
+        <Text style={styles.kicker}>{slotLabel(slot.recommendation_type)}</Text>
+        <Text style={[styles.riskPill, riskStyle(plan?.risk_assessment.overall_risk_level ?? slot.status)]}>{plan ? riskLabel(plan.risk_assessment.overall_risk_level) : slot.status}</Text>
+      </View>
       {plan ? (
         <>
-          <h2>{planDisplayName(plan)}</h2>
-          <span className="plan-type">{planTypeLabel(plan.plan_type)}</span>
-          <div className="metric-row">
-            <span><WalletCards size={16} />{formatMoney(plan.cost_breakdown.total_cost)}</span>
-            <span><Clock size={16} />{minutesToText(plan.total_duration_minutes)}</span>
-          </div>
-          <button className="primary-action" onClick={() => onSelect(plan)}>查看详情</button>
+          <Text style={styles.cardTitle}>{planDisplayName(plan)}</Text>
+          <Text style={styles.secondaryText}>{planTypeLabel(plan.plan_type)}</Text>
+          <View style={styles.metricRow}>
+            <Text style={styles.metricText}>{formatMoney(plan.cost_breakdown.total_cost)}</Text>
+            <Text style={styles.metricText}>{minutesToText(plan.total_duration_minutes)}</Text>
+          </View>
         </>
       ) : (
-        <>
-          <h2>{slot.status}</h2>
-        </>
+        <Text style={styles.cardTitle}>{slot.reason || "当前不可推荐"}</Text>
       )}
-    </section>
+    </Pressable>
   );
 }
 
 function SegmentTimeline({ segments }: { segments: Segment[] }) {
   return (
-    <div className="timeline">
+    <View style={styles.timeline}>
       {segments.map((segment, index) => (
-        <div className="timeline-row" key={segment.segment_id}>
-          <span className="timeline-icon">
-            <SegmentIcon type={segment.segment_type} />
-            <small>{index + 1}</small>
-          </span>
-          <div>
-            <strong>{segmentTitle(segment)}</strong>
-            <span>{minutesToText(segment.duration_minutes)}</span>
-          </div>
-        </div>
+        <View style={styles.timelineRow} key={segment.segment_id}>
+          <View style={styles.timelineIndex}>
+            <Text style={styles.timelineIndexText}>{index + 1}</Text>
+          </View>
+          <View style={styles.timelineCopy}>
+            <Text style={styles.timelineTitle}>{segmentTitle(segment)}</Text>
+            <Text style={styles.secondaryText}>
+              {segmentModeLabel(segment)} · {minutesToText(segment.duration_minutes)}
+            </Text>
+          </View>
+        </View>
       ))}
-    </div>
+    </View>
+  );
+}
+
+function TransferRouteSummary({ option }: { option: LocalTransferOption }) {
+  return (
+    <View style={styles.transferSummary}>
+      {(option.access_station || option.egress_station) && (
+        <Text style={styles.secondaryText}>
+          {option.access_station ?? "上车点"} 到 {option.egress_station ?? "下车点"}
+        </Text>
+      )}
+      <Text style={styles.bodyText}>
+        {option.access_instruction} {option.ride_instruction} {option.egress_instruction}
+      </Text>
+    </View>
   );
 }
 
 function DetailPanel({ plan, onRecalculated }: { plan: TravelPlan; onRecalculated: (plan: TravelPlan) => void }) {
-  const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
-  const [expandedSegments, setExpandedSegments] = useState<Record<string, boolean>>({});
-  const displayName = planDisplayName(plan);
-
-  function toggleSegment(segmentId: string) {
-    setExpandedSegments((current) => ({ ...current, [segmentId]: !current[segmentId] }));
-  }
+  const [expandedSegmentId, setExpandedSegmentId] = useState<string | null>(null);
 
   async function applyOption(segment: Segment, changeType: "RAIL_SEAT" | "FLIGHT_CABIN" | "LOCAL_TRANSFER", optionId: string, label: string) {
     setBusy(true);
-    setMessage("");
     try {
       const response = await recalculate(plan.plan_id, segment.segment_id, changeType, optionId, label);
       onRecalculated(response.plan);
-      setMessage(`${response.change_summary.message} ${response.change_summary.cost_delta.display_text}`);
+      Alert.alert("已重算", `${response.change_summary.message} ${response.change_summary.cost_delta.display_text}`);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "重算失败");
+      Alert.alert("重算失败", error instanceof Error ? error.message : "请稍后重试。");
     } finally {
       setBusy(false);
     }
@@ -229,136 +225,120 @@ function DetailPanel({ plan, onRecalculated }: { plan: TravelPlan; onRecalculate
     try {
       const response = await bookingRedirect(plan.plan_id, first?.segment_id ?? null, redirectType);
       if (response.redirect.url_available && response.redirect.url) {
-        window.open(response.redirect.url, "_blank", "noopener,noreferrer");
+        await Linking.openURL(response.redirect.url);
       } else {
-        setMessage(response.redirect.fallback_instruction ?? "请手动打开对应平台确认。");
+        Alert.alert("请手动确认", response.redirect.fallback_instruction ?? "请打开对应平台确认。");
       }
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "跳转失败");
+      Alert.alert("跳转失败", error instanceof Error ? error.message : "请稍后重试。");
     } finally {
       setBusy(false);
     }
   }
 
   return (
-    <section className="detail-grid">
-      <div className="detail-main">
-        <div className="section-heading">
-          <div>
-            <span className="eyebrow">{planTypeLabel(plan.plan_type)}</span>
-            <h2>{displayName}</h2>
-          </div>
-          <button title="生成跳转" className="icon-button" onClick={openRedirect} disabled={busy}><ExternalLink size={18} /></button>
-        </div>
-        <div className="detail-metrics">
-          <span><WalletCards size={16} />{formatMoney(plan.cost_breakdown.total_cost)}</span>
-          <span><Clock size={16} />{minutesToText(plan.total_duration_minutes)}</span>
-          <span><AlertTriangle size={16} />{riskLabel(plan.risk_assessment.overall_risk_level)}</span>
-        </div>
-        <SegmentTimeline segments={plan.segments} />
-        <h3 className="subheading">费用明细</h3>
-        <div className="cost-list">
-          {plan.cost_breakdown.items.map((item) => (
-            <div key={`${item.label}-${item.amount.amount_minor}`}>
-              <span>{item.label}</span>
-              <strong>{formatMoney(item.amount)}</strong>
-            </div>
-          ))}
-        </div>
-        <div className="total-line">
-          <span>总费用</span>
-          <strong>{formatMoney(plan.cost_breakdown.total_cost)}</strong>
-        </div>
-      </div>
-      <aside className="detail-side">
-        <div className="risk-box">
-          {plan.risk_assessment.risk_items.map((risk) => (
-            <p key={risk.risk_id}><AlertTriangle size={16} />{risk.title}: {risk.message}</p>
-          ))}
-        </div>
-        <div className="option-groups">
-          {plan.segments.map((segment, index) => {
-            const expanded = Boolean(expandedSegments[segment.segment_id]);
-            const transferOption = segment.segment_type === "LOCAL_TRANSFER" ? selectedTransferOption(segment) : null;
-            const railSeat = segment.segment_type === "RAIL" ? selectedRailSeat(segment) : null;
-            const flightCabin = segment.segment_type === "FLIGHT" ? selectedFlightCabin(segment) : null;
-            return (
-              <div key={segment.segment_id} className="option-group">
-                <div className="option-group-title">
-                  <div>
-                    <span>第 {index + 1} 段</span>
-                    <strong>{segmentTitle(segment)}</strong>
-                  </div>
-                  <button className="expand-button" type="button" title={expanded ? "收起详情" : "展开详情"} onClick={() => toggleSegment(segment.segment_id)}>
-                    {expanded ? <ChevronUp size={18} /> : <ChevronDown size={18} />}
-                  </button>
-                </div>
-                <div className="selected-option-summary">
-                  {transferOption && (
-                    <>
-                      <div>
-                        <strong>{transferOption.label}</strong>
-                        <span>{formatMoney(transferOption.estimated_cost)} · {minutesToText(transferOption.duration_minutes)}</span>
-                      </div>
-                      <TransferRouteSummary option={transferOption} />
-                    </>
-                  )}
-                  {railSeat && (
-                    <div>
-                      <strong>{railSeat.seat_type}</strong>
-                      <span>{formatMoney(railSeat.price)}</span>
-                    </div>
-                  )}
-                  {flightCabin && (
-                    <div>
-                      <strong>{flightCabin.cabin_type}</strong>
-                      <span>{formatMoney(flightCabin.price)}</span>
-                    </div>
-                  )}
-                </div>
-                {expanded && (
-                  <div className="option-detail-panel">
-                    {segment.seat_options && (
-                      <div className="option-buttons">
-                        {segment.seat_options.map((option) => (
-                          <button key={option.option_id} disabled={busy || option.option_id === segment.selected_seat_option_id} onClick={() => applyOption(segment, "RAIL_SEAT", option.option_id, option.seat_type)}>
-                            {option.seat_type} {formatMoney(option.price)}
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                    {segment.cabin_options && (
-                      <div className="option-buttons">
-                        {segment.cabin_options.map((option) => (
-                          <button key={option.option_id} disabled={busy || option.option_id === segment.selected_cabin_option_id} onClick={() => applyOption(segment, "FLIGHT_CABIN", option.option_id, option.cabin_type)}>
-                            {option.cabin_type} {formatMoney(option.price)}
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                    {segment.segment_type === "LOCAL_TRANSFER" && (
-                      <div className="transfer-option-list">
-                        {transferOptionsFor(segment).map((option) => (
-                          <div className={option.option_id === segment.option_id ? "transfer-option selected" : "transfer-option"} key={option.option_id}>
-                            <button disabled={busy || option.option_id === segment.option_id} onClick={() => applyOption(segment, "LOCAL_TRANSFER", option.option_id, option.label)}>
-                              {option.label}
-                              <span>{formatMoney(option.estimated_cost)} · {minutesToText(option.duration_minutes)}</span>
-                            </button>
-                            <TransferRouteSummary option={option} detailed />
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
-        {message && <p className="inline-message">{message}</p>}
-      </aside>
-    </section>
+    <View style={styles.detail}>
+      <View style={styles.rowBetween}>
+        <View style={styles.flex}>
+          <Text style={styles.kicker}>{planTypeLabel(plan.plan_type)}</Text>
+          <Text style={styles.sectionTitle}>{planDisplayName(plan)}</Text>
+        </View>
+        <Pressable style={styles.iconButton} onPress={openRedirect} disabled={busy}>
+          <Text style={styles.iconButtonText}>跳转</Text>
+        </Pressable>
+      </View>
+
+      <View style={styles.metricBand}>
+        <Text style={styles.metricText}>{formatMoney(plan.cost_breakdown.total_cost)}</Text>
+        <Text style={styles.metricText}>{minutesToText(plan.total_duration_minutes)}</Text>
+        <Text style={styles.metricText}>{riskLabel(plan.risk_assessment.overall_risk_level)}</Text>
+      </View>
+
+      <SegmentTimeline segments={plan.segments} />
+
+      <Text style={styles.subheading}>费用明细</Text>
+      {plan.cost_breakdown.items.map((item) => (
+        <View style={styles.costRow} key={`${item.label}-${item.amount.amount_minor}`}>
+          <Text style={styles.bodyText}>{item.label}</Text>
+          <Text style={styles.costText}>{formatMoney(item.amount)}</Text>
+        </View>
+      ))}
+
+      <Text style={styles.subheading}>风险提示</Text>
+      {plan.risk_assessment.risk_items.map((risk) => (
+        <View style={styles.notice} key={risk.risk_id}>
+          <Text style={styles.noticeTitle}>{risk.title}</Text>
+          <Text style={styles.secondaryText}>{risk.message}</Text>
+        </View>
+      ))}
+
+      <Text style={styles.subheading}>可调整选项</Text>
+      {plan.segments.map((segment) => {
+        const expanded = expandedSegmentId === segment.segment_id;
+        const transferOption = segment.segment_type === "LOCAL_TRANSFER" ? selectedTransferOption(segment) : null;
+        const railSeat = segment.segment_type === "RAIL" ? selectedRailSeat(segment) : null;
+        const flightCabin = segment.segment_type === "FLIGHT" ? selectedFlightCabin(segment) : null;
+        return (
+          <View style={styles.optionGroup} key={segment.segment_id}>
+            <Pressable style={styles.rowBetween} onPress={() => setExpandedSegmentId(expanded ? null : segment.segment_id)}>
+              <View style={styles.flex}>
+                <Text style={styles.optionTitle}>{segmentTitle(segment)}</Text>
+                {transferOption && <Text style={styles.secondaryText}>{transferOption.label} · {formatMoney(transferOption.estimated_cost)}</Text>}
+                {railSeat && <Text style={styles.secondaryText}>{railSeat.seat_type} · {formatMoney(railSeat.price)}</Text>}
+                {flightCabin && <Text style={styles.secondaryText}>{flightCabin.cabin_type} · {formatMoney(flightCabin.price)}</Text>}
+              </View>
+              <Text style={styles.expandText}>{expanded ? "收起" : "展开"}</Text>
+            </Pressable>
+
+            {expanded && (
+              <View style={styles.optionPanel}>
+                {transferOption && <TransferRouteSummary option={transferOption} />}
+                {segment.seat_options?.map((option) => (
+                  <OptionButton
+                    key={option.option_id}
+                    disabled={busy || option.option_id === segment.selected_seat_option_id}
+                    label={`${option.seat_type} ${formatMoney(option.price)}`}
+                    onPress={() => applyOption(segment, "RAIL_SEAT", option.option_id, option.seat_type)}
+                  />
+                ))}
+                {segment.cabin_options?.map((option) => (
+                  <OptionButton
+                    key={option.option_id}
+                    disabled={busy || option.option_id === segment.selected_cabin_option_id}
+                    label={`${option.cabin_type} ${formatMoney(option.price)}`}
+                    onPress={() => applyOption(segment, "FLIGHT_CABIN", option.option_id, option.cabin_type)}
+                  />
+                ))}
+                {segment.segment_type === "LOCAL_TRANSFER" && transferOptionsFor(segment).map((option) => (
+                  <OptionButton
+                    key={option.option_id}
+                    disabled={busy || option.option_id === segment.option_id}
+                    label={`${option.label} ${formatMoney(option.estimated_cost)} · ${minutesToText(option.duration_minutes)}`}
+                    onPress={() => applyOption(segment, "LOCAL_TRANSFER", option.option_id, option.label)}
+                  />
+                ))}
+              </View>
+            )}
+          </View>
+        );
+      })}
+    </View>
   );
+}
+
+function OptionButton({ label, disabled, onPress }: { label: string; disabled?: boolean; onPress: () => void }) {
+  return (
+    <Pressable style={[styles.optionButton, disabled && styles.optionButtonDisabled]} disabled={disabled} onPress={onPress}>
+      <Text style={[styles.optionButtonText, disabled && styles.optionButtonTextDisabled]}>{label}</Text>
+    </Pressable>
+  );
+}
+
+function riskStyle(level: string) {
+  if (level === "LOW") return styles.riskLow;
+  if (level === "MEDIUM") return styles.riskMedium;
+  if (level === "HIGH") return styles.riskHigh;
+  return styles.riskBlocked;
 }
 
 export default function App() {
@@ -368,15 +348,13 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
+  const recommendations = response?.recommendation_result?.recommendations ?? [];
   const selectedPlan = useMemo(() => {
     const explicit = findPlan(response, selectedPlanId);
     if (explicit) return explicit;
-    return findPlan(response, preferredRecommendationPlanId(response));
+    return findPlan(response, preferredRecommendationPlanId(response)) ?? response?.plans[0] ?? null;
   }, [response, selectedPlanId]);
-
-  const themeClass = useMemo(() => destinationThemeClass(response), [response]);
-  const destinationLabel = useMemo(() => destinationDisplayName(response), [response]);
-  const recommendedPlanIds = useMemo(() => new Set(response?.recommendation_result?.recommendations.map((slot) => slot.plan_id).filter(Boolean) ?? []), [response]);
+  const recommendedPlanIds = useMemo(() => new Set(recommendations.map((slot) => slot.plan_id).filter(Boolean)), [recommendations]);
   const candidatePlans = useMemo(() => response?.plans.filter((plan) => !recommendedPlanIds.has(plan.plan_id)) ?? [], [response, recommendedPlanIds]);
 
   async function submit() {
@@ -385,7 +363,7 @@ export default function App() {
     try {
       const result = await planTrip(rawInput);
       setResponse(result);
-      setSelectedPlanId(preferredRecommendationPlanId(result));
+      setSelectedPlanId(preferredRecommendationPlanId(result) ?? result.plans[0]?.plan_id ?? null);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "请求失败");
     } finally {
@@ -402,62 +380,399 @@ export default function App() {
   }
 
   return (
-    <main className={themeClass ? `app-shell ${themeClass}` : "app-shell"}>
-      <div className="destination-backdrop" aria-hidden="true" data-destination={destinationLabel}>
-        <span className="landmark primary" />
-        <span className="landmark secondary" />
-        <span className="landmark line" />
-        <span className="landmark terrain" />
-      </div>
-      <section className="topbar">
-        <div>
-          <h1>AI 出行规划器</h1>
-          <p>Mock DEV / TEST · Schema 1.15 · REDIRECT_ONLY</p>
-        </div>
-      </section>
+    <SafeAreaView style={styles.safeArea}>
+      <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
+        <View style={styles.topbar}>
+          <Text style={styles.appTitle}>出行搭子</Text>
+          <Text style={styles.appSubtitle}>Schema 1.15 · Redirect only</Text>
+        </View>
 
-      <section className="query-panel">
-        <textarea value={rawInput} onChange={(event) => setRawInput(event.target.value)} />
-        <button className="submit-button" onClick={submit} disabled={loading}>
-          {loading ? <RefreshCw className="spin" size={18} /> : <Search size={18} />}
-          {loading ? "规划中" : "开始规划"}
-        </button>
-      </section>
+        <Hero presentation={response?.destination_presentation ?? null} plan={selectedPlan} />
 
-      {error && <section className="error-panel">{error}</section>}
+        <View style={styles.queryPanel}>
+          <TextInput
+            style={styles.input}
+            value={rawInput}
+            onChangeText={setRawInput}
+            multiline
+            placeholder="说说你从哪里出发、到哪里、什么时候走。"
+            textAlignVertical="top"
+          />
+          <Pressable style={[styles.submitButton, loading && styles.submitButtonDisabled]} onPress={submit} disabled={loading}>
+            {loading ? <ActivityIndicator color="#ffffff" /> : <Text style={styles.submitButtonText}>开始规划</Text>}
+          </Pressable>
+        </View>
 
-      {response && (
-        <>
-          <section className="results-shell">
-            <div className="results-main">
-              {selectedPlan && <DetailPanel plan={selectedPlan} onRecalculated={replacePlan} />}
+        {error ? <Text style={styles.errorPanel}>{error}</Text> : null}
 
-              <section className="candidate-list">
-                <div className="section-heading"><h2>候选方案</h2></div>
-                {candidatePlans.map((plan) => (
-                  <button key={plan.plan_id} className={plan.plan_id === selectedPlan?.plan_id ? "candidate active" : "candidate"} onClick={() => setSelectedPlanId(plan.plan_id)}>
-                    <span className="candidate-title">
-                      {planDisplayName(plan)}
-                      <small>{planTypeLabel(plan.plan_type)} · {riskLabel(plan.risk_assessment.overall_risk_level)}</small>
-                    </span>
-                    <strong>{formatMoney(plan.cost_breakdown.total_cost)}</strong>
-                    {!plan.can_be_selected_by_llm && <em>{plan.risk_assessment.overall_risk_level === "BLOCKED" ? "BLOCKED" : "备选"} · {plan.block_reason_message ?? "不进入主推荐"}</em>}
-                  </button>
-                ))}
-              </section>
-            </div>
+        {response && (
+          <>
+            <View style={styles.sectionHeader}>
+              <Text style={styles.sectionTitle}>推荐方案</Text>
+              <Text style={styles.secondaryText}>{response.planning_status}</Text>
+            </View>
+            {recommendations.length === 0 && (
+              <View style={[styles.card, styles.mutedCard]}>
+                <Text style={styles.cardTitle}>推荐暂不可用</Text>
+                <Text style={styles.secondaryText}>系统未使用代码生成三张推荐卡，你仍可以查看候选方案。</Text>
+              </View>
+            )}
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.horizontalList}>
+              {recommendations.map((slot) => (
+                <RecommendationCard key={slot.recommendation_type} slot={slot} plan={findPlan(response, slot.plan_id)} selected={slot.plan_id === selectedPlan?.plan_id} onSelect={(plan) => setSelectedPlanId(plan.plan_id)} />
+              ))}
+            </ScrollView>
 
-            <aside className="recommendation-rail" aria-label="推荐方案">
-              <section className="recommendation-grid">
-                {response.recommendation_result?.recommendations.map((slot) => (
-                  <RecommendationCard key={slot.recommendation_type} slot={slot} plan={findPlan(response, slot.plan_id)} selected={slot.plan_id === selectedPlan?.plan_id} onSelect={(plan) => setSelectedPlanId(plan.plan_id)} />
-                ))}
-              </section>
-            </aside>
-          </section>
+            {selectedPlan && <DetailPanel plan={selectedPlan} onRecalculated={replacePlan} />}
 
-        </>
-      )}
-    </main>
+            <Text style={styles.sectionTitle}>候选方案</Text>
+            {candidatePlans.map((plan) => (
+              <Pressable style={[styles.candidate, plan.plan_id === selectedPlan?.plan_id && styles.candidateActive]} key={plan.plan_id} onPress={() => setSelectedPlanId(plan.plan_id)}>
+                <View style={styles.flex}>
+                  <Text style={styles.optionTitle}>{planDisplayName(plan)}</Text>
+                  <Text style={styles.secondaryText}>
+                    {planTypeLabel(plan.plan_type)} · {riskLabel(plan.risk_assessment.overall_risk_level)}
+                  </Text>
+                  {!plan.can_be_selected_by_llm && <Text style={styles.warningText}>{plan.block_reason_message ?? "不进入主推荐"}</Text>}
+                </View>
+                <Text style={styles.costText}>{formatMoney(plan.cost_breakdown.total_cost)}</Text>
+              </Pressable>
+            ))}
+          </>
+        )}
+      </ScrollView>
+    </SafeAreaView>
   );
 }
+
+const styles = StyleSheet.create({
+  safeArea: {
+    flex: 1,
+    backgroundColor: "#f5f7f8"
+  },
+  screen: {
+    flex: 1
+  },
+  content: {
+    padding: 16,
+    paddingBottom: 40
+  },
+  topbar: {
+    marginBottom: 12
+  },
+  appTitle: {
+    color: "#172126",
+    fontSize: 28,
+    fontWeight: "800"
+  },
+  appSubtitle: {
+    color: "#66747c",
+    fontSize: 13,
+    marginTop: 2
+  },
+  hero: {
+    minHeight: 164,
+    borderRadius: 8,
+    overflow: "hidden",
+    marginBottom: 14
+  },
+  heroImage: {
+    borderRadius: 8
+  },
+  heroFallback: {
+    backgroundColor: "#234f5f"
+  },
+  heroShade: {
+    flex: 1,
+    justifyContent: "flex-end",
+    padding: 18,
+    backgroundColor: "rgba(10, 25, 31, 0.42)"
+  },
+  heroKicker: {
+    color: "#d7f0ef",
+    fontSize: 12,
+    fontWeight: "700"
+  },
+  heroTitle: {
+    color: "#ffffff",
+    fontSize: 28,
+    fontWeight: "800",
+    marginTop: 4
+  },
+  heroMeta: {
+    color: "#f1f6f7",
+    fontSize: 13,
+    marginTop: 8
+  },
+  queryPanel: {
+    backgroundColor: "#ffffff",
+    borderRadius: 8,
+    padding: 12,
+    gap: 10,
+    marginBottom: 16
+  },
+  input: {
+    minHeight: 112,
+    color: "#172126",
+    fontSize: 16,
+    lineHeight: 23
+  },
+  submitButton: {
+    alignItems: "center",
+    backgroundColor: "#126b75",
+    borderRadius: 8,
+    minHeight: 48,
+    justifyContent: "center"
+  },
+  submitButtonDisabled: {
+    opacity: 0.72
+  },
+  submitButtonText: {
+    color: "#ffffff",
+    fontSize: 16,
+    fontWeight: "800"
+  },
+  errorPanel: {
+    backgroundColor: "#fff0ed",
+    borderRadius: 8,
+    color: "#9d2f21",
+    marginBottom: 12,
+    padding: 12
+  },
+  sectionHeader: {
+    alignItems: "center",
+    flexDirection: "row",
+    justifyContent: "space-between",
+    marginTop: 2
+  },
+  sectionTitle: {
+    color: "#172126",
+    fontSize: 20,
+    fontWeight: "800"
+  },
+  horizontalList: {
+    gap: 10,
+    paddingVertical: 10
+  },
+  card: {
+    backgroundColor: "#ffffff",
+    borderRadius: 8,
+    padding: 14
+  },
+  recommendationCard: {
+    minHeight: 154,
+    width: 244
+  },
+  cardSelected: {
+    borderColor: "#126b75",
+    borderWidth: 2
+  },
+  mutedCard: {
+    marginVertical: 10
+  },
+  rowBetween: {
+    alignItems: "center",
+    flexDirection: "row",
+    justifyContent: "space-between",
+    gap: 12
+  },
+  flex: {
+    flex: 1
+  },
+  kicker: {
+    color: "#126b75",
+    fontSize: 12,
+    fontWeight: "800"
+  },
+  riskPill: {
+    borderRadius: 999,
+    color: "#ffffff",
+    fontSize: 12,
+    fontWeight: "800",
+    overflow: "hidden",
+    paddingHorizontal: 8,
+    paddingVertical: 4
+  },
+  riskLow: {
+    backgroundColor: "#24735a"
+  },
+  riskMedium: {
+    backgroundColor: "#956a1d"
+  },
+  riskHigh: {
+    backgroundColor: "#a34226"
+  },
+  riskBlocked: {
+    backgroundColor: "#757575"
+  },
+  cardTitle: {
+    color: "#172126",
+    fontSize: 17,
+    fontWeight: "800",
+    marginTop: 12
+  },
+  secondaryText: {
+    color: "#66747c",
+    fontSize: 13,
+    lineHeight: 19
+  },
+  bodyText: {
+    color: "#314047",
+    fontSize: 14,
+    lineHeight: 20
+  },
+  metricRow: {
+    flexDirection: "row",
+    gap: 10,
+    marginTop: 14
+  },
+  metricText: {
+    color: "#172126",
+    fontSize: 14,
+    fontWeight: "800"
+  },
+  detail: {
+    backgroundColor: "#ffffff",
+    borderRadius: 8,
+    marginBottom: 16,
+    padding: 14
+  },
+  iconButton: {
+    backgroundColor: "#e7f2f3",
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 9
+  },
+  iconButtonText: {
+    color: "#126b75",
+    fontWeight: "800"
+  },
+  metricBand: {
+    backgroundColor: "#f2f6f7",
+    borderRadius: 8,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    marginTop: 12,
+    padding: 12
+  },
+  timeline: {
+    marginTop: 14,
+    gap: 10
+  },
+  timelineRow: {
+    flexDirection: "row",
+    gap: 10
+  },
+  timelineIndex: {
+    alignItems: "center",
+    backgroundColor: "#126b75",
+    borderRadius: 16,
+    height: 32,
+    justifyContent: "center",
+    width: 32
+  },
+  timelineIndexText: {
+    color: "#ffffff",
+    fontWeight: "800"
+  },
+  timelineCopy: {
+    flex: 1,
+    paddingBottom: 4
+  },
+  timelineTitle: {
+    color: "#172126",
+    fontSize: 15,
+    fontWeight: "800"
+  },
+  subheading: {
+    color: "#172126",
+    fontSize: 16,
+    fontWeight: "800",
+    marginTop: 18,
+    marginBottom: 8
+  },
+  costRow: {
+    alignItems: "center",
+    borderTopColor: "#edf0f1",
+    borderTopWidth: 1,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    paddingVertical: 10
+  },
+  costText: {
+    color: "#172126",
+    fontSize: 15,
+    fontWeight: "800"
+  },
+  notice: {
+    backgroundColor: "#fff8e8",
+    borderRadius: 8,
+    marginBottom: 8,
+    padding: 10
+  },
+  noticeTitle: {
+    color: "#6f4a06",
+    fontWeight: "800",
+    marginBottom: 3
+  },
+  optionGroup: {
+    borderColor: "#edf0f1",
+    borderRadius: 8,
+    borderWidth: 1,
+    marginBottom: 10,
+    padding: 10
+  },
+  optionTitle: {
+    color: "#172126",
+    fontSize: 15,
+    fontWeight: "800"
+  },
+  expandText: {
+    color: "#126b75",
+    fontWeight: "800"
+  },
+  optionPanel: {
+    gap: 8,
+    marginTop: 10
+  },
+  transferSummary: {
+    backgroundColor: "#f2f6f7",
+    borderRadius: 8,
+    padding: 10
+  },
+  optionButton: {
+    backgroundColor: "#126b75",
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 11
+  },
+  optionButtonDisabled: {
+    backgroundColor: "#e1e7e8"
+  },
+  optionButtonText: {
+    color: "#ffffff",
+    fontWeight: "800",
+    textAlign: "center"
+  },
+  optionButtonTextDisabled: {
+    color: "#6e7d84"
+  },
+  candidate: {
+    alignItems: "center",
+    backgroundColor: "#ffffff",
+    borderRadius: 8,
+    flexDirection: "row",
+    gap: 12,
+    marginTop: 10,
+    padding: 12
+  },
+  candidateActive: {
+    borderColor: "#126b75",
+    borderWidth: 2
+  },
+  warningText: {
+    color: "#9d2f21",
+    fontSize: 12,
+    marginTop: 4
+  }
+});

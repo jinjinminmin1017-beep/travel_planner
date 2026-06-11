@@ -15,7 +15,7 @@
 
 | 日期 | 版本 | 更改点 |
 |---|---|---|
-| 2026-05-26 | V1 | 创建 LLM Prompt 设计初版，定义 LLM 使用边界、调用链路、Prompt 版本管理、Intent Parser Prompt、Recommendation Prompt、Repair Prompt、Semantic Validator、Deterministic Fallback、日志与 Codex 实现要求。 |
+| 2026-05-26 | V1 | 创建 LLM Prompt 设计初版，定义 LLM 使用边界、调用链路、Prompt 版本管理、Intent Parser Prompt、Recommendation Prompt、Repair Prompt、Semantic Validator、日志与 Codex 实现要求。 |
 
 ---
 
@@ -37,7 +37,7 @@ LLM 不是事实数据源。
 2. LLM 只负责理解自然语言、选择候选方案、生成解释。
 3. LLM 不得创造任何车次、航班、票价、余票、时间、路线或跳转信息。
 4. 所有 LLM 输出必须经过 JSON Schema 校验和业务语义校验。
-5. 修复失败后必须进入确定性降级，不得展示非法输出。
+5. 修复失败后必须返回推荐不可用状态，不得展示非法输出，也不得用代码生成三张推荐卡。
 
 ---
 
@@ -184,7 +184,7 @@ Semantic Validator
   ↓
 合法：生成 RecommendationResult
 非法：Repair Prompt 一次
-仍非法：Deterministic Fallback
+仍非法：推荐结果不可用，返回 PARTIAL 响应
 ```
 
 ### 5.2 核心原则
@@ -522,7 +522,7 @@ Business semantic validation
   ↓
 非法：Repair Prompt 一次
   ↓
-仍非法：Deterministic Fallback
+仍非法：推荐结果不可用，返回 PARTIAL 响应
 ```
 
 ### 9.2 JSON Schema 校验
@@ -622,11 +622,11 @@ max_repair_attempts = 1
 
 ---
 
-## 11. Deterministic Fallback
+## 11. 推荐不可用处理
 
 ### 11.1 触发条件
 
-以下情况进入确定性降级：
+以下情况进入推荐不可用处理：
 
 1. LLM 调用超时。
 2. LLM 输出非法。
@@ -696,13 +696,17 @@ cost_score 权重可提高
 comfort_score 权重可提高
 ```
 
-### 11.5 Fallback 输出
+### 11.5 输出
 
-Fallback 也必须输出三卡位模型。
+LLM 推荐不可用、输出非法或 Repair 仍失败时，不得由代码生成最便宜、最舒适、综合推荐三张卡。
 
-`recommendation_source = DETERMINISTIC_FALLBACK`
+后端应返回：
 
-reason 使用模板生成，不使用 LLM 自由文本。
+- `recommendation_result = null`
+- `planning_status = PARTIAL`
+- `missing_components` 包含 `recommendation_result`
+- `source_failures` 记录 `real_llm` 不可用或输出非法
+- 用户仍可查看候选方案列表，但不展示三张推荐卡
 
 ---
 
@@ -804,7 +808,7 @@ Codex 必须实现：
 5. JSON Schema validation。
 6. Semantic Validator。
 7. Repair Prompt 一次。
-8. Deterministic Fallback。
+8. LLM 推荐不可用时返回 PARTIAL 且不生成三张推荐卡。
 9. LLMValidationResult。
 10. LLM 调用日志。
 11. 单元测试。
@@ -837,8 +841,6 @@ backend/
       validators/
         schema_validator.py
         semantic_validator.py
-      fallback/
-        deterministic_recommender.py
       client.py
       models.py
       logs.py
@@ -870,7 +872,7 @@ backend/
 | 不可被 LLM 选 | can_be_selected_by_llm = false | 不得选择 |
 | 过期方案 | EXPIRED | 不得选择 |
 | LLM 输出少于 3 个 slot | 非法 | Repair |
-| Repair 仍失败 | 非法 | Deterministic Fallback |
+| Repair 仍失败 | 非法 | recommendation_result = null |
 | LLM 修改价格 | 非法 | Reject |
 
 ---

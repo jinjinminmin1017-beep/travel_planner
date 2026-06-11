@@ -177,7 +177,7 @@ Schema 变更遵循以下策略：
 ### 3.9 RecommendationSource
 
 ```json
-["LLM", "DETERMINISTIC_FALLBACK", "RULE_BASED"]
+["LLM"]
 ```
 
 ### 3.10 TicketEnhancementGrade
@@ -355,7 +355,7 @@ Schema 变更遵循以下策略：
   "properties": {
     "source_id": { "type": "string" },
     "source_name": { "type": "string" },
-    "source_type": { "type": "string", "enum": ["MAP", "RAIL", "FLIGHT", "OTA", "TAXI", "LLM", "INTERNAL_CALCULATION"] },
+    "source_type": { "type": "string", "enum": ["MAP", "RAIL", "FLIGHT", "WEATHER", "OTA", "TAXI", "LLM", "INTERNAL_CALCULATION"] },
     "authority_level": { "type": "string", "enum": ["S", "A", "B", "C"] },
     "source_priority": { "type": ["integer", "null"], "minimum": 0 },
     "source_region": { "type": ["string", "null"] },
@@ -397,7 +397,7 @@ Schema 变更遵循以下策略：
   "properties": {
     "source_id": { "type": "string" },
     "source_name": { "type": "string" },
-    "source_type": { "type": "string", "enum": ["MAP", "RAIL", "FLIGHT", "OTA", "TAXI", "LLM", "INTERNAL_CALCULATION"] },
+    "source_type": { "type": "string", "enum": ["MAP", "RAIL", "FLIGHT", "WEATHER", "OTA", "TAXI", "LLM", "INTERNAL_CALCULATION"] },
     "authority_level": { "type": "string", "enum": ["S", "A", "B", "C"] },
     "license_status": { "type": "string", "enum": ["APPROVED", "PENDING_REVIEW", "NOT_APPROVED"] },
     "commercial_allowed": { "type": "boolean" },
@@ -586,7 +586,7 @@ SourceFailure 语义规则：
   "properties": {
     "source_id": { "type": "string" },
     "source_name": { "type": "string" },
-    "source_type": { "type": "string", "enum": ["MAP", "RAIL", "FLIGHT", "OTA", "TAXI", "LLM", "INTERNAL_CALCULATION"] },
+    "source_type": { "type": "string", "enum": ["MAP", "RAIL", "FLIGHT", "WEATHER", "OTA", "TAXI", "LLM", "INTERNAL_CALCULATION"] },
     "enabled": { "type": "boolean" },
     "health_status": { "type": "string", "enum": ["OK", "DEGRADED", "DOWN", "DISABLED"] },
     "authority_level": { "type": ["string", "null"], "enum": ["S", "A", "B", "C", null] },
@@ -2003,13 +2003,13 @@ RecalculateResponse 业务规则：
   "required": ["status", "schema_valid", "semantic_valid", "repair_attempted", "final_strategy"],
   "additionalProperties": false,
   "properties": {
-    "status": { "type": "string", "enum": ["VALID", "SCHEMA_INVALID", "SEMANTIC_INVALID", "REPAIRED_VALID", "FALLBACK_USED"] },
+    "status": { "type": "string", "enum": ["VALID", "SCHEMA_INVALID", "SEMANTIC_INVALID", "REPAIRED_VALID", "REJECTED"] },
     "schema_valid": { "type": "boolean" },
     "semantic_valid": { "type": "boolean" },
     "invalid_reasons": { "type": "array", "items": { "type": "string" } },
     "repair_attempted": { "type": "boolean" },
     "repair_success": { "type": "boolean" },
-    "final_strategy": { "type": "string", "enum": ["USE_ORIGINAL", "USE_REPAIRED", "DETERMINISTIC_FALLBACK"] },
+    "final_strategy": { "type": "string", "enum": ["USE_ORIGINAL", "USE_REPAIRED", "REJECTED"] },
     "llm_call_id": { "type": ["string", "null"] },
     "prompt_version": { "type": ["string", "null"] },
     "model_name": { "type": ["string", "null"] }
@@ -2071,7 +2071,7 @@ RecalculateResponse 业务规则：
     "risk_summary": { "type": ["string", "null"] },
     "block_reason_code": { "type": ["string", "null"] },
     "confidence_level": { "type": ["string", "null"], "enum": ["HIGH", "MEDIUM", "LOW", null] },
-    "source": { "type": ["string", "null"], "enum": ["LLM", "DETERMINISTIC_FALLBACK", "RULE_BASED", null] }
+    "source": { "type": ["string", "null"], "enum": ["LLM", null] }
   }
 }
 ```
@@ -2086,7 +2086,7 @@ RecalculateResponse 业务规则：
   "properties": {
     "schema_version": { "type": "string", "const": "1.15" },
     "recommendation_id": { "type": "string" },
-    "recommendation_source": { "type": "string", "enum": ["LLM", "DETERMINISTIC_FALLBACK", "RULE_BASED"] },
+    "recommendation_source": { "type": "string", "enum": ["LLM"] },
     "recommendations": { "type": "array", "minItems": 3, "maxItems": 3, "items": { "$ref": "#/definitions/RecommendationSlot" } },
     "llm_validation_result": { "$ref": "#/definitions/LLMValidationResult" }
   }

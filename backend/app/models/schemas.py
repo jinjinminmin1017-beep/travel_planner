@@ -69,8 +69,6 @@ class RecommendationType(str, Enum):
 
 class RecommendationSource(str, Enum):
     LLM = "LLM"
-    MOCK_LLM = "MOCK_LLM"
-    DETERMINISTIC_FALLBACK = "DETERMINISTIC_FALLBACK"
 
 
 class RecommendationSlotStatus(str, Enum):
@@ -101,10 +99,10 @@ class SourceFailureHandlingStrategy(str, Enum):
 
 
 class DataSourceType(str, Enum):
-    MOCK = "MOCK"
     MAP = "MAP"
     RAIL = "RAIL"
     FLIGHT = "FLIGHT"
+    WEATHER = "WEATHER"
     TAXI = "TAXI"
     OTA = "OTA"
     LLM = "LLM"
@@ -140,7 +138,7 @@ class TimePoint(StrictModel):
 class GeoPoint(StrictModel):
     latitude: float
     longitude: float
-    coordinate_system: str = "MOCK_WGS84"
+    coordinate_system: str = "WGS84"
 
 
 class NormalizedScores(StrictModel):
@@ -515,7 +513,7 @@ class LLMValidationResult(StrictModel):
     schema_valid: bool
     semantic_valid: bool
     repair_attempted: bool
-    final_strategy: Literal["USE_ORIGINAL", "REPAIRED", "DETERMINISTIC_FALLBACK", "REJECTED"]
+    final_strategy: Literal["USE_ORIGINAL", "REPAIRED", "REJECTED"]
     invalid_reasons: list[str] = Field(default_factory=list)
 
 
@@ -543,6 +541,18 @@ class MissingPlanExplanation(StrictModel):
     user_visible_message: str
 
 
+class DestinationPresentation(StrictModel):
+    schema_version: Literal["1.15"] = SCHEMA_VERSION
+    destination_key: str
+    display_name: str
+    hero_image_url: str
+    image_alt: str
+    image_credit: str | None = None
+    image_source: Literal["LOCAL_STATIC", "CLOUD_CDN", "REMOTE_URL"] = "LOCAL_STATIC"
+    focal_point: str = "center"
+    tags: list[str] = Field(default_factory=list)
+
+
 class TravelPlanResponse(StrictModel):
     schema_version: Literal["1.15"] = SCHEMA_VERSION
     request_id: str
@@ -552,6 +562,7 @@ class TravelPlanResponse(StrictModel):
     planning_status: PlanningStatus
     progress: int = Field(ge=0, le=100)
     travel_request: TravelRequest
+    destination_presentation: DestinationPresentation | None = None
     plans: list[TravelPlan]
     recommendation_result: RecommendationResult | None
     source_failures: list[SourceFailure]

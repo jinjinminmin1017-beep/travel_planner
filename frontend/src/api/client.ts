@@ -1,6 +1,9 @@
 import type { BookingRedirect, DataSourceStatusResponse, ErrorResponse, RecalculateResponse, TravelPlanResponse } from "../types";
+import { Platform } from "react-native";
 
-const API_BASE = import.meta.env.VITE_API_BASE ?? "http://127.0.0.1:8000";
+const DEFAULT_API_BASE = Platform.OS === "android" ? "http://10.0.2.2:8000" : "http://127.0.0.1:8000";
+const configuredApiBase = process.env.EXPO_PUBLIC_API_BASE_URL?.trim();
+const API_BASE = configuredApiBase || DEFAULT_API_BASE;
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
@@ -43,7 +46,7 @@ export function recalculate(planId: string, segmentId: string, changeType: "RAIL
         option_type: changeType,
         option_id: optionId,
         option_value: optionValue,
-        source_option_version: "mock_v1"
+        source_option_version: "ui_selected"
       },
       recalculate_scope: "PLAN_TOTAL"
     })

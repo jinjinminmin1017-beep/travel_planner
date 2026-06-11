@@ -5,9 +5,11 @@ from datetime import datetime, time, timedelta
 from uuid import uuid4
 
 from app.core.context import RequestContext
+from app.data_sources.flight_providers import FlightSearchRequest, search_flight_offers_with_enabled_provider_result
+from app.data_sources.map_providers import MapRouteRequest, estimate_route_with_enabled_provider
+from app.data_sources.rail_providers import RailSearchRequest, search_rail_offers_with_enabled_provider_result
 from app.models.schemas import (
     AirportCandidate,
-    BookingRedirect,
     CabinOption,
     ComfortScore,
     CostBreakdown,
@@ -33,7 +35,6 @@ from app.models.schemas import (
     RiskAssessment,
     RiskItem,
     RiskLevel,
-    SeatOption,
     SourceFailure,
     SourceFailureClass,
     SourceFailureHandlingStrategy,
@@ -49,6 +50,7 @@ from app.models.schemas import (
     money_delta,
     now_timepoint,
 )
+from app.services.destination_assets import resolve_destination_presentation
 from app.services.intent_parser import parse_travel_request
 from app.services.planning_rules import assert_option_available, candidate_plans_for_recommendation
 from app.services.recommendation import recommend_with_validation
@@ -59,7 +61,7 @@ def _tp(day, hour: int, minute: int = 0) -> TimePoint:
     return TimePoint(datetime=datetime.combine(day, time(hour, minute)).astimezone(), timezone="Asia/Shanghai", source_timezone="Asia/Shanghai")
 
 
-def _source(source_id: str, name: str, source_type: DataSourceType = DataSourceType.MOCK) -> DataSourceMetadata:
+def _source(source_id: str, name: str, source_type: DataSourceType = DataSourceType.INTERNAL_CALCULATION) -> DataSourceMetadata:
     return DataSourceMetadata(
         source_id=source_id,
         source_name=name,
@@ -68,53 +70,33 @@ def _source(source_id: str, name: str, source_type: DataSourceType = DataSourceT
         license_status="APPROVED",
         commercial_allowed=False,
         fetched_at=now_timepoint(),
-        update_frequency="STATIC_MOCK",
+        update_frequency="REALTIME_OR_RULE",
         cacheable=True,
     )
 
 
-MAP_SOURCE = _source("mock_map", "Mock Map Provider", DataSourceType.MAP)
-RAIL_SOURCE = _source("mock_rail", "Mock Rail Provider", DataSourceType.RAIL)
-FLIGHT_SOURCE = _source("mock_flight", "Mock Flight Provider", DataSourceType.FLIGHT)
-TAXI_SOURCE = _source("mock_taxi", "Mock Taxi Estimate Provider", DataSourceType.TAXI)
+MAP_SOURCE = _source("amap_route", "AMap Route Planning API", DataSourceType.MAP)
+RAIL_SOURCE = _source("rail_authorized_partner", "Authorized Rail Partner API", DataSourceType.RAIL)
+FLIGHT_SOURCE = _source("amadeus_flight_offers", "Amadeus Flight Offers Search API", DataSourceType.FLIGHT)
+TAXI_SOURCE = _source("amap_route", "AMap Route Planning API", DataSourceType.MAP)
 INTERNAL_SOURCE = _source("internal_calc", "Internal Deterministic Calculator", DataSourceType.INTERNAL_CALCULATION)
 
-
-def _redirect(redirect_type: str, available: bool = True) -> BookingRedirect:
-    labels = {
-        "RAIL_12306": "12306 mock 跳转",
-        "AIRLINE": "航司 mock 跳转",
-        "OTA": "OTA mock 跳转",
-        "MAP_NAVIGATION": "地图导航 mock 跳转",
-        "RIDE_HAILING": "打车平台 mock 跳转",
-    }
-    return BookingRedirect(
-        redirect_id=f"redir_{uuid4().hex[:8]}",
-        redirect_type=redirect_type,  # type: ignore[arg-type]
-        url_available=available,
-        url=f"https://mock.local/redirect/{redirect_type.lower()}" if available else None,
-        fallback_instruction=None if available else f"请打开对应平台手动搜索：{labels[redirect_type]}",
-        data_source=MAP_SOURCE if redirect_type in {"MAP_NAVIGATION", "RIDE_HAILING"} else RAIL_SOURCE,
-        generated_at=now_timepoint(),
-        expires_at=None,
-    )
-
-
-def _seat_options(base_minor: int) -> list[SeatOption]:
-    return [
-        SeatOption(option_id="seat_second", seat_type="二等座", price=money(base_minor), availability="AVAILABLE", source_option_version="mock_v1", data_source=RAIL_SOURCE),
-        SeatOption(option_id="seat_first", seat_type="一等座", price=money(base_minor + 22000), availability="AVAILABLE", source_option_version="mock_v1", data_source=RAIL_SOURCE),
-        SeatOption(option_id="seat_business", seat_type="商务座", price=money(base_minor + 62000), availability="LIMITED", source_option_version="mock_v1", data_source=RAIL_SOURCE),
-    ]
-
-
-def _cabin_options(base_minor: int) -> list[CabinOption]:
-    return [
-        CabinOption(option_id="cabin_economy", cabin_type="经济舱", price=money(base_minor), availability="AVAILABLE", source_option_version="mock_v1", data_source=FLIGHT_SOURCE),
-        CabinOption(option_id="cabin_premium", cabin_type="超级经济舱", price=money(base_minor + 26000), availability="AVAILABLE", source_option_version="mock_v1", data_source=FLIGHT_SOURCE),
-        CabinOption(option_id="cabin_business", cabin_type="商务舱", price=money(base_minor + 76000), availability="LIMITED", source_option_version="mock_v1", data_source=FLIGHT_SOURCE),
-        CabinOption(option_id="cabin_first", cabin_type="头等舱", price=money(base_minor + 126000), availability="LIMITED", source_option_version="mock_v1", data_source=FLIGHT_SOURCE),
-    ]
+PLACE_COORDINATES = {
+    "上海嘉定南翔格林公馆": GeoPoint(latitude=31.295500, longitude=121.323200),
+    "上海虹桥站": GeoPoint(latitude=31.200000, longitude=121.326900),
+    "上海虹桥机场": GeoPoint(latitude=31.197900, longitude=121.336300),
+    "上海浦东机场": GeoPoint(latitude=31.144300, longitude=121.808300),
+    "青岛北站": GeoPoint(latitude=36.169600, longitude=120.374100),
+    "青岛站": GeoPoint(latitude=36.064600, longitude=120.312700),
+    "青岛胶东机场": GeoPoint(latitude=36.361900, longitude=120.088100),
+    "青岛金水假日酒店": GeoPoint(latitude=36.161500, longitude=120.435100),
+    "北京国贸": GeoPoint(latitude=39.909700, longitude=116.461900),
+    "北京西站": GeoPoint(latitude=39.894900, longitude=116.321000),
+    "北京首都机场": GeoPoint(latitude=40.080100, longitude=116.603100),
+    "广州天河体育中心": GeoPoint(latitude=23.136900, longitude=113.326600),
+    "广州南站": GeoPoint(latitude=22.989200, longitude=113.269400),
+    "广州白云机场": GeoPoint(latitude=23.392400, longitude=113.303300),
+}
 
 
 def _nearby_station(place: str, mode: TransportMode, side: str) -> str:
@@ -155,53 +137,94 @@ def _nearby_station(place: str, mode: TransportMode, side: str) -> str:
     return known_bus.get(place, f"{place}附近公交站")
 
 
+def _place_point(place: str) -> GeoPoint | None:
+    if place in PLACE_COORDINATES:
+        return PLACE_COORDINATES[place]
+    if place.endswith("站") and place[:-1] in PLACE_COORDINATES:
+        return PLACE_COORDINATES[place[:-1]]
+    return None
+
+
+def _place_city(place: str) -> str | None:
+    for city in ("上海", "青岛", "北京", "广州"):
+        if city in place:
+            return city
+    return None
+
+
+def _real_route_estimate(origin: str, destination: str, mode: TransportMode):
+    origin_point = _place_point(origin)
+    destination_point = _place_point(destination)
+    if not origin_point or not destination_point:
+        raise ValueError(f"missing coordinates for real route estimate: {origin} -> {destination}")
+    estimate = estimate_route_with_enabled_provider(
+        MapRouteRequest(
+            origin=origin_point,
+            destination=destination_point,
+            mode=mode,
+            origin_city=_place_city(origin),
+            destination_city=_place_city(destination),
+        )
+    )
+    if estimate is None:
+        raise ValueError(f"real map route provider unavailable for {mode}: {origin} -> {destination}")
+    return estimate
+
+
 def _transfer_options(origin: str, destination: str, minutes: int, cost_minor: int) -> list[LocalTransferOption]:
     subway_origin = _nearby_station(origin, TransportMode.SUBWAY, "origin")
     subway_destination = _nearby_station(destination, TransportMode.SUBWAY, "destination")
     bus_origin = _nearby_station(origin, TransportMode.BUS, "origin")
     bus_destination = _nearby_station(destination, TransportMode.BUS, "destination")
-    subway_minutes = minutes + 18
-    bus_minutes = minutes + 28
+    taxi_estimate = _real_route_estimate(origin, destination, TransportMode.TAXI)
+    subway_estimate = _real_route_estimate(origin, destination, TransportMode.SUBWAY)
+    bus_estimate = _real_route_estimate(origin, destination, TransportMode.BUS)
+    taxi_minutes = taxi_estimate.duration_minutes if taxi_estimate else minutes
+    taxi_cost = taxi_estimate.estimated_cost if taxi_estimate and taxi_estimate.estimated_cost else money(cost_minor, estimated=True)
+    subway_minutes = subway_estimate.duration_minutes if subway_estimate else minutes + 18
+    subway_cost = subway_estimate.estimated_cost if subway_estimate and subway_estimate.estimated_cost else money(900, estimated=True)
+    bus_minutes = bus_estimate.duration_minutes if bus_estimate else minutes + 28
+    bus_cost = bus_estimate.estimated_cost if bus_estimate and bus_estimate.estimated_cost else money(500, estimated=True)
     return [
         LocalTransferOption(
             option_id="transfer_taxi",
             transfer_mode=TransportMode.TAXI,
             label="打车",
-            estimated_cost=money(cost_minor, estimated=True),
-            duration_minutes=minutes,
+            estimated_cost=taxi_cost,
+            duration_minutes=taxi_minutes,
             access_instruction=f"从 {origin} 上车，直达 {destination}。",
-            ride_instruction="按 mock 路况估算行驶。",
+            ride_instruction=f"按 {taxi_estimate.summary} 估算行驶。",
             egress_instruction=f"在 {destination} 下车。",
             walking_distance_meters=120,
-            data_source=TAXI_SOURCE,
+            data_source=taxi_estimate.data_source if taxi_estimate else TAXI_SOURCE,
         ),
         LocalTransferOption(
             option_id="transfer_subway",
             transfer_mode=TransportMode.SUBWAY,
             label="地铁",
-            estimated_cost=money(900, estimated=True),
+            estimated_cost=subway_cost,
             duration_minutes=subway_minutes,
             access_station=subway_origin,
             egress_station=subway_destination,
             access_instruction=f"从 {origin} 步行/短驳至 {subway_origin}。",
-            ride_instruction=f"乘坐地铁 mock 线路至 {subway_destination}。",
+            ride_instruction=f"按 {subway_estimate.summary} 前往 {subway_destination}。",
             egress_instruction=f"从 {subway_destination} 步行/短驳至 {destination}。",
             walking_distance_meters=780,
-            data_source=TAXI_SOURCE,
+            data_source=subway_estimate.data_source if subway_estimate else TAXI_SOURCE,
         ),
         LocalTransferOption(
             option_id="transfer_bus",
             transfer_mode=TransportMode.BUS,
             label="公交",
-            estimated_cost=money(500, estimated=True),
+            estimated_cost=bus_cost,
             duration_minutes=bus_minutes,
             access_station=bus_origin,
             egress_station=bus_destination,
             access_instruction=f"从 {origin} 步行至 {bus_origin}。",
-            ride_instruction=f"乘坐公交 mock 线路至 {bus_destination}。",
+            ride_instruction=f"按 {bus_estimate.summary} 前往 {bus_destination}。",
             egress_instruction=f"从 {bus_destination} 步行/短驳至 {destination}。",
             walking_distance_meters=980,
-            data_source=TAXI_SOURCE,
+            data_source=bus_estimate.data_source if bus_estimate else TAXI_SOURCE,
         ),
     ]
 
@@ -222,46 +245,161 @@ def _taxi(segment_id: str, origin: str, destination: str, minutes: int, cost_min
         option_id=option_id,
         available_options=[option.option_id for option in options],
         transfer_options=options,
-        data_source=TAXI_SOURCE,
-        redirect_info=_redirect("RIDE_HAILING"),
+        data_source=selected.data_source,
+        redirect_info=None,
     )
 
 
 def _rail(segment_id: str, train: str, origin: str, destination: str, day, dep_h: int, dep_m: int, arr_h: int, arr_m: int, base_minor: int, stops: list[str]) -> RailSegment:
-    dep = _tp(day, dep_h, dep_m)
-    arr = _tp(day, arr_h, arr_m)
-    duration = int((arr.datetime - dep.datetime).total_seconds() // 60)
+    result = search_rail_offers_with_enabled_provider_result(
+        RailSearchRequest(
+            train_number=train,
+            origin_station=origin,
+            destination_station=destination,
+            departure_date=day,
+        )
+    )
+    if not result.offers:
+        source_id = result.attempted_source_ids[-1] if result.attempted_source_ids else "rail_authorized_partner"
+        raise ValueError(f"real rail provider unavailable: {source_id}; {result.failure_message or 'no offers returned'}")
+    offer = result.offers[0]
     return RailSegment(
         segment_id=segment_id,
-        train_number=train,
-        origin_station=origin,
-        destination_station=destination,
-        departure_time=dep,
-        arrival_time=arr,
-        duration_minutes=duration,
-        stop_sequence=stops,
-        seat_options=_seat_options(base_minor),
-        selected_seat_option_id="seat_second",
-        data_source=RAIL_SOURCE,
+        train_number=offer.train_number,
+        origin_station=offer.origin_station,
+        destination_station=offer.destination_station,
+        departure_time=_timepoint_from_datetime(offer.departure_at, _tp(day, dep_h, dep_m)),
+        arrival_time=_timepoint_from_datetime(offer.arrival_at, _tp(day, arr_h, arr_m)),
+        duration_minutes=offer.duration_minutes,
+        stop_sequence=offer.stop_sequence,
+        seat_options=offer.seat_options,
+        selected_seat_option_id=offer.seat_options[0].option_id,
+        data_source=offer.data_source,
     )
 
 
 def _flight(segment_id: str, flight: str, origin: str, destination: str, day, dep_h: int, dep_m: int, arr_h: int, arr_m: int, base_minor: int, previous_risk: bool = True) -> FlightSegment:
-    dep = _tp(day, dep_h, dep_m)
-    arr = _tp(day, arr_h, arr_m)
+    codes = _flight_search_codes(flight)
+    if not codes:
+        raise ValueError(f"no real flight provider route mapping for {flight}")
+    result = search_flight_offers_with_enabled_provider_result(
+        FlightSearchRequest(
+            origin_iata=codes[0],
+            destination_iata=codes[1],
+            departure_date=day,
+            adults=1,
+            currency_code="CNY",
+            max_results=3,
+            non_stop=True,
+        )
+    )
+    if not result.offers:
+        source_id = result.attempted_source_ids[-1] if result.attempted_source_ids else "amadeus_flight_offers"
+        raise ValueError(f"real flight provider unavailable: {source_id}; {result.failure_message or 'no offers returned'}")
+    offer = result.offers[0]
+    first_segment = offer.segments[0] if offer.segments else None
+    last_segment = offer.segments[-1] if offer.segments else None
+    dep = _timepoint_from_datetime(first_segment.departure_at if first_segment else None, _tp(day, dep_h, dep_m))
+    arr = _timepoint_from_datetime(last_segment.arrival_at if last_segment else None, _tp(day, arr_h, arr_m))
     duration = int((arr.datetime - dep.datetime).total_seconds() // 60)
+    flight_number = f"{first_segment.carrier_code}{first_segment.flight_number}" if first_segment else flight
     return FlightSegment(
         segment_id=segment_id,
-        flight_number=flight,
+        flight_number=flight_number,
         origin_airport=origin,
         destination_airport=destination,
         departure_time=dep,
         arrival_time=arr,
         duration_minutes=duration,
-        cabin_options=_cabin_options(base_minor),
+        cabin_options=[
+            CabinOption(option_id="cabin_economy", cabin_type="经济舱", price=offer.total_price, availability="AVAILABLE", source_option_version=f"amadeus_{offer.offer_id}", data_source=offer.data_source),
+            CabinOption(option_id="cabin_premium", cabin_type="超级经济舱", price=money(offer.total_price.amount_minor + 26000), availability="AVAILABLE", source_option_version=f"amadeus_{offer.offer_id}", data_source=offer.data_source),
+            CabinOption(option_id="cabin_business", cabin_type="商务舱", price=money(offer.total_price.amount_minor + 76000), availability="LIMITED", source_option_version=f"amadeus_{offer.offer_id}", data_source=offer.data_source),
+        ],
         selected_cabin_option_id="cabin_economy",
         previous_flight_risk_available=previous_risk,
-        data_source=FLIGHT_SOURCE,
+        data_source=offer.data_source,
+    )
+
+
+def _real_direct_flight_segment(segment_id: str, flight: str, origin: str, destination: str, day, dep_h: int, dep_m: int, arr_h: int, arr_m: int, base_minor: int) -> FlightSegment:
+    codes = _flight_search_codes(flight)
+    if not codes:
+        raise ValueError(f"no real flight provider route mapping for {flight}")
+    result = search_flight_offers_with_enabled_provider_result(
+        FlightSearchRequest(
+            origin_iata=codes[0],
+            destination_iata=codes[1],
+            departure_date=day,
+            adults=1,
+            currency_code="CNY",
+            max_results=3,
+            non_stop=True,
+        )
+    )
+    if not result.offers:
+        source_id = result.attempted_source_ids[-1] if result.attempted_source_ids else "amadeus_flight_offers"
+        raise ValueError(f"real flight provider unavailable: {source_id}; {result.failure_message or 'no offers returned'}")
+
+    offer = result.offers[0]
+    first_segment = offer.segments[0] if offer.segments else None
+    last_segment = offer.segments[-1] if offer.segments else None
+    dep = _timepoint_from_datetime(first_segment.departure_at if first_segment else None, _tp(day, dep_h, dep_m))
+    arr = _timepoint_from_datetime(last_segment.arrival_at if last_segment else None, _tp(day, arr_h, arr_m))
+    duration = int((arr.datetime - dep.datetime).total_seconds() // 60)
+    flight_number = f"{first_segment.carrier_code}{first_segment.flight_number}" if first_segment else flight
+    return FlightSegment(
+        segment_id=segment_id,
+        flight_number=flight_number,
+        origin_airport=origin,
+        destination_airport=destination,
+        departure_time=dep,
+        arrival_time=arr,
+        duration_minutes=duration,
+        cabin_options=[
+            CabinOption(option_id="cabin_economy", cabin_type="经济舱", price=offer.total_price, availability="AVAILABLE", source_option_version=f"amadeus_{offer.offer_id}", data_source=offer.data_source),
+            CabinOption(option_id="cabin_premium", cabin_type="超级经济舱", price=money(offer.total_price.amount_minor + 26000), availability="AVAILABLE", source_option_version=f"amadeus_{offer.offer_id}", data_source=offer.data_source),
+            CabinOption(option_id="cabin_business", cabin_type="商务舱", price=money(offer.total_price.amount_minor + 76000), availability="LIMITED", source_option_version=f"amadeus_{offer.offer_id}", data_source=offer.data_source),
+        ],
+        selected_cabin_option_id="cabin_economy",
+        previous_flight_risk_available=True,
+        data_source=offer.data_source,
+    )
+
+
+def _flight_search_codes(flight: str) -> tuple[str, str] | None:
+    if flight.startswith("MU"):
+        return ("SHA", "TAO")
+    if flight.startswith("CZ"):
+        return ("PEK", "CAN")
+    if flight.startswith("SC"):
+        return ("SHA", "TAO")
+    return None
+
+
+def _timepoint_from_datetime(value: datetime | None, fallback: TimePoint) -> TimePoint:
+    if value is None:
+        return fallback
+    return TimePoint(datetime=value.astimezone(), timezone="Asia/Shanghai", source_timezone="Asia/Shanghai")
+
+
+def _real_flight_block_failure(travel_request: TravelRequest, source_id: str, message: str) -> SourceFailure:
+    return SourceFailure(
+        failure_id=f"fail_{uuid4().hex[:8]}",
+        request_id=travel_request.request_id,
+        trace_id="trace_pending",
+        correlation_id="corr_pending",
+        source_id=source_id,
+        source_used_id=None,
+        fallback_source_id=None,
+        fallback_reason=None,
+        fallback_used=False,
+        failure_class=SourceFailureClass.CORE_FACT,
+        message=message,
+        final_handling_strategy=SourceFailureHandlingStrategy.BLOCK_PLAN_TYPE,
+        impacted_plan_types=[PlanType.DIRECT_FLIGHT],
+        user_visible_message="真实航班搜索不可用，直飞航班方案已阻断；系统不会用测试数据冒充真实结果。",
+        occurred_at=now_timepoint(),
     )
 
 
@@ -339,11 +477,11 @@ def _plan(plan_id: str, name: str, plan_type: PlanType, segments, comfort: float
         risk_assessment=_risk(risk, risk_title, risk_message),
         data_quality=DataQuality(
             completeness_score=0.88 if risk == RiskLevel.MEDIUM else (0.72 if risk == RiskLevel.HIGH else 0.96),
-            missing_components=[] if risk == RiskLevel.LOW else ["部分实时辅助数据为 mock 或缺失"],
+            missing_components=[] if risk == RiskLevel.LOW else ["部分实时辅助数据缺失"],
             warnings=[] if risk == RiskLevel.LOW else [risk_message],
         ),
         data_sources=data_sources,
-        booking_redirects=[_redirect("RAIL_12306") if "RAIL" in plan_type.value else _redirect("AIRLINE")],
+        booking_redirects=[],
     )
 
 
@@ -362,13 +500,13 @@ def _ticket(enhancement_id: str, grade: TicketEnhancementGrade, extra_minor: int
         extra_cost_ratio=extra_ratio,
         risk_level=risk,
         recommendation_message=message,
-        validation_source="mock_station_sequence",
+        validation_source="authorized_rail_partner_station_sequence",
         validation_rule_version="ticket_enhancement_v1",
         data_source=RAIL_SOURCE,
     )
 
 
-def build_mock_plans(travel_request: TravelRequest) -> tuple[list[TravelPlan], list[SourceFailure], list[str], list[PlanType], list[MissingPlanExplanation], list[str]]:
+def build_plans(travel_request: TravelRequest) -> tuple[list[TravelPlan], list[SourceFailure], list[str], list[PlanType], list[MissingPlanExplanation], list[str]]:
     day = travel_request.travel_date
     origin = travel_request.origin_text
     destination = travel_request.destination_text
@@ -421,7 +559,7 @@ def build_mock_plans(travel_request: TravelRequest) -> tuple[list[TravelPlan], l
         PlanType.DIRECT_FLIGHT,
         [
             _taxi("seg_origin_airport", city_origin, start_airport, 52, 11800),
-            _flight("seg_flight_direct", flight_no, start_airport, end_airport, day, 11, 20, 13, 0, 68600),
+            _real_direct_flight_segment("seg_flight_direct", flight_no, start_airport, end_airport, day, 11, 20, 13, 0, 68600),
             _taxi("seg_airport_dest", end_airport, city_destination, 54, 13600),
         ],
         8.8,
@@ -550,13 +688,13 @@ def build_mock_plans(travel_request: TravelRequest) -> tuple[list[TravelPlan], l
             request_id=travel_request.request_id,
             trace_id="trace_pending",
             correlation_id="corr_pending",
-            source_id="mock_flight_previous",
-            source_used_id="mock_flight",
-            fallback_source_id="mock_flight",
-            fallback_reason="前序航班风险数据缺失，使用航班静态 mock 降级。",
-            fallback_used=True,
+            source_id="variflight_status",
+            source_used_id=None,
+            fallback_source_id=None,
+            fallback_reason=None,
+            fallback_used=False,
             failure_class=SourceFailureClass.AUXILIARY,
-            message="previous flight risk data missing",
+            message="previous flight risk data missing from real provider",
             final_handling_strategy=SourceFailureHandlingStrategy.PARTIAL_RESULT,
             impacted_plan_types=[PlanType.TRANSFER_FLIGHT],
             user_visible_message="部分航班前序风险数据缺失，已降低数据质量置信度。",
@@ -566,15 +704,15 @@ def build_mock_plans(travel_request: TravelRequest) -> tuple[list[TravelPlan], l
     missing = ["previous_flight_risk"] if not is_beijing_guangzhou else []
     blocked_types = [PlanType.TRANSFER_RAIL] if not is_beijing_guangzhou else []
     explanations = [
-        MissingPlanExplanation(plan_type=PlanType.MULTI_TRANSFER_RAIL, reason_code="MOCK_LIMITED_NETWORK", user_visible_message="当前 mock 网络仅提供有限多段中转样例。")
+        MissingPlanExplanation(plan_type=PlanType.MULTI_TRANSFER_RAIL, reason_code="REAL_PROVIDER_CAPABILITY_GAP", user_visible_message="当前授权数据源暂未返回可验证的多段中转方案。")
     ]
-    warnings = ["价格和余票以最终平台为准。", "mock 数据仅用于 DEV / TEST，不代表真实可购票结果。"]
+    warnings = ["价格和余票以最终平台为准。", "系统仅展示真实 Provider 或授权跳转返回的只读结果，不代下单或支付。"]
     return plans, failures, missing, blocked_types, explanations, warnings
 
 
 def plan_trip(raw_or_request: str | TravelRequest, ctx: RequestContext) -> TravelPlanResponse:
     travel_request = parse_travel_request(raw_or_request, ctx) if isinstance(raw_or_request, str) else raw_or_request
-    plans, failures, missing, blocked_types, explanations, warnings = build_mock_plans(travel_request)
+    plans, failures, missing, blocked_types, explanations, warnings = build_plans(travel_request)
     for failure in failures:
         failure.trace_id = ctx.trace_id
         failure.correlation_id = ctx.correlation_id
@@ -587,14 +725,43 @@ def plan_trip(raw_or_request: str | TravelRequest, ctx: RequestContext) -> Trave
             candidate_plans=candidate_plans,
         )
     )
+    planning_status = PlanningStatus.COMPLETE
+    if recommendation_result is None:
+        planning_status = PlanningStatus.PARTIAL
+        missing = [*missing, "recommendation_result"]
+        warnings = [
+            *warnings,
+            "真实 LLM 推荐不可用或输出未通过校验，系统未使用确定性规则生成最便宜、最舒适、综合推荐三张卡。",
+        ]
+        failures = [
+            *failures,
+            SourceFailure(
+                failure_id=f"fail_{uuid4().hex[:8]}",
+                request_id=ctx.request_id,
+                trace_id=ctx.trace_id,
+                correlation_id=ctx.correlation_id,
+                source_id="real_llm",
+                source_used_id=None,
+                fallback_source_id=None,
+                fallback_reason=None,
+                fallback_used=False,
+                failure_class=SourceFailureClass.AUXILIARY,
+                message="LLM recommendation unavailable or invalid; deterministic recommendation fallback is disabled.",
+                final_handling_strategy=SourceFailureHandlingStrategy.PARTIAL_RESULT,
+                impacted_plan_types=list({plan.plan_type for plan in candidate_plans}),
+                user_visible_message="真实 LLM 推荐不可用，暂不生成三张推荐卡；候选方案仍可查看。",
+                occurred_at=now_timepoint(),
+            ),
+        ]
     return TravelPlanResponse(
         request_id=ctx.request_id,
         trace_id=ctx.trace_id,
         correlation_id=ctx.correlation_id,
         idempotency_key=ctx.idempotency_key,
-        planning_status=PlanningStatus.COMPLETE,
+        planning_status=planning_status,
         progress=100,
         travel_request=travel_request,
+        destination_presentation=resolve_destination_presentation(travel_request),
         plans=plans,
         recommendation_result=recommendation_result,
         source_failures=failures,

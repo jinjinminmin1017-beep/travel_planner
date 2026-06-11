@@ -1,0 +1,92 @@
+{
+  "generic": {
+    "destination_key": "generic",
+    "display_name": "目的地",
+    "hero_image_url": "/destination-scenes/generic.svg",
+    "image_alt": "目的地风景",
+    "image_credit": "Local placeholder asset",
+    "image_source": "LOCAL_STATIC",
+    "focal_point": "center",
+    "tags": ["fallback"]
+  },
+  "beijing": {
+    "destination_key": "beijing",
+    "display_name": "北京",
+    "hero_image_url": "/destination-scenes/beijing.svg",
+    "image_alt": "北京城市风景",
+    "image_credit": "Local placeholder asset",
+    "image_source": "LOCAL_STATIC",
+    "focal_point": "center",
+    "tags": ["city", "culture"]
+  },
+  "shanghai": {
+    "destination_key": "shanghai",
+    "display_name": "上海",
+    "hero_image_url": "/destination-scenes/skyline.svg",
+    "image_alt": "上海城市天际线",
+    "image_credit": "Local placeholder asset",
+    "image_source": "LOCAL_STATIC",
+    "focal_point": "center",
+    "tags": ["city", "skyline"]
+  },
+  "qingdao": {
+    "destination_key": "qingdao",
+    "display_name": "青岛",
+    "hero_image_url": "/destination-scenes/qingdao-pier.jpg",
+    "image_alt": "青岛海滨栈桥风景",
+    "image_credit": "Adapted from Qingdao Pier by Bridget Coila, CC BY-SA 2.0",
+    "image_source": "LOCAL_STATIC",
+    "focal_point": "center 46%",
+    "tags": ["sea", "coast", "pier"]
+  },
+  "guangzhou": {
+    "destination_key": "guangzhou",
+    "display_name": "广州",
+    "hero_image_url": "/destination-scenes/skyline.svg",
+    "image_alt": "广州城市风景",
+    "image_credit": "Local placeholder asset",
+    "image_source": "LOCAL_STATIC",
+    "focal_point": "center",
+    "tags": ["city", "skyline"]
+  },
+  "shenzhen": {
+    "destination_key": "shenzhen",
+    "display_name": "深圳",
+    "hero_image_url": "/destination-scenes/skyline.svg",
+    "image_alt": "深圳城市风景",
+    "image_credit": "Local placeholder asset",
+    "image_source": "LOCAL_STATIC",
+    "focal_point": "center",
+    "tags": ["city", "skyline"]
+  },
+  "chengdu": {
+    "destination_key": "chengdu",
+    "display_name": "成都",
+    "hero_image_url": "/destination-scenes/nature.svg",
+    "image_alt": "成都自然风景",
+    "image_credit": "Local placeholder asset",
+    "image_source": "LOCAL_STATIC",
+    "focal_point": "center",
+    "tags": ["nature", "leisure"]
+  },
+  "hangzhou": {
+    "destination_key": "hangzhou",
+    "display_name": "杭州",
+    "hero_image_url": "/destination-scenes/nature.svg",
+    "image_alt": "杭州自然风景",
+    "image_credit": "Local placeholder asset",
+    "image_source": "LOCAL_STATIC",
+    "focal_point": "center",
+    "tags": ["nature", "lake"]
+  },
+  "xian": {
+    "destination_key": "xian",
+    "display_name": "西安",
+    "hero_image_url": "/destination-scenes/xian.svg",
+    "image_alt": "西安历史城市风景",
+    "image_credit": "Local placeholder asset",
+    "image_source": "LOCAL_STATIC",
+    "focal_point": "center",
+    "tags": ["history", "culture"]
+  }
+}

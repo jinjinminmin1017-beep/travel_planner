@@ -145,10 +145,10 @@
     },
     "DataSourceType": {
       "enum": [
-        "MOCK",
         "MAP",
         "RAIL",
         "FLIGHT",
+        "WEATHER",
         "TAXI",
         "OTA",
         "LLM",
