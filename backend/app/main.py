@@ -1,35 +1,56 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from fastapi import FastAPI, HTTPException, Request
+from contextlib import asynccontextmanager
+from uuid import uuid4
+
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.core.context import get_context, new_context
-from app.data_sources.config_loader import runtime_statuses
+from app.core.security import evaluate_request_security
+from app.data_sources.config_loader import load_data_source_configs, runtime_statuses
 from app.data_sources.redirect_providers import create_booking_redirect
 from app.models.schemas import (
+    AsyncJob,
+    AsyncJobStatus,
+    AppEventRequest,
+    AppEventResponse,
     BookingRedirectRequest,
     BookingRedirectResponse,
     DataSourceStatusResponse,
     ErrorResponse,
+    FeedbackRequest,
+    FeedbackResponse,
     GetTravelPlanResponse,
     HealthResponse,
     ParseTravelRequestBody,
     ParseTravelRequestResponse,
     PlanRequest,
+    PlanningStatus,
     RecalculateRequest,
     RecalculateResponse,
+    TravelRequest,
     TravelPlanResponse,
     now_timepoint,
 )
-from app.services.intent_parser import parse_travel_request
+from app.services.intent_parser import IntentParserError, parse_travel_request_with_validation
+from app.services.observability import metrics_snapshot, record_app_event
+from app.services.persistence import init_persistence
 from app.services.planner import plan_trip, recalculate_plan
-from app.services.store import get_plan, save_response
+from app.services.store import get_async_job_by_idempotency, get_async_job_response, get_plan, get_recalculate_response, save_async_job_response, save_feedback, save_recalculate_response, save_response
 
-app = FastAPI(title="AI Travel Planner", version="0.1.0")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    load_data_source_configs()
+    init_persistence()
+    yield
+
+
+app = FastAPI(title="AI Travel Planner", version="0.1.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -44,10 +65,22 @@ app.add_middleware(
 @app.middleware("http")
 async def attach_context(request: Request, call_next):
     request.state.ctx = new_context(request)
+    decision = evaluate_request_security(request)
+    request.state.device_id = decision.device_id
+    if not decision.allowed:
+        return error_payload(
+            request,
+            decision.error_code or "REQUEST_BLOCKED",
+            decision.user_message or "request blocked",
+            decision.user_message or "请求被安全策略拦截。",
+            decision.status_code,
+            retryable=decision.status_code == 429,
+        )
     response = await call_next(request)
     response.headers["x-request-id"] = request.state.ctx.request_id
     response.headers["x-trace-id"] = request.state.ctx.trace_id
     response.headers["x-correlation-id"] = request.state.ctx.correlation_id
+    response.headers["x-device-id"] = decision.device_id
     return response
 
 
@@ -128,19 +161,30 @@ def data_sources_status(request: Request) -> DataSourceStatusResponse:
     )
 
 
+@app.get("/api/admin/data-sources", response_model=DataSourceStatusResponse)
+def admin_data_sources_status(request: Request) -> DataSourceStatusResponse:
+    return data_sources_status(request)
+
+
+@app.get("/api/observability/metrics")
+def observability_metrics():
+    return metrics_snapshot()
+
+
 @app.post("/api/travel/parse", response_model=ParseTravelRequestResponse)
-def parse_travel(body: ParseTravelRequestBody, request: Request) -> ParseTravelRequestResponse:
+def parse_travel(body: ParseTravelRequestBody, request: Request):
     ctx = get_context(request)
     try:
-        travel_request = parse_travel_request(body.raw_user_input, ctx)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        result = parse_travel_request_with_validation(body.raw_user_input, ctx)
+    except IntentParserError as exc:
+        return _intent_parser_error_response(request, exc)
     return ParseTravelRequestResponse(
         request_id=ctx.request_id,
         trace_id=ctx.trace_id,
         correlation_id=ctx.correlation_id,
         idempotency_key=ctx.idempotency_key,
-        travel_request=travel_request,
+        travel_request=result.travel_request,
+        llm_validation_result=result.llm_validation_result,
         generated_at=now_timepoint(),
     )
 
@@ -150,10 +194,203 @@ def plan_travel(body: PlanRequest, request: Request) -> TravelPlanResponse:
     ctx = get_context(request)
     try:
         response = plan_trip(body.travel_request or body.raw_user_input or "", ctx)
+    except IntentParserError as exc:
+        return _intent_parser_error_response(request, exc)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     save_response(response)
     return response
+
+
+@app.post("/api/travel/plan/async", response_model=TravelPlanResponse)
+def plan_travel_async(body: PlanRequest, request: Request, background_tasks: BackgroundTasks):
+    ctx = get_context(request)
+    cached_job = get_async_job_by_idempotency(ctx.idempotency_key)
+    if cached_job is not None:
+        return cached_job
+    try:
+        travel_request = body.travel_request or parse_travel_request_with_validation(body.raw_user_input or "", ctx).travel_request
+    except IntentParserError as exc:
+        return _intent_parser_error_response(request, exc)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    job_id = f"job_{uuid4().hex[:12]}"
+    response = _planning_job_response(
+        travel_request=travel_request,
+        ctx=ctx,
+        job_id=job_id,
+        job_status=AsyncJobStatus.RUNNING,
+        planning_status=PlanningStatus.RUNNING,
+        progress=15,
+        created_at=None,
+    )
+    save_async_job_response(response)
+    background_tasks.add_task(_complete_plan_job, job_id, travel_request, ctx, response.async_job.created_at)
+    return response
+
+
+@app.get("/api/travel/jobs/{job_id}", response_model=TravelPlanResponse)
+def get_planning_job(job_id: str) -> TravelPlanResponse:
+    response = get_async_job_response(job_id)
+    if response is None:
+        raise HTTPException(status_code=404, detail="规划任务不存在或已过期。")
+    return response
+
+
+@app.post("/api/travel/jobs/{job_id}/retry", response_model=TravelPlanResponse)
+def retry_planning_job(job_id: str, request: Request, background_tasks: BackgroundTasks) -> TravelPlanResponse:
+    current = get_async_job_response(job_id)
+    if current is None:
+        raise HTTPException(status_code=404, detail="规划任务不存在或已过期。")
+    ctx = get_context(request)
+    new_job_id = f"job_{uuid4().hex[:12]}"
+    response = _planning_job_response(
+        travel_request=current.travel_request,
+        ctx=ctx,
+        job_id=new_job_id,
+        job_status=AsyncJobStatus.RUNNING,
+        planning_status=PlanningStatus.RUNNING,
+        progress=15,
+        created_at=None,
+    )
+    save_async_job_response(response)
+    background_tasks.add_task(_complete_plan_job, new_job_id, current.travel_request, ctx, response.async_job.created_at)
+    return response
+
+
+@app.post("/api/travel/jobs/{job_id}/cancel", response_model=TravelPlanResponse)
+def cancel_planning_job(job_id: str) -> TravelPlanResponse:
+    current = get_async_job_response(job_id)
+    if current is None:
+        raise HTTPException(status_code=404, detail="规划任务不存在或已过期。")
+    if current.async_job is None:
+        return current
+    if current.async_job.job_status in {AsyncJobStatus.COMPLETE, AsyncJobStatus.PARTIAL_READY, AsyncJobStatus.FAILED, AsyncJobStatus.CANCELLED}:
+        return current
+    cancelled_job = AsyncJob(
+        job_id=job_id,
+        job_status=AsyncJobStatus.CANCELLED,
+        created_at=current.async_job.created_at,
+        updated_at=now_timepoint(),
+        polling_url=current.async_job.polling_url,
+    )
+    cancelled = current.model_copy(
+        update={
+            "planning_status": PlanningStatus.FAILED,
+            "progress": 100,
+            "async_job": cancelled_job,
+            "user_visible_warnings": [*current.user_visible_warnings, "规划任务已取消。"],
+            "generated_at": now_timepoint(),
+        }
+    )
+    save_async_job_response(cancelled)
+    return cancelled
+
+
+def _planning_job_response(
+    travel_request: TravelRequest,
+    ctx,
+    job_id: str,
+    job_status: AsyncJobStatus,
+    planning_status: PlanningStatus,
+    progress: int,
+    created_at,
+) -> TravelPlanResponse:
+    now = now_timepoint()
+    job = AsyncJob(
+        job_id=job_id,
+        job_status=job_status,
+        created_at=created_at or now,
+        updated_at=now,
+        polling_url=f"/api/travel/jobs/{job_id}",
+    )
+    return TravelPlanResponse(
+        request_id=ctx.request_id,
+        trace_id=ctx.trace_id,
+        correlation_id=ctx.correlation_id,
+        idempotency_key=ctx.idempotency_key,
+        planning_status=planning_status,
+        progress=progress,
+        travel_request=travel_request,
+        destination_presentation=None,
+        plans=[],
+        recommendation_result=None,
+        source_failures=[],
+        missing_components=[],
+        blocked_plan_types=[],
+        missing_plan_explanations=[],
+        user_visible_warnings=["规划任务已启动，可继续停留在结果页等待更新。"],
+        async_job=job,
+        generated_at=now,
+    )
+
+
+def _complete_plan_job(job_id: str, travel_request: TravelRequest, ctx, created_at) -> None:
+    current = get_async_job_response(job_id)
+    if current and current.async_job and current.async_job.job_status == AsyncJobStatus.CANCELLED:
+        return
+    waiting = _planning_job_response(
+        travel_request=travel_request,
+        ctx=ctx,
+        job_id=job_id,
+        job_status=AsyncJobStatus.WAITING_SOURCE,
+        planning_status=PlanningStatus.RUNNING,
+        progress=55,
+        created_at=created_at,
+    )
+    save_async_job_response(waiting)
+    current = get_async_job_response(job_id)
+    if current and current.async_job and current.async_job.job_status == AsyncJobStatus.CANCELLED:
+        return
+    try:
+        final = plan_trip(travel_request, ctx)
+        if final.planning_status == PlanningStatus.COMPLETE:
+            job_status = AsyncJobStatus.COMPLETE
+        elif final.planning_status == PlanningStatus.FAILED:
+            job_status = AsyncJobStatus.FAILED
+        else:
+            job_status = AsyncJobStatus.PARTIAL_READY
+        final_job = AsyncJob(
+            job_id=job_id,
+            job_status=job_status,
+            created_at=created_at,
+            updated_at=now_timepoint(),
+            polling_url=f"/api/travel/jobs/{job_id}",
+        )
+        save_async_job_response(final.model_copy(update={"async_job": final_job}))
+    except Exception as exc:  # Background errors must become pollable business state.
+        failed = _planning_job_response(
+            travel_request=travel_request,
+            ctx=ctx,
+            job_id=job_id,
+            job_status=AsyncJobStatus.FAILED,
+            planning_status=PlanningStatus.FAILED,
+            progress=100,
+            created_at=created_at,
+        )
+        failed.missing_components.append("travel_plan")
+        failed.user_visible_warnings = [f"规划任务失败：{exc}"]
+        save_async_job_response(failed)
+
+
+def _intent_parser_error_response(request: Request, exc: IntentParserError) -> JSONResponse:
+    questions = exc.follow_up_questions or ["请补充更明确的日期、地点或交通方式限制。"]
+    user_message = f"{exc} {' '.join(questions)}"
+    details = {
+        "missing_fields": exc.missing_fields,
+        "follow_up_questions": questions,
+        "llm_validation_result": exc.llm_validation_result.model_dump(mode="json") if exc.llm_validation_result else None,
+    }
+    return error_payload(
+        request,
+        "PARSE_NEEDS_INPUT",
+        str(exc),
+        user_message,
+        400,
+        details=details,
+        retryable=False,
+    )
 
 
 @app.get("/api/travel/plans/{plan_id}", response_model=GetTravelPlanResponse)
@@ -175,11 +412,16 @@ def get_travel_plan(plan_id: str, request: Request) -> GetTravelPlanResponse:
 @app.post("/api/travel/recalculate", response_model=RecalculateResponse)
 def recalculate(body: RecalculateRequest, request: Request) -> RecalculateResponse:
     ctx = get_context(request)
+    cached = get_recalculate_response(body.plan_id, body.idempotency_key)
+    if cached is not None:
+        return cached
     plan = get_plan(body.plan_id)
     if plan is None:
         raise HTTPException(status_code=404, detail="方案不存在，无法重算。")
     try:
-        return recalculate_plan(plan, body, ctx)
+        response = recalculate_plan(plan, body, ctx)
+        save_recalculate_response(response)
+        return response
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -199,3 +441,32 @@ def booking_redirect(body: BookingRedirectRequest, request: Request) -> BookingR
         redirect=redirect,
         generated_at=now_timepoint(),
     )
+
+
+@app.post("/api/feedback", response_model=FeedbackResponse)
+def submit_feedback(body: FeedbackRequest) -> FeedbackResponse:
+    sensitive_terms = ("password", "passwd", "cookie", "token", "支付", "密码", "身份证", "账号", "银行卡")
+    if body.message and any(term in body.message.lower() for term in sensitive_terms):
+        raise HTTPException(status_code=400, detail="反馈内容不能包含第三方账号、支付、实名或凭证信息。")
+    response = FeedbackResponse(
+        feedback_id=f"fb_{uuid4().hex[:12]}",
+        request_id=body.request_id,
+        trace_id=body.trace_id,
+        correlation_id=body.correlation_id,
+        plan_id=body.plan_id,
+        source_id=body.source_id,
+        category=body.category,
+        category_count=0,
+        received_at=now_timepoint(),
+    )
+    return save_feedback(response)
+
+
+@app.post("/api/events", response_model=AppEventResponse)
+def submit_app_event(body: AppEventRequest) -> AppEventResponse:
+    forbidden = ("password", "passwd", "account", "cookie", "token", "payment", "real_name", "支付", "密码", "身份证", "银行卡", "账号", "实名")
+    metadata_text = str(body.metadata).lower()
+    if any(term in metadata_text for term in forbidden):
+        raise HTTPException(status_code=400, detail="事件 metadata 不能包含账号、支付、实名或凭证信息。")
+    record_app_event(body.event_type, request_id=body.request_id, trace_id=body.trace_id, plan_id=body.plan_id, metadata=body.metadata)
+    return AppEventResponse(event_id=f"evt_{uuid4().hex[:12]}", event_type=body.event_type, accepted=True, received_at=now_timepoint())

@@ -1,0 +1,75 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "1.15",
+      "default": "1.15",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "event_type": {
+      "enum": [
+        "INPUT_SUBMITTED",
+        "PLANNING_SUCCESS",
+        "PLANNING_PARTIAL",
+        "RECOMMENDATION_CLICK",
+        "REDIRECT_CLICK",
+        "FEEDBACK_SUBMITTED",
+        "RECENT_PLAN_VIEWED",
+        "FAVORITE_TOGGLED",
+        "TRIP_REMINDER_TOGGLED",
+        "PRICE_STATUS_WATCH_TOGGLED",
+        "PREFERENCE_UPDATED"
+      ],
+      "title": "Event Type",
+      "type": "string"
+    },
+    "request_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Request Id"
+    },
+    "trace_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Trace Id"
+    },
+    "plan_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Plan Id"
+    },
+    "metadata": {
+      "title": "Metadata",
+      "type": "object"
+    }
+  },
+  "required": [
+    "event_type"
+  ],
+  "title": "AppEventRequest",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "x-schema-version": "1.15"
+}

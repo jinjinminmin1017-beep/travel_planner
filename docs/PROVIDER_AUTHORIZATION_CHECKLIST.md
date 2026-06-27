@@ -69,39 +69,38 @@ AMADEUS_BASE_URL=https://api.amadeus.com
 5. 不要求本项目保存第三方账号、密码、cookie、token 或实名乘客信息。
 6. 不要求本项目执行登录、占票、下单、支付或抢票。
 
-当前通用 Adapter 期望的接口：
+当前 `rail_authorized_partner` Adapter 已按聚合数据火车票查询 API（接口 ID 817）实现：
 
 ```text
-GET {RAIL_PARTNER_BASE_URL}/rail/offers
-Authorization: Bearer {RAIL_PARTNER_API_KEY}
+GET {RAIL_PARTNER_BASE_URL}
 
 query:
-  train_number
-  origin_station
-  destination_station
-  departure_date
+  key={RAIL_PARTNER_API_KEY}
+  search_type=1
+  departure_station=<出发站中文名>
+  arrival_station=<到达站中文名>
+  date=<yyyy-MM-dd>
+  filter=<all|G|D|Z|T|K|O>
+  enable_booking=2
+  departure_time_range=
 ```
 
-响应至少需要：
+聚合数据响应映射：
 
 ```json
 {
-  "data": [
+  "reason": "success",
+  "error_code": 0,
+  "result": [
     {
-      "train_number": "G123",
-      "origin_station": "上海虹桥",
-      "destination_station": "青岛北",
-      "departure_at": "2026-06-20T09:00:00+08:00",
-      "arrival_at": "2026-06-20T15:00:00+08:00",
-      "stop_sequence": ["上海虹桥", "青岛北"],
-      "seat_options": [
-        {
-          "option_id": "second_class",
-          "seat_type": "二等座",
-          "price": "560.00",
-          "availability": "AVAILABLE",
-          "source_option_version": "partner-version"
-        }
+      "train_no": "G123",
+      "departure_station": "上海虹桥",
+      "arrival_station": "青岛北",
+      "departure_time": "09:00",
+      "arrival_time": "15:00",
+      "duration": "06:00",
+      "prices": [
+        {"seat_type_code": "O", "seat_name": "二等座", "price": 560, "num": "有"}
       ]
     }
   ]
@@ -116,6 +115,13 @@ TRAVEL_SOURCE_RAIL_AUTHORIZED_PARTNER_LICENSE_STATUS=APPROVED
 TRAVEL_SOURCE_RAIL_AUTHORIZED_PARTNER_QPS_LIMIT=<contract limit>
 RAIL_PARTNER_BASE_URL=<authorized partner API base URL>
 RAIL_PARTNER_API_KEY=<authorized partner API key>
+```
+
+聚合数据 817 的默认 URL：
+
+```dotenv
+RAIL_PARTNER_BASE_URL=https://apis.juhe.cn/fapigw/train/query
+RAIL_PARTNER_API_KEY=<Juhe API key>
 ```
 
 ## 验证

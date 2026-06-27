@@ -57,6 +57,13 @@ class FlightProviderSearchResult:
 
 
 @dataclass(frozen=True)
+class FlightPriceResult:
+    offer: FlightOffer | None
+    attempted_source_ids: list[str]
+    failure_message: str | None = None
+
+
+@dataclass(frozen=True)
 class FlightStateRequest:
     lamin: float
     lomin: float
@@ -104,7 +111,6 @@ def flight_data_source_metadata(source_id: str, source_name: str) -> DataSourceM
         license_status="APPROVED",
         commercial_allowed=False,
         fetched_at=now_timepoint(),
-        update_frequency="REALTIME_API",
         cacheable=True,
     )
 
@@ -260,6 +266,21 @@ def build_enabled_flight_providers(environment: str | None = None) -> list[Fligh
     return providers
 
 
+def build_enabled_flight_price_providers(environment: str | None = None) -> list[FlightOfferProvider]:
+    configs = {config.source_id: config for config in load_data_source_configs(environment)}
+    providers: list[FlightOfferProvider] = []
+    price_config = configs.get("amadeus_flight_price")
+    if price_config and price_config.enabled and price_config.license_status == "APPROVED" and _has_amadeus_credentials():
+        providers.append(
+            AmadeusFlightProvider(
+                _first_env("AMADEUS_CLIENT_ID", "AMADEUS_API_KEY"),
+                _first_env("AMADEUS_CLIENT_SECRET", "AMADEUS_API_SECRET"),
+                base_url=os.getenv("AMADEUS_BASE_URL") or "https://test.api.amadeus.com",
+            )
+        )
+    return providers
+
+
 def build_enabled_flight_state_providers(environment: str | None = None) -> list[FlightStateProvider]:
     configs = {config.source_id: config for config in load_data_source_configs(environment)}
     config = configs.get("opensky_states")
@@ -275,7 +296,10 @@ def search_flight_offers_with_enabled_provider(request: FlightSearchRequest, env
 def search_flight_offers_with_enabled_provider_result(request: FlightSearchRequest, environment: str | None = None) -> FlightProviderSearchResult:
     attempted_source_ids: list[str] = []
     failure_messages: list[str] = []
-    for provider in build_enabled_flight_providers(environment):
+    providers = build_enabled_flight_providers(environment)
+    if not providers:
+        return FlightProviderSearchResult(offers=[], attempted_source_ids=["amadeus_flight_offers"], failure_message="no enabled flight offer provider")
+    for provider in providers:
         attempted_source_ids.append(provider.source_id)
         try:
             offers = provider.search_offers(request)
@@ -286,6 +310,22 @@ def search_flight_offers_with_enabled_provider_result(request: FlightSearchReque
             failure_messages.append(f"{provider.source_id}: {exc}")
             continue
     return FlightProviderSearchResult(offers=[], attempted_source_ids=attempted_source_ids, failure_message="; ".join(failure_messages) or None)
+
+
+def price_flight_offer_with_enabled_provider_result(offer: FlightOffer, environment: str | None = None) -> FlightPriceResult:
+    attempted_source_ids: list[str] = []
+    failure_messages: list[str] = []
+    if not offer.raw_offer:
+        return FlightPriceResult(offer=None, attempted_source_ids=["amadeus_flight_price"], failure_message="flight offer has no raw payload for price confirmation")
+    for provider in build_enabled_flight_price_providers(environment):
+        attempted_source_ids.append("amadeus_flight_price")
+        try:
+            priced = provider.price_offer(offer.raw_offer)
+            return FlightPriceResult(offer=priced, attempted_source_ids=attempted_source_ids)
+        except (httpx.HTTPError, FlightProviderError, ValueError) as exc:
+            failure_messages.append(f"amadeus_flight_price: {exc}")
+            continue
+    return FlightPriceResult(offer=None, attempted_source_ids=attempted_source_ids or ["amadeus_flight_price"], failure_message="; ".join(failure_messages) or "no enabled flight price provider")
 
 
 def get_flight_states_with_enabled_provider(request: FlightStateRequest, environment: str | None = None) -> list[FlightState]:

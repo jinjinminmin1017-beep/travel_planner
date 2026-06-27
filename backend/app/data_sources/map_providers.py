@@ -59,7 +59,6 @@ def data_source_metadata(source_id: str, source_name: str) -> DataSourceMetadata
         license_status="APPROVED",
         commercial_allowed=False,
         fetched_at=now_timepoint(),
-        update_frequency="REALTIME_API",
         cacheable=True,
     )
 

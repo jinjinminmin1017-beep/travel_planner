@@ -1,0 +1,58 @@
+name: Product CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  backend-contract-and-tests:
+    runs-on: ubuntu-latest
+    env:
+      APP_ENV: TEST
+      TRAVEL_PERSISTENCE_BACKEND: sqlite
+      TRAVEL_SQLITE_PATH: logs/ci.sqlite3
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install backend dependencies
+        run: python -m pip install -r backend/requirements.txt
+
+      - name: Export schemas
+        run: python scripts/export_schemas.py
+
+      - name: Check schema diff
+        run: git diff --exit-code -- schemas
+
+      - name: Run backend tests
+        run: python -m pytest backend/app/tests
+
+  app-typecheck-and-export:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Typecheck app
+        working-directory: frontend
+        run: npm run typecheck
+
+      - name: Export Expo app
+        working-directory: frontend
+        env:
+          EXPO_PUBLIC_API_BASE_URL: https://staging-api.example.invalid
+        run: npm run build

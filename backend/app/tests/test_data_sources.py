@@ -1,6 +1,10 @@
 import os
 
-from app.data_sources.config_loader import load_data_source_configs, load_project_env, runtime_statuses
+import pytest
+
+from app.data_sources.config_loader import load_data_source_configs, load_project_env, runtime_statuses, validate_production_data_source_configs
+from app.models.schemas import DataSourceConfig
+from scripts.check_real_api_config import validate_env_example_sync, validate_public_tier
 
 
 PLANNED_REAL_SOURCE_IDS = {
@@ -26,6 +30,47 @@ DEFAULT_ENABLED_REAL_SOURCE_IDS = {
 OPTIONAL_DISABLED_REAL_SOURCE_IDS = {
     "baidu_uri_redirect",
 }
+
+
+@pytest.fixture(autouse=True)
+def clear_local_real_source_env(monkeypatch):
+    monkeypatch.setattr("app.data_sources.config_loader._ENV_LOADED", True)
+    for source_id in PLANNED_REAL_SOURCE_IDS | DEFAULT_ENABLED_REAL_SOURCE_IDS | OPTIONAL_DISABLED_REAL_SOURCE_IDS:
+        prefix = f"TRAVEL_SOURCE_{source_id.upper()}"
+        for suffix in ["ENABLED", "LICENSE_STATUS", "QPS_LIMIT", "COMMERCIAL_ALLOWED"]:
+            monkeypatch.delenv(f"{prefix}_{suffix}", raising=False)
+    for key in [
+        "TRAVEL_SOURCE_AMAP_ROUTE_ENABLED",
+        "TRAVEL_SOURCE_AMAP_ROUTE_LICENSE_STATUS",
+        "TRAVEL_SOURCE_AMAP_ROUTE_QPS_LIMIT",
+        "AMAP_WEB_SERVICE_KEY",
+        "AMAP_API_KEY",
+        "TRAVEL_SOURCE_BAIDU_MAP_ROUTE_ENABLED",
+        "TRAVEL_SOURCE_BAIDU_MAP_ROUTE_LICENSE_STATUS",
+        "BAIDU_MAP_AK",
+        "BAIDU_MAP_API_KEY",
+        "TRAVEL_SOURCE_RAIL_AUTHORIZED_PARTNER_ENABLED",
+        "TRAVEL_SOURCE_RAIL_AUTHORIZED_PARTNER_LICENSE_STATUS",
+        "TRAVEL_SOURCE_RAIL_AUTHORIZED_PARTNER_QPS_LIMIT",
+        "RAIL_PARTNER_API_KEY",
+        "RAIL_PARTNER_BASE_URL",
+        "TRAVEL_SOURCE_AMADEUS_FLIGHT_OFFERS_ENABLED",
+        "TRAVEL_SOURCE_AMADEUS_FLIGHT_OFFERS_LICENSE_STATUS",
+        "AMADEUS_CLIENT_ID",
+        "AMADEUS_CLIENT_SECRET",
+        "AMADEUS_API_KEY",
+        "TRAVEL_SOURCE_AMADEUS_FLIGHT_PRICE_ENABLED",
+        "TRAVEL_SOURCE_AMADEUS_FLIGHT_PRICE_LICENSE_STATUS",
+        "TRAVEL_SOURCE_REAL_LLM_ENABLED",
+        "TRAVEL_SOURCE_REAL_LLM_LICENSE_STATUS",
+        "TRAVEL_SOURCE_REAL_LLM_QPS_LIMIT",
+        "OPENAI_API_KEY",
+        "LLM_API_KEY",
+        "VARIFLIGHT_API_KEY",
+        "OTA_PARTNER_ID",
+        "OTA_PARTNER_BASE_URL",
+    ]:
+        monkeypatch.delenv(key, raising=False)
 
 
 def test_planned_real_sources_are_registered_but_disabled_in_dev_and_test():
@@ -62,36 +107,35 @@ def test_disabled_real_sources_are_reported_as_down_runtime_statuses():
     for source_id in PLANNED_REAL_SOURCE_IDS:
         status = statuses[source_id]
         assert status.enabled is False
-        assert status.status == "DOWN"
+        assert status.health_status == "DISABLED"
         assert status.last_success_at is None
     for source_id in DEFAULT_ENABLED_REAL_SOURCE_IDS:
         status = statuses[source_id]
         assert status.enabled is True
-        assert status.status == "OK"
+        assert status.health_status == "OK"
         assert status.last_success_at is not None
     for source_id in OPTIONAL_DISABLED_REAL_SOURCE_IDS:
         status = statuses[source_id]
         assert status.enabled is False
-        assert status.status == "DOWN"
+        assert status.health_status == "DISABLED"
 
 
 def test_enabled_real_source_without_approval_or_key_is_degraded(monkeypatch):
     monkeypatch.setenv("TRAVEL_SOURCE_AMAP_ROUTE_ENABLED", "true")
     status = {item.source_id: item for item in runtime_statuses("DEV")}["amap_route"]
     assert status.enabled is True
-    assert status.status == "DEGRADED"
-    assert status.degraded is True
+    assert status.health_status == "DEGRADED"
     assert status.degraded_reason == "required API credential environment variable is missing"
 
     monkeypatch.setenv("AMAP_WEB_SERVICE_KEY", "test-key")
     status = {item.source_id: item for item in runtime_statuses("DEV")}["amap_route"]
-    assert status.status == "DEGRADED"
+    assert status.health_status == "DEGRADED"
     assert status.degraded_reason == "data source license is not approved"
 
     monkeypatch.setenv("TRAVEL_SOURCE_AMAP_ROUTE_LICENSE_STATUS", "APPROVED")
     status = {item.source_id: item for item in runtime_statuses("DEV")}["amap_route"]
-    assert status.status == "OK"
-    assert status.degraded is False
+    assert status.health_status == "OK"
+    assert status.degraded_reason is None
 
 
 def test_project_env_loader_reads_local_env_file_without_overriding_existing_values(tmp_path, monkeypatch):
@@ -119,3 +163,31 @@ def test_project_env_loader_reads_local_env_file_without_overriding_existing_val
 
 def test_prod_has_no_sources_until_explicit_approval():
     assert load_data_source_configs("PROD") == []
+
+
+def test_env_example_is_synced_with_dev_data_source_config():
+    assert validate_env_example_sync() == []
+
+
+def test_ci_public_provider_config_tier_is_ready_without_secrets():
+    assert validate_public_tier() == []
+
+
+def test_production_rejects_enabled_unapproved_data_source():
+    config = DataSourceConfig(
+        source_id="amap_route",
+        source_name="AMap Route Planning API",
+        source_type="MAP",
+        authority_level="A",
+        environment="PROD",
+        license_status="PENDING_REVIEW",
+        commercial_allowed=False,
+        enabled=True,
+        qps_limit=1,
+        sla_level="PENDING_REVIEW",
+        fallback_source_id=None,
+        last_checked_at=None,
+    )
+
+    with pytest.raises(ValueError, match="not production approved"):
+        validate_production_data_source_configs([config])

@@ -7,6 +7,7 @@ from app.models.schemas import (
     ErrorResponse,
     LLMRecommendationOutput,
     Money,
+    PlanningStatus,
     RecommendationSlot,
     RecommendationSlotStatus,
     RecommendationType,
@@ -16,6 +17,10 @@ from app.models.schemas import (
     SourceFailureClass,
     SourceFailureHandlingStrategy,
     TimePoint,
+    TravelHardConstraints,
+    TravelPlanResponse,
+    TravelRequest,
+    TravelSoftPreferences,
     money,
     now_timepoint,
 )
@@ -32,10 +37,10 @@ def test_money_rejects_float_and_unknown_field():
 
 
 def test_timepoint_requires_datetime_shape():
-    tp = TimePoint(datetime=datetime.fromisoformat("2026-05-21T09:00:00+08:00"))
+    tp = TimePoint(datetime=datetime.fromisoformat("2026-05-21T09:00:00+08:00"), timezone="Asia/Shanghai")
     assert tp.timezone == "Asia/Shanghai"
     with pytest.raises(ValidationError):
-        TimePoint(datetime="not-a-date")
+        TimePoint(datetime="not-a-date", timezone="Asia/Shanghai")
 
 
 def test_error_response_required_fields_and_extra_forbidden():
@@ -69,11 +74,15 @@ def test_source_failure_has_failure_id_and_trace_fields():
         trace_id="trace_1",
         correlation_id="corr_1",
         source_id="rail_authorized_partner",
+        adapter_name="AuthorizedRailPartnerProvider",
+        handling_strategy=SourceFailureHandlingStrategy.PARTIAL_RESULT,
+        error_code=None,
+        retry_count=0,
         source_used_id="rail_authorized_partner",
         fallback_source_id=None,
         fallback_reason=None,
         fallback_used=False,
-        failure_class=SourceFailureClass.CORE_FACT,
+        failure_class=SourceFailureClass.CORE_FACT_FAILURE,
         message="missing inventory",
         final_handling_strategy=SourceFailureHandlingStrategy.PARTIAL_RESULT,
         impacted_plan_types=["DIRECT_RAIL"],
@@ -112,13 +121,66 @@ def test_recalculate_request_change_type_must_match_option_type():
             request_id="req_1",
             idempotency_key="idem_1",
             plan_id="plan_1",
-            change_type="RAIL_SEAT",
+            change_type="SEAT_TYPE",
             target_segment_id="seg_1",
             selected_option=SelectedOption(
-                option_type="FLIGHT_CABIN",
+                option_type="CABIN",
                 option_id="cabin_business",
                 option_value="商务舱",
                 source_option_version="provider_test_v1",
             ),
-            recalculate_scope="PLAN_TOTAL",
+            recalculate_scope="PLAN_ONLY",
         )
+
+
+def test_travel_plan_response_supports_running_and_failed_status_examples():
+    travel_request = TravelRequest(
+        request_id="req_status_examples",
+        raw_user_input="我 2026 年 5 月 21 日从上海到青岛",
+        origin_text="上海",
+        destination_text="青岛",
+        travel_date=datetime(2026, 5, 21).date(),
+        preferences=[RecommendationType.BALANCED],
+        hard_constraints=TravelHardConstraints(),
+        soft_preferences=TravelSoftPreferences(),
+    )
+    common = dict(
+        request_id="req_status_examples",
+        trace_id="trace_status_examples",
+        correlation_id="corr_status_examples",
+        idempotency_key="idem_status_examples",
+        travel_request=travel_request,
+        destination_presentation=None,
+        plans=[],
+        recommendation_result=None,
+        source_failures=[],
+        blocked_plan_types=[],
+        missing_plan_explanations=[],
+        generated_at=now_timepoint(),
+    )
+
+    running = TravelPlanResponse(
+        **common,
+        planning_status=PlanningStatus.RUNNING,
+        progress=35,
+        missing_components=[],
+        user_visible_warnings=["正在等待地图、铁路和航班数据源返回。"],
+        async_job={
+            "job_id": "job_running",
+            "job_status": "RUNNING",
+            "created_at": now_timepoint(),
+            "updated_at": now_timepoint(),
+            "polling_url": "/api/travel/jobs/job_running",
+        },
+    )
+    failed = TravelPlanResponse(
+        **common,
+        planning_status=PlanningStatus.FAILED,
+        progress=100,
+        missing_components=["travel_plan"],
+        user_visible_warnings=["核心事实缺失，当前无法生成可用方案。"],
+        async_job=None,
+    )
+
+    assert running.planning_status == PlanningStatus.RUNNING
+    assert failed.planning_status == PlanningStatus.FAILED

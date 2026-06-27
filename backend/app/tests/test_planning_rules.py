@@ -1,18 +1,13 @@
+from datetime import date, datetime
+
+from app.data_sources.flight_providers import FlightOffer, FlightOfferSegment, FlightProviderSearchResult, flight_data_source_metadata
+from app.data_sources.rail_providers import RailOffer, RailProviderSearchResult, rail_data_source_metadata
 from app.core.context import RequestContext
-from app.models.schemas import (
-    LocalTransferSegment,
-    RecommendationEligibility,
-    RiskLevel,
-    TicketEnhancementGrade,
-)
+from app.models.schemas import AirportCandidate, GeoPoint, LocalTransferSegment, PlanType, RecommendationType, SeatOption, StationCandidate, TravelHardConstraints, TravelRequest, TravelSoftPreferences, money
 from app.services.intent_parser import parse_travel_request
+from app.services.location_resolver import INTERNAL_LOCATION_SOURCE, PlanningRouteNodes
 from app.services.planner import build_plans
-from app.services.planning_rules import (
-    assert_option_available,
-    blocked_or_backup_plans,
-    candidate_plans_for_recommendation,
-    has_auxiliary_flight_gap,
-)
+from app.services.planning_rules import assert_option_available, candidate_plans_for_recommendation
 
 
 def _request():
@@ -31,80 +26,298 @@ def _beijing_guangzhou_request():
     )
 
 
-def test_candidate_filter_excludes_blocked_and_backup_ticket_plans():
+def _shanghai_wuhan_request():
+    ctx = RequestContext("req_sw", "trace_sw", "corr_sw", "idem_sw")
+    return parse_travel_request(
+        "6.26号上午，从上海静安寺到武汉天地",
+        ctx,
+    )
+
+
+def _assert_dynamic_provider_only(plans):
+    plan_ids = {plan.plan_id for plan in plans}
+    assert plan_ids
+    assert all(plan_id.startswith(("plan_rail_direct_dynamic", "plan_flight_dynamic", "plan_rail_transfer_dynamic", "plan_flight_rail_mixed_dynamic")) for plan_id in plan_ids)
+    assert not any(plan_id.endswith("_shqd") or plan_id.endswith("_bg") for plan_id in plan_ids)
+    assert not any("ticket" in plan_id or "buy_short" in plan_id for plan_id in plan_ids)
+
+
+def _station(name: str, city: str) -> StationCandidate:
+    return StationCandidate(
+        station_id=f"station_{name}",
+        station_name=name,
+        city_name=city,
+        location=GeoPoint(name=name, latitude=30.0, longitude=120.0),
+        estimated_transfer_duration_minutes=20,
+        estimated_transfer_cost=money(1000, estimated=True),
+        ranking_reasons=["test"],
+        data_source=INTERNAL_LOCATION_SOURCE,
+    )
+
+
+def _airport(name: str, city: str) -> AirportCandidate:
+    return AirportCandidate(
+        airport_id=f"airport_{name}",
+        airport_name=name,
+        city_name=city,
+        location=GeoPoint(name=name, latitude=30.0, longitude=120.0),
+        estimated_transfer_duration_minutes=40,
+        estimated_transfer_cost=money(5000, estimated=True),
+        ranking_reasons=["test"],
+        data_source=INTERNAL_LOCATION_SOURCE,
+    )
+
+
+def _rail_offer(origin: str, destination: str, day: date, dep_h: int, arr_h: int) -> RailOffer:
+    source = rail_data_source_metadata("rail_authorized_partner", "Juhe Train Query API")
+    departure = datetime.combine(day, datetime.min.time()).replace(hour=dep_h)
+    arrival = datetime.combine(day, datetime.min.time()).replace(hour=arr_h)
+    return RailOffer(
+        train_number=f"G{dep_h}{arr_h}",
+        origin_station=origin,
+        destination_station=destination,
+        departure_at=departure,
+        arrival_at=arrival,
+        duration_minutes=int((arrival - departure).total_seconds() // 60),
+        stop_sequence=[origin, destination],
+        seat_options=[SeatOption(option_id="seat_second", seat_type="Second", price=money(30000), availability="AVAILABLE", source_option_version="test", data_source=source)],
+        data_source=source,
+    )
+
+
+def _flight_offer(origin_iata: str, destination_iata: str, day: date, dep_h: int, arr_h: int) -> FlightOffer:
+    source = flight_data_source_metadata("amadeus_flight_offers", "Amadeus Flight Offers Search API")
+    departure = datetime.combine(day, datetime.min.time()).replace(hour=dep_h)
+    arrival = datetime.combine(day, datetime.min.time()).replace(hour=arr_h)
+    return FlightOffer(
+        offer_id=f"{origin_iata}_{destination_iata}",
+        source="TEST",
+        total_price=money(60000),
+        currency="CNY",
+        segments=[FlightOfferSegment(carrier_code="MU", flight_number="1", origin_iata=origin_iata, destination_iata=destination_iata, departure_at=departure, arrival_at=arrival, duration=None)],
+        validating_airline_codes=["MU"],
+        raw_offer={"id": "test"},
+        data_source=source,
+    )
+
+
+def test_candidate_filter_only_uses_dynamic_provider_plans():
     plans, *_ = build_plans(_request())
     candidate_ids = {plan.plan_id for plan in candidate_plans_for_recommendation(plans)}
+
+    assert candidate_ids
+    assert all(plan_id.startswith(("plan_rail_direct_dynamic", "plan_flight_dynamic", "plan_rail_transfer_dynamic", "plan_flight_rail_mixed_dynamic")) for plan_id in candidate_ids)
     assert "plan_blocked_shqd" not in candidate_ids
     assert "plan_ticket_a_shqd" not in candidate_ids
     assert "plan_buy_short_shqd" not in candidate_ids
-    assert "plan_ticket_s_shqd" in candidate_ids
+    assert "plan_ticket_s_shqd" not in candidate_ids
 
 
-def test_non_sample_route_generates_candidate_families_without_ticket_specific_backups():
-    plans, failures, missing, blocked_types, *_ = build_plans(_beijing_guangzhou_request())
-    plan_ids = {plan.plan_id for plan in plans}
+def test_non_sample_route_uses_dynamic_direct_rail_without_old_families():
+    plans, failures, missing, blocked_types, explanations, warnings = build_plans(_beijing_guangzhou_request())
     candidate_ids = {plan.plan_id for plan in candidate_plans_for_recommendation(plans)}
 
-    assert plan_ids == {
-        "plan_rail_direct_bg",
-        "plan_rail_transfer_bg",
-        "plan_flight_direct_bg",
-        "plan_flight_transfer_bg",
-        "plan_mixed_bg",
-    }
-    assert candidate_ids == plan_ids
+    _assert_dynamic_provider_only(plans)
+    assert candidate_ids == {plan.plan_id for plan in plans}
+    assert len(candidate_ids) <= 15
+    assert failures == []
     assert missing == []
-    assert blocked_types == []
-    assert failures
+    assert PlanType.TRANSFER_RAIL in blocked_types
+    assert PlanType.MULTI_TRANSFER_RAIL in blocked_types
+    assert PlanType.DIRECT_FLIGHT not in blocked_types
+    assert any(plan.plan_type == PlanType.DIRECT_FLIGHT for plan in plans)
+    assert any(item.reason_code == "DYNAMIC_PLANNER_CAPABILITY_GAP" for item in explanations)
+    assert any("old templates" in warning for warning in warnings)
 
-    rail_direct = next(plan for plan in plans if plan.plan_id == "plan_rail_direct_bg")
+    rail_direct = plans[0]
     rail_segment = next(segment for segment in rail_direct.segments if hasattr(segment, "origin_station"))
     assert rail_segment.origin_station == "北京西"
     assert rail_segment.destination_station == "广州南"
 
 
-def test_backup_and_blocked_plans_are_still_explainable():
+def test_wuhan_route_uses_dynamic_direct_rail_candidates():
+    plans, failures, missing, _, _, _ = build_plans(_shanghai_wuhan_request())
+
+    _assert_dynamic_provider_only(plans)
+    assert failures == []
+    assert "route_coverage" not in missing
+    rail_segment = next(segment for segment in plans[0].segments if hasattr(segment, "origin_station"))
+    assert rail_segment.origin_station == "上海虹桥"
+    assert rail_segment.destination_station == "武汉"
+
+
+def test_dynamic_transfer_rail_planner_builds_connectable_two_leg_plan(monkeypatch):
+    day = date(2026, 6, 27)
+    route_nodes = PlanningRouteNodes(
+        route_key="OriginCity_DestCity",
+        supported=False,
+        city_origin="OriginCity",
+        city_destination="DestCity",
+        start_station="OriginStation",
+        end_station="DestStation",
+        start_airport="",
+        end_airport="",
+        rail_train="",
+        flight_no="",
+        station_candidates=[_station("OriginStation", "OriginCity"), _station("DestStation", "DestCity")],
+        airport_candidates=[],
+    )
+    monkeypatch.setattr("app.services.planner.planning_nodes_for_request", lambda origin, destination: route_nodes)
+    monkeypatch.setattr("app.services.planner.resolve_location_city", lambda place: "OriginCity" if place == "origin" else "DestCity")
+    monkeypatch.setattr("app.services.planner.transfer_station_candidates_between", lambda origin_city, destination_city, limit=6: [_station("HubStation", "HubCity")])
+    monkeypatch.setattr("app.services.local_transfer_engine.resolve_location_point", lambda place: GeoPoint(name=place, latitude=30.0, longitude=120.0))
+    monkeypatch.setattr("app.services.local_transfer_engine.resolve_location_city", lambda place: "TestCity")
+    monkeypatch.setattr("app.services.local_transfer_engine.nearby_transit_stop", lambda place, mode, side: f"{place}_{mode}_stop")
+
+    def fake_rail(request, environment=None):
+        if request.origin_station == "OriginStation" and request.destination_station == "HubStation":
+            return RailProviderSearchResult(offers=[_rail_offer("OriginStation", "HubStation", day, 8, 10)], attempted_source_ids=["rail_authorized_partner"])
+        if request.origin_station == "HubStation" and request.destination_station == "DestStation":
+            return RailProviderSearchResult(offers=[_rail_offer("HubStation", "DestStation", day, 12, 15)], attempted_source_ids=["rail_authorized_partner"])
+        return RailProviderSearchResult(offers=[], attempted_source_ids=["rail_authorized_partner"], failure_message="empty response")
+
+    monkeypatch.setattr("app.services.planner.search_rail_offers_with_enabled_provider_result", fake_rail)
+    request = TravelRequest(
+        request_id="req_transfer_rail",
+        raw_user_input="origin to destination",
+        origin_text="origin",
+        destination_text="destination",
+        travel_date=day,
+        preferences=[RecommendationType.BALANCED],
+        hard_constraints=TravelHardConstraints(),
+        soft_preferences=TravelSoftPreferences(),
+    )
+
+    plans, *_ = build_plans(request)
+
+    assert any(plan.plan_type == PlanType.TRANSFER_RAIL for plan in plans)
+
+
+def test_dynamic_flight_rail_mixed_planner_builds_connectable_plan(monkeypatch):
+    day = date(2026, 6, 27)
+    origin_airport = _airport("OriginAirport", "OriginCity")
+    destination_airport = _airport("DestAirport", "DestCity")
+    hub_airport = _airport("HubAirport", "HubCity")
+    route_nodes = PlanningRouteNodes(
+        route_key="OriginCity_DestCity",
+        supported=False,
+        city_origin="OriginCity",
+        city_destination="DestCity",
+        start_station="OriginStation",
+        end_station="DestStation",
+        start_airport="OriginAirport",
+        end_airport="DestAirport",
+        rail_train="",
+        flight_no="",
+        station_candidates=[_station("OriginStation", "OriginCity"), _station("DestStation", "DestCity")],
+        airport_candidates=[origin_airport, destination_airport],
+    )
+    monkeypatch.setattr("app.services.planner.planning_nodes_for_request", lambda origin, destination: route_nodes)
+    monkeypatch.setattr("app.services.planner.resolve_location_city", lambda place: "OriginCity" if place == "origin" else "DestCity")
+    monkeypatch.setattr("app.services.planner.transfer_station_candidates_between", lambda origin_city, destination_city, limit=6: [_station("HubStation", "HubCity")])
+    monkeypatch.setattr("app.services.planner.airport_candidates_for_city", lambda place, limit=2: [hub_airport] if place == "HubCity" else [])
+    monkeypatch.setattr("app.services.local_transfer_engine.resolve_location_point", lambda place: GeoPoint(name=place, latitude=30.0, longitude=120.0))
+    monkeypatch.setattr("app.services.local_transfer_engine.resolve_location_city", lambda place: "TestCity")
+    monkeypatch.setattr("app.services.local_transfer_engine.nearby_transit_stop", lambda place, mode, side: f"{place}_{mode}_stop")
+    monkeypatch.setattr(
+        "app.services.planner.airport_iata_for_candidate",
+        lambda candidate: {"OriginAirport": "OOO", "HubAirport": "HHH", "DestAirport": "DDD"}.get(candidate.airport_name),
+    )
+
+    def fake_rail(request, environment=None):
+        if request.origin_station == "OriginStation" and request.destination_station == "HubStation":
+            return RailProviderSearchResult(offers=[_rail_offer("OriginStation", "HubStation", day, 8, 10)], attempted_source_ids=["rail_authorized_partner"])
+        return RailProviderSearchResult(offers=[], attempted_source_ids=["rail_authorized_partner"], failure_message="empty response")
+
+    def fake_flight(request, environment=None):
+        if request.origin_iata == "HHH" and request.destination_iata == "DDD":
+            return FlightProviderSearchResult(offers=[_flight_offer("HHH", "DDD", day, 13, 15)], attempted_source_ids=["amadeus_flight_offers"])
+        return FlightProviderSearchResult(offers=[], attempted_source_ids=["amadeus_flight_offers"], failure_message="empty response")
+
+    monkeypatch.setattr("app.services.planner.search_rail_offers_with_enabled_provider_result", fake_rail)
+    monkeypatch.setattr("app.services.planner.search_flight_offers_with_enabled_provider_result", fake_flight)
+    request = TravelRequest(
+        request_id="req_mixed",
+        raw_user_input="origin to destination",
+        origin_text="origin",
+        destination_text="destination",
+        travel_date=day,
+        preferences=[RecommendationType.BALANCED],
+        hard_constraints=TravelHardConstraints(),
+        soft_preferences=TravelSoftPreferences(),
+    )
+
+    plans, *_ = build_plans(request)
+
+    assert any(plan.plan_type == PlanType.FLIGHT_RAIL_MIXED for plan in plans)
+
+
+def test_missing_transport_node_catalog_is_not_reported_as_route_coverage(monkeypatch):
+    route_nodes = PlanningRouteNodes(
+        route_key="上海_虚构城",
+        supported=False,
+        city_origin="上海",
+        city_destination="虚构城",
+        start_station="上海虹桥",
+        end_station="",
+        start_airport="",
+        end_airport="",
+        rail_train="",
+        flight_no="",
+        station_candidates=[
+            StationCandidate(
+                station_id="sha_hongqiao",
+                station_name="上海虹桥",
+                city_name="上海",
+                location=GeoPoint(name="上海虹桥站", latitude=31.2, longitude=121.3269),
+                estimated_transfer_duration_minutes=20,
+                estimated_transfer_cost=money(600, estimated=True),
+                ranking_reasons=["测试候选"],
+                data_source=INTERNAL_LOCATION_SOURCE,
+            )
+        ],
+        airport_candidates=[],
+    )
+    monkeypatch.setattr("app.services.planner.planning_nodes_for_request", lambda origin, destination: route_nodes)
+    monkeypatch.setattr("app.services.planner.resolve_location_city", lambda place: "上海" if place == "上海" else "虚构城")
+    travel_request = TravelRequest(
+        request_id="req_missing_catalog",
+        raw_user_input="2026-06-26 上海到虚构城",
+        origin_text="上海",
+        destination_text="虚构城",
+        travel_date=date(2026, 6, 26),
+        preferences=[RecommendationType.BALANCED],
+        hard_constraints=TravelHardConstraints(),
+        soft_preferences=TravelSoftPreferences(),
+    )
+
+    plans, failures, missing, _, explanations, warnings = build_plans(travel_request)
+
+    assert plans == []
+    assert "rail_station_candidates" in missing
+    assert "transport_node_catalog" in missing
+    assert "route_coverage" not in missing
+    assert failures[0].error_code == "TRANSPORT_NODE_CATALOG_MISSING"
+    assert explanations[0].reason_code == "TRANSPORT_NODE_CATALOG_MISSING"
+    assert any("不会编造站点" in warning for warning in warnings)
+
+
+def test_ticket_enhancement_is_blocked_until_dynamic_validation_exists():
+    plans, _, _, blocked_types, explanations, _ = build_plans(_request())
+
+    _assert_dynamic_provider_only(plans)
+    assert PlanType.RAIL_TICKET_ENHANCEMENT in blocked_types
+    assert any(
+        item.plan_type == PlanType.RAIL_TICKET_ENHANCEMENT and item.reason_code == "DYNAMIC_PLANNER_CAPABILITY_GAP"
+        for item in explanations
+    )
+
+
+def test_option_validation_on_dynamic_rail_plan():
     plans, *_ = build_plans(_request())
-    backup = {plan.plan_id: plan for plan in blocked_or_backup_plans(plans)}
-    assert backup["plan_ticket_a_shqd"].recommendation_eligibility == RecommendationEligibility.NOT_RECOMMENDED
-    assert backup["plan_blocked_shqd"].risk_assessment.overall_risk_level == RiskLevel.BLOCKED
-    assert backup["plan_buy_short_shqd"].ticket_enhancement.grade == TicketEnhancementGrade.NOT_RECOMMENDED
-
-
-def test_ticket_enhancement_thresholds_and_block_reason_contract():
-    plans, *_ = build_plans(_request())
-    by_id = {plan.plan_id: plan for plan in plans}
-
-    s_grade = by_id["plan_ticket_s_shqd"]
-    assert s_grade.ticket_enhancement.grade == TicketEnhancementGrade.S
-    assert s_grade.ticket_enhancement.extra_cost_ratio < 0.2
-    assert s_grade.recommendation_eligibility == RecommendationEligibility.ELIGIBLE
-    assert s_grade.can_be_selected_by_llm is True
-
-    a_grade = by_id["plan_ticket_a_shqd"]
-    assert a_grade.ticket_enhancement.grade == TicketEnhancementGrade.A
-    assert a_grade.ticket_enhancement.extra_cost_ratio > 0.2
-    assert a_grade.recommendation_eligibility == RecommendationEligibility.NOT_RECOMMENDED
-    assert a_grade.block_reason_code == "TICKET_A_BACKUP_ONLY"
-
-    buy_short = by_id["plan_buy_short_shqd"]
-    assert buy_short.ticket_enhancement.requires_onboard_supplement is True
-    assert buy_short.ticket_enhancement.risk_level == RiskLevel.HIGH
-    assert buy_short.can_be_selected_by_llm is False
-
-    blocked = by_id["plan_blocked_shqd"]
-    assert blocked.recommendation_eligibility == RecommendationEligibility.BLOCKED
-    assert blocked.block_reason_code == "SAFETY_CRITICAL_MISSING"
-    assert blocked.risk_assessment.recommendation_allowed is False
-
-
-def test_option_validation_and_auxiliary_gap_detection():
-    plans, *_ = build_plans(_request())
-    direct = next(plan for plan in plans if plan.plan_id == "plan_rail_direct_shqd")
-    transfer_flight = next(plan for plan in plans if plan.plan_id == "plan_flight_transfer_shqd")
+    direct = plans[0]
     rail_segment = next(segment for segment in direct.segments if hasattr(segment, "seat_options"))
     transfer_segment = next(segment for segment in direct.segments if isinstance(segment, LocalTransferSegment))
 
     assert_option_available(rail_segment, "seat_first")
     assert_option_available(transfer_segment, "transfer_subway")
-    assert has_auxiliary_flight_gap(transfer_flight)

@@ -9,10 +9,14 @@ BACKEND = ROOT / "backend"
 sys.path.insert(0, str(BACKEND))
 
 from app.models.schemas import (
+    AppEventRequest,
+    AppEventResponse,
     BookingRedirectRequest,
     BookingRedirectResponse,
     DataSourceStatusResponse,
     ErrorResponse,
+    FeedbackRequest,
+    FeedbackResponse,
     GetTravelPlanResponse,
     HealthResponse,
     LLMRecommendationInput,
@@ -37,6 +41,10 @@ SCHEMAS = {
     "recalculate-response.schema.json": RecalculateResponse,
     "booking-redirect-request.schema.json": BookingRedirectRequest,
     "booking-redirect-response.schema.json": BookingRedirectResponse,
+    "feedback-request.schema.json": FeedbackRequest,
+    "feedback-response.schema.json": FeedbackResponse,
+    "app-event-request.schema.json": AppEventRequest,
+    "app-event-response.schema.json": AppEventResponse,
     "error-response.schema.json": ErrorResponse,
     "data-source-status.schema.json": DataSourceStatusResponse,
     "health-response.schema.json": HealthResponse,

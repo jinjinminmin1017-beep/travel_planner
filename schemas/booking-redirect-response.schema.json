@@ -80,6 +80,37 @@
       "title": "BookingRedirect",
       "type": "object"
     },
+    "CacheMetadata": {
+      "additionalProperties": false,
+      "properties": {
+        "cacheable": {
+          "title": "Cacheable",
+          "type": "boolean"
+        },
+        "cache_ttl_seconds": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cache Ttl Seconds"
+        },
+        "cache_hit": {
+          "default": false,
+          "title": "Cache Hit",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "cacheable"
+      ],
+      "title": "CacheMetadata",
+      "type": "object"
+    },
     "DataSourceMetadata": {
       "additionalProperties": false,
       "properties": {
@@ -104,11 +135,48 @@
           "title": "Authority Level",
           "type": "string"
         },
+        "source_priority": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Priority"
+        },
+        "source_region": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Region"
+        },
+        "api_version": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Api Version"
+        },
         "license_status": {
           "enum": [
             "APPROVED",
             "PENDING_REVIEW",
-            "REJECTED"
+            "NOT_APPROVED"
           ],
           "title": "License Status",
           "type": "string"
@@ -120,13 +188,58 @@
         "fetched_at": {
           "$ref": "#/$defs/TimePoint"
         },
-        "update_frequency": {
-          "title": "Update Frequency",
-          "type": "string"
+        "data_freshness_seconds": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Data Freshness Seconds"
         },
         "cacheable": {
           "title": "Cacheable",
           "type": "boolean"
+        },
+        "cache_ttl_seconds": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cache Ttl Seconds"
+        },
+        "sla_level": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sla Level"
+        },
+        "cache_metadata": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CacheMetadata"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "required": [
@@ -137,7 +250,6 @@
         "license_status",
         "commercial_allowed",
         "fetched_at",
-        "update_frequency",
         "cacheable"
       ],
       "title": "DataSourceMetadata",
@@ -166,18 +278,25 @@
           "type": "string"
         },
         "timezone": {
-          "default": "Asia/Shanghai",
           "title": "Timezone",
           "type": "string"
         },
         "source_timezone": {
-          "default": "Asia/Shanghai",
-          "title": "Source Timezone",
-          "type": "string"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Timezone"
         }
       },
       "required": [
-        "datetime"
+        "datetime",
+        "timezone"
       ],
       "title": "TimePoint",
       "type": "object"

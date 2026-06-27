@@ -3,6 +3,7 @@ from app.data_sources.map_providers import (
     AmapRouteProvider,
     BaiduDirectionLiteProvider,
     MapRouteEstimate,
+    MapRouteProviderResult,
     MapRouteRequest,
     OsrmRouteProvider,
     build_enabled_map_providers,
@@ -37,8 +38,8 @@ class _FakeClient:
 
 def _route_request(mode=TransportMode.TAXI):
     return MapRouteRequest(
-        origin=GeoPoint(latitude=31.2, longitude=121.3),
-        destination=GeoPoint(latitude=31.1, longitude=121.4),
+        origin=GeoPoint(name="origin", latitude=31.2, longitude=121.3),
+        destination=GeoPoint(name="destination", latitude=31.1, longitude=121.4),
         mode=mode,
         origin_city="上海",
         destination_city="上海",
@@ -134,6 +135,13 @@ def test_osrm_route_maps_real_response():
 
 
 def test_enabled_map_provider_requires_flag_approved_license_and_key(monkeypatch):
+    monkeypatch.delenv("TRAVEL_SOURCE_AMAP_ROUTE_ENABLED", raising=False)
+    monkeypatch.delenv("TRAVEL_SOURCE_AMAP_ROUTE_LICENSE_STATUS", raising=False)
+    monkeypatch.delenv("AMAP_WEB_SERVICE_KEY", raising=False)
+    monkeypatch.delenv("TRAVEL_SOURCE_BAIDU_MAP_ROUTE_ENABLED", raising=False)
+    monkeypatch.delenv("TRAVEL_SOURCE_BAIDU_MAP_ROUTE_LICENSE_STATUS", raising=False)
+    monkeypatch.delenv("BAIDU_MAP_AK", raising=False)
+
     assert [provider.source_id for provider in build_enabled_map_providers("DEV")] == ["osrm_route"]
 
     monkeypatch.setenv("TRAVEL_SOURCE_AMAP_ROUTE_ENABLED", "true")
@@ -189,15 +197,16 @@ def test_map_provider_result_falls_back_in_amap_baidu_osrm_order(monkeypatch):
 
 def test_planner_uses_real_map_estimate_when_provider_is_enabled(monkeypatch):
     def fake_estimate(request, environment=None):
-        return MapRouteEstimate(
+        estimate = MapRouteEstimate(
             distance_meters=12345,
             duration_minutes=17,
             estimated_cost=money(3300, estimated=True),
             summary="高德测试路线规划",
             data_source=data_source_metadata("amap_route", "AMap Route Planning API"),
         )
+        return MapRouteProviderResult(estimate=estimate, attempted_source_ids=["amap_route"])
 
-    monkeypatch.setattr("app.services.planner.estimate_route_with_enabled_provider", fake_estimate)
+    monkeypatch.setattr("app.services.planner.estimate_route_with_enabled_provider_result", fake_estimate)
     ctx = RequestContext("req_map", "trace_map", "corr_map", "idem_map")
     travel_request = parse_travel_request(
         "我 2026 年 5 月 21 日上午 9 点后，从上海嘉定南翔格林公馆出发，到青岛金水假日酒店，帮我找最舒服的方式。",
@@ -205,7 +214,7 @@ def test_planner_uses_real_map_estimate_when_provider_is_enabled(monkeypatch):
     )
 
     plans, *_ = build_plans(travel_request)
-    rail_direct = next(plan for plan in plans if plan.plan_id == "plan_rail_direct_shqd")
+    rail_direct = next(plan for plan in plans if plan.plan_id.startswith("plan_rail_direct_dynamic"))
     first_transfer = rail_direct.segments[0]
 
     assert first_transfer.data_source.source_id == "amap_route"

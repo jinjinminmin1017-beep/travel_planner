@@ -1,12 +1,30 @@
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.data_sources.flight_providers import FlightProviderSearchResult
+from app.data_sources.map_providers import MapRouteProviderResult
+from app.data_sources.rail_providers import RailProviderSearchResult
 from app.models.schemas import LLMRecommendationOutput, RecommendationSlot, RecommendationSlotStatus, RecommendationType
+from app.core import security
+from app.services import store
 
 client = TestClient(app)
 
 RAW_INPUT = "我 2026 年 5 月 21 日上午 9 点后，从上海嘉定南翔格林公馆出发，到青岛金水假日酒店，帮我找最舒服和最便宜的方式。"
 BEIJING_GUANGZHOU_INPUT = "我 2026 年 5 月 21 日上午 9 点后，从北京到广州，帮我找最舒服的方式。"
+
+
+def _first_dynamic_rail_plan(plans):
+    return next(item for item in plans if item["plan_id"].startswith("plan_rail_direct_dynamic"))
+
+
+def _assert_no_legacy_runtime_plans(plans):
+    plan_ids = {item["plan_id"] for item in plans}
+    assert not any(plan_id.endswith("_shqd") or plan_id.endswith("_bg") for plan_id in plan_ids)
+    assert not any(
+        "flight" in plan_id or "mixed" in plan_id or "ticket" in plan_id or "buy_short" in plan_id or "blocked" in plan_id
+        for plan_id in plan_ids
+    )
 
 
 def test_health_and_data_source_status():
@@ -24,6 +42,44 @@ def test_health_and_data_source_status():
     assert "source_id" in body["sources"][0]
     assert "qps_limit" not in body["sources"][0]
 
+    admin_status = client.get("/api/admin/data-sources")
+    assert admin_status.status_code == 200
+    admin_body = admin_status.json()
+    assert admin_body["sources"]
+    assert "qps_limit" not in admin_body["sources"][0]
+
+
+def test_observability_metrics_are_read_only_and_aggregate_requests():
+    client.post("/api/travel/plan", json={"raw_user_input": RAW_INPUT})
+    response = client.get("/api/observability/metrics")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["counters"]["travel_requests"] >= 1
+    assert "generated_at" in body
+    assert isinstance(body["provider_failures"], dict)
+
+
+def test_security_middleware_adds_device_id_and_enforces_limits(monkeypatch):
+    security._RATE_WINDOWS.clear()
+    health = client.get("/api/health", headers={"x-device-id": "device_test"})
+    assert health.status_code == 200
+    assert health.headers["x-device-id"] == "device_test"
+
+    monkeypatch.setenv("TRAVEL_API_RATE_LIMIT_PER_MINUTE", "1")
+    security._RATE_WINDOWS.clear()
+    assert client.get("/api/health", headers={"x-device-id": "device_limited"}).status_code == 200
+    limited = client.get("/api/health", headers={"x-device-id": "device_limited"})
+    assert limited.status_code == 429
+    assert limited.json()["error_code"] == "RATE_LIMITED"
+
+    monkeypatch.setenv("TRAVEL_REQUIRE_API_KEY", "true")
+    monkeypatch.setenv("TRAVEL_API_KEY", "secret")
+    security._RATE_WINDOWS.clear()
+    unauthorized = client.get("/api/health", headers={"x-device-id": "device_key"})
+    assert unauthorized.status_code == 401
+    authorized = client.get("/api/health", headers={"x-device-id": "device_key_ok", "x-api-key": "secret"})
+    assert authorized.status_code == 200
+
 
 def test_parse_travel_request():
     response = client.post("/api/travel/parse", json={"raw_user_input": RAW_INPUT})
@@ -32,6 +88,45 @@ def test_parse_travel_request():
     assert body["travel_request"]["origin_text"] == "上海嘉定南翔格林公馆"
     assert body["travel_request"]["destination_text"] == "青岛金水假日酒店"
     assert body["travel_request"]["preferences"][:2] == ["MOST_COMFORTABLE", "CHEAPEST"]
+    assert body["llm_validation_result"]["final_strategy"] == "FALLBACK_RULES"
+    assert body["llm_validation_result"]["prompt_version"] == "intent_parser_prompt_v1.0"
+
+
+def test_parse_english_or_mixed_input():
+    response = client.post("/api/travel/parse", json={"raw_user_input": "2026-05-21 from Beijing to Guangzhou, comfortable, train only"})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["travel_request"]["origin_text"] == "北京市朝阳区国贸"
+    assert body["travel_request"]["destination_text"] == "广州天河体育中心"
+    assert body["travel_request"]["preferences"][0] == "MOST_COMFORTABLE"
+    assert body["travel_request"]["hard_constraints"]["allowed_transport_modes"] == ["RAIL"]
+
+
+def test_parse_explicit_poi_route_input():
+    response = client.post("/api/travel/parse", json={"raw_user_input": "从上海东方明珠塔出发，到北京天安门，6月15号下午"})
+    assert response.status_code == 200
+    request = response.json()["travel_request"]
+    assert request["origin_text"] == "上海东方明珠塔"
+    assert request["destination_text"] == "北京天安门"
+    assert request["travel_date"] == "2027-06-15"
+
+
+def test_parse_chinese_dot_date_with_explicit_year():
+    response = client.post("/api/travel/parse", json={"raw_user_input": "我要从上海东方明珠塔到北京天安门，2026年6.24号早上"})
+    assert response.status_code == 200
+    request = response.json()["travel_request"]
+    assert request["origin_text"] == "上海东方明珠塔"
+    assert request["destination_text"] == "北京天安门"
+    assert request["travel_date"] == "2026-06-24"
+
+
+def test_parse_date_prefix_with_explicit_from_to_route():
+    response = client.post("/api/travel/parse", json={"raw_user_input": "6.26上午，从上海东方明珠塔到云南洱海"})
+    assert response.status_code == 200
+    request = response.json()["travel_request"]
+    assert request["origin_text"] == "上海东方明珠塔"
+    assert request["destination_text"] == "云南洱海"
+    assert request["travel_date"] == "2026-06-26"
 
 
 def test_parse_preference_synonyms_and_text_order():
@@ -72,13 +167,105 @@ def test_parse_transport_constraints():
     assert request["soft_preferences"]["accept_rail_transfer"] is False
 
 
+def test_parse_budget_time_and_passenger_notes():
+    raw = "我 2026 年 5 月 21 日上午 9 点后，从上海到青岛，预算不要超过1000，晚上8点前到，带老人和行李多。"
+    response = client.post("/api/travel/parse", json={"raw_user_input": raw})
+    assert response.status_code == 200
+    request = response.json()["travel_request"]
+    assert request["time_anchor_type"] == "ARRIVAL"
+    assert request["hard_constraints"]["max_total_cost"]["amount_minor"] == 100000
+    assert request["latest_arrival_time"]["datetime"].startswith("2026-05-21T20:00:00")
+    assert "老人" in request["soft_preferences"]["passenger_notes"]
+    assert "行李多" in request["soft_preferences"]["passenger_notes"]
+
+
+def test_parse_period_departure_window():
+    raw = "我要从上海东方明珠塔到北京天安门，2026年6.24号早上出发"
+    response = client.post("/api/travel/parse", json={"raw_user_input": raw})
+    assert response.status_code == 200
+    request = response.json()["travel_request"]
+    assert request["time_anchor_type"] == "DEPARTURE"
+    assert request["time_window_start"]["datetime"].startswith("2026-06-24T06:00:00")
+    assert request["time_window_end"]["datetime"].startswith("2026-06-24T11:00:00")
+    assert request["earliest_departure_time"]["datetime"].startswith("2026-06-24T06:00:00")
+
+
 def test_parse_returns_error_for_missing_date_and_ambiguous_place():
     missing_date = client.post("/api/travel/parse", json={"raw_user_input": "从上海到青岛，帮我找最舒服的方式。"})
     ambiguous_place = client.post("/api/travel/parse", json={"raw_user_input": "我 2026 年 5 月 21 日上午 9 点后，从家里到酒店。"})
     assert missing_date.status_code == 400
     assert ambiguous_place.status_code == 400
-    assert missing_date.json()["error_code"] == "HTTP_400"
-    assert ambiguous_place.json()["error_code"] == "HTTP_400"
+    assert missing_date.json()["error_code"] == "PARSE_NEEDS_INPUT"
+    assert ambiguous_place.json()["error_code"] == "PARSE_NEEDS_INPUT"
+    assert "travel_date" in missing_date.json()["details"]["missing_fields"]
+    assert missing_date.json()["details"]["follow_up_questions"]
+    assert {"origin_text", "destination_text"}.issubset(set(ambiguous_place.json()["details"]["missing_fields"]))
+
+
+def test_parse_returns_follow_up_for_conflicting_transport_constraints():
+    raw = "我 2026 年 5 月 21 日上午 9 点后，从上海到青岛，只看高铁，但又不坐高铁。"
+    response = client.post("/api/travel/parse", json={"raw_user_input": raw})
+    assert response.status_code == 400
+    body = response.json()
+    assert body["error_code"] == "PARSE_NEEDS_INPUT"
+    assert "hard_constraints" in body["details"]["missing_fields"]
+    assert "交通方式限制" in body["user_visible_message"]
+
+
+def test_parse_uses_llm_repair_once_when_enabled_provider_returns_invalid_output(monkeypatch):
+    class _RepairingIntentProvider:
+        source_id = "real_llm"
+        model_name = "test-intent-model"
+
+        def parse_intent(self, raw_user_input, request_id, current_date, default_timezone):
+            return '{"schema_version":"1.15","origin_text":"","destination_text":"青岛金水假日酒店"}'
+
+        def repair_intent(self, raw_llm_output, invalid_reasons, raw_user_input, request_id):
+            return (
+                "{"
+                '"schema_version":"1.15",'
+                f'"request_id":"{request_id}",'
+                f'"raw_user_input":"{raw_user_input}",'
+                '"origin_text":"上海嘉定南翔格林公馆",'
+                '"destination_text":"青岛金水假日酒店",'
+                '"travel_date":"2026-05-21",'
+                '"preferences":["CHEAPEST","MOST_COMFORTABLE","BALANCED"],'
+                '"preference_source":"SYSTEM_DEFAULT",'
+                '"hard_constraints":{"allowed_transport_modes":[],"excluded_transport_modes":[]},'
+                '"soft_preferences":{}'
+                "}"
+            )
+
+    monkeypatch.setattr("app.services.intent_parser.build_enabled_intent_llm_provider", lambda: _RepairingIntentProvider())
+    response = client.post("/api/travel/parse", json={"raw_user_input": RAW_INPUT})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["travel_request"]["origin_text"] == "上海嘉定南翔格林公馆"
+    assert body["llm_validation_result"]["repair_attempted"] is True
+    assert body["llm_validation_result"]["repair_success"] is True
+    assert body["llm_validation_result"]["final_strategy"] == "REPAIRED"
+    assert body["llm_validation_result"]["model_name"] == "test-intent-model"
+
+
+def test_parse_falls_back_to_rules_when_llm_output_and_repair_fail(monkeypatch):
+    class _InvalidIntentProvider:
+        source_id = "real_llm"
+        model_name = "test-invalid-intent-model"
+
+        def parse_intent(self, raw_user_input, request_id, current_date, default_timezone):
+            return '{"origin":"上海东方明珠塔","destination":"北京天安门","departure_date":"2026-06-24"}'
+
+        def repair_intent(self, raw_llm_output, invalid_reasons, raw_user_input, request_id):
+            raise ValueError("repair timed out")
+
+    monkeypatch.setattr("app.services.intent_parser.build_enabled_intent_llm_provider", lambda: _InvalidIntentProvider())
+    response = client.post("/api/travel/parse", json={"raw_user_input": "我要从上海东方明珠塔到北京天安门，2026年6.24号早上"})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["travel_request"]["travel_date"] == "2026-06-24"
+    assert body["travel_request"]["origin_text"] == "上海东方明珠塔"
+    assert body["travel_request"]["destination_text"] == "北京天安门"
+    assert body["llm_validation_result"]["final_strategy"] == "FALLBACK_RULES"
 
 
 def test_plan_without_llm_returns_partial_without_generated_recommendation_cards():
@@ -93,6 +280,227 @@ def test_plan_without_llm_returns_partial_without_generated_recommendation_cards
     assert any("未使用确定性规则生成" in warning for warning in body["user_visible_warnings"])
     assert body["source_failures"]
     assert "TRANSFER_RAIL" in body["blocked_plan_types"]
+    for failure in body["source_failures"]:
+        assert failure["request_id"]
+        assert failure["trace_id"]
+        assert failure["correlation_id"]
+        assert "source_used_id" in failure
+        assert "fallback_reason" in failure
+
+
+def test_plan_has_door_to_door_segment_times():
+    response = client.post("/api/travel/plan", json={"raw_user_input": RAW_INPUT})
+    assert response.status_code == 200
+    body = response.json()
+    plan = _first_dynamic_rail_plan(body["plans"])
+    first_transfer = plan["segments"][0]
+    rail_segment = next(segment for segment in plan["segments"] if segment["segment_type"] == "RAIL")
+    last_transfer = plan["segments"][-1]
+    assert first_transfer["departure_time"]["datetime"]
+    assert first_transfer["arrival_time"]["datetime"] < rail_segment["departure_time"]["datetime"]
+    assert plan["departure_time"] == first_transfer["departure_time"]
+    assert last_transfer["arrival_time"] == plan["arrival_time"]
+
+
+def test_plan_requeries_and_filters_by_arrival_time_constraint():
+    response = client.post(
+        "/api/travel/plan",
+        json={"raw_user_input": "我 2026 年 5 月 21 日，从上海到青岛，只看高铁，不坐飞机，中午12点前到。"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["planning_status"] == "FAILED"
+    assert "time_constraints" in body["missing_components"]
+    assert any(item["reason_code"] == "TIME_CONSTRAINT_TOO_LATE" for item in body["missing_plan_explanations"])
+
+
+def test_async_plan_returns_running_job_then_pollable_result():
+    response = client.post("/api/travel/plan/async", json={"raw_user_input": RAW_INPUT})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["planning_status"] == "RUNNING"
+    assert body["progress"] == 15
+    assert body["plans"] == []
+    assert body["async_job"]["job_status"] == "RUNNING"
+    assert body["async_job"]["polling_url"].startswith("/api/travel/jobs/")
+
+    poll = client.get(body["async_job"]["polling_url"])
+    assert poll.status_code == 200
+    poll_body = poll.json()
+    assert poll_body["planning_status"] in {"PARTIAL", "COMPLETE", "FAILED"}
+    assert poll_body["progress"] == 100
+    assert poll_body["async_job"]["job_status"] in {"PARTIAL_READY", "COMPLETE", "FAILED"}
+    if poll_body["planning_status"] != "FAILED":
+        assert poll_body["plans"]
+
+
+def test_async_plan_job_retry_starts_new_pollable_job():
+    response = client.post("/api/travel/plan/async", json={"raw_user_input": RAW_INPUT})
+    assert response.status_code == 200
+    original_job_id = response.json()["async_job"]["job_id"]
+
+    retry = client.post(f"/api/travel/jobs/{original_job_id}/retry")
+    assert retry.status_code == 200
+    retry_body = retry.json()
+    assert retry_body["planning_status"] == "RUNNING"
+    assert retry_body["async_job"]["job_id"] != original_job_id
+
+    poll = client.get(retry_body["async_job"]["polling_url"])
+    assert poll.status_code == 200
+    assert poll.json()["planning_status"] in {"PARTIAL", "COMPLETE", "FAILED"}
+
+
+def test_async_plan_uses_idempotency_key_to_reuse_job():
+    headers = {"x-idempotency-key": "idem_async_same_job"}
+    first = client.post("/api/travel/plan/async", json={"raw_user_input": RAW_INPUT}, headers=headers)
+    second = client.post("/api/travel/plan/async", json={"raw_user_input": RAW_INPUT}, headers=headers)
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json()["async_job"]["job_id"] == second.json()["async_job"]["job_id"]
+
+
+def test_feedback_submission_is_traceable_and_rejects_sensitive_message():
+    payload = {
+        "schema_version": "1.15",
+        "request_id": "req_feedback",
+        "trace_id": "trace_feedback",
+        "correlation_id": "corr_feedback",
+        "plan_id": "plan_feedback",
+        "source_id": "real_llm",
+        "category": "HARD_TO_UNDERSTAND",
+        "message": "看不懂为什么推荐这个方案",
+    }
+    response = client.post("/api/feedback", json=payload)
+    assert response.status_code == 200
+    body = response.json()
+    assert body["feedback_id"].startswith("fb_")
+    assert body["request_id"] == "req_feedback"
+    assert body["trace_id"] == "trace_feedback"
+    assert body["plan_id"] == "plan_feedback"
+    assert body["source_id"] == "real_llm"
+    assert body["category_count"] >= 1
+
+    blocked = client.post("/api/feedback", json={**payload, "message": "我的账号和密码是 test"})
+    assert blocked.status_code == 400
+    assert "不能包含" in blocked.json()["user_visible_message"]
+
+
+def test_app_event_submission_updates_metrics_and_rejects_sensitive_metadata():
+    payload = {
+        "schema_version": "1.15",
+        "event_type": "INPUT_SUBMITTED",
+        "request_id": "req_event",
+        "trace_id": "trace_event",
+        "plan_id": None,
+        "metadata": {"input_length": 20},
+    }
+    response = client.post("/api/events", json=payload)
+    assert response.status_code == 200
+    assert response.json()["accepted"] is True
+    metrics = client.get("/api/observability/metrics").json()
+    assert metrics["app_events"]["INPUT_SUBMITTED"] >= 1
+    assert any(link["request_id"] == "req_event" and link["metadata_keys"] == ["input_length"] for link in metrics["app_event_links"])
+
+    blocked = client.post("/api/events", json={**payload, "metadata": {"token": "secret"}})
+    assert blocked.status_code == 400
+
+
+def test_growth_retention_events_are_counted_without_sensitive_payloads():
+    for event_type in ["RECENT_PLAN_VIEWED", "FAVORITE_TOGGLED", "TRIP_REMINDER_TOGGLED", "PRICE_STATUS_WATCH_TOGGLED", "PREFERENCE_UPDATED"]:
+        response = client.post(
+            "/api/events",
+            json={
+                "schema_version": "1.15",
+                "event_type": event_type,
+                "request_id": "req_growth",
+                "trace_id": "trace_growth",
+                "plan_id": "plan_growth",
+                "metadata": {"enabled": True},
+            },
+        )
+        assert response.status_code == 200
+        assert response.json()["accepted"] is True
+
+    metrics = client.get("/api/observability/metrics").json()
+    assert metrics["app_events"]["FAVORITE_TOGGLED"] >= 1
+    assert any(link["event_type"] == "PRICE_STATUS_WATCH_TOGGLED" and link["request_id"] == "req_growth" for link in metrics["app_event_links"])
+
+    blocked = client.post(
+        "/api/events",
+        json={
+            "schema_version": "1.15",
+            "event_type": "PREFERENCE_UPDATED",
+            "request_id": "req_growth",
+            "trace_id": "trace_growth",
+            "plan_id": None,
+            "metadata": {"account": "hidden@example.com"},
+        },
+    )
+    assert blocked.status_code == 400
+
+
+def test_plan_snapshot_survives_memory_index_clear(monkeypatch, tmp_path):
+    monkeypatch.setenv("TRAVEL_SQLITE_PATH", str(tmp_path / "planner.sqlite3"))
+    response = client.post("/api/travel/plan", json={"raw_user_input": RAW_INPUT})
+    assert response.status_code == 200
+    plan_id = response.json()["plans"][0]["plan_id"]
+
+    store.PLANS.clear()
+    store.PLAN_RESPONSES.clear()
+
+    stored = client.get(f"/api/travel/plans/{plan_id}")
+    assert stored.status_code == 200
+    assert stored.json()["plan"]["plan_id"] == plan_id
+
+
+def test_plan_degrades_when_map_provider_returns_empty_result(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.planner.estimate_route_with_enabled_provider_result",
+        lambda request, environment=None: MapRouteProviderResult(
+            estimate=None,
+            attempted_source_ids=["amap_route"],
+            failure_message="amap_route: empty route result",
+        ),
+    )
+    response = client.post("/api/travel/plan", json={"raw_user_input": RAW_INPUT})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["planning_status"] == "PARTIAL"
+    assert body["plans"]
+    assert "map_route" in body["missing_components"]
+    assert any(failure["source_id"] == "amap_route" and failure["fallback_used"] is True for failure in body["source_failures"])
+    assert any("地图路线 Provider 不可用" in warning for warning in body["user_visible_warnings"])
+    first_transfer = next(segment for segment in body["plans"][0]["segments"] if segment["segment_type"] == "LOCAL_TRANSFER")
+    assert first_transfer["data_source"]["source_type"] == "INTERNAL_CALCULATION"
+
+
+def test_plan_returns_failed_business_response_when_core_providers_return_empty(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.planner.search_rail_offers_with_enabled_provider_result",
+        lambda request, environment=None: RailProviderSearchResult(
+            offers=[],
+            attempted_source_ids=["rail_authorized_partner"],
+            failure_message="rail empty result",
+        ),
+    )
+    monkeypatch.setattr(
+        "app.services.planner.search_flight_offers_with_enabled_provider_result",
+        lambda request, environment=None: FlightProviderSearchResult(
+            offers=[],
+            attempted_source_ids=["amadeus_flight_offers"],
+            failure_message="flight empty result",
+        ),
+    )
+
+    response = client.post("/api/travel/plan", json={"raw_user_input": RAW_INPUT})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["planning_status"] == "FAILED"
+    assert body["plans"] == []
+    assert body["recommendation_result"] is None
+    assert "travel_plan" in body["missing_components"]
+    assert "rail_core_fact" in body["missing_components"]
+    assert any(failure["source_id"] == "rail_authorized_partner" for failure in body["source_failures"])
 
 
 def test_plan_uses_real_llm_recommendations_when_provider_returns_valid_output(monkeypatch):
@@ -123,26 +531,48 @@ def test_plan_uses_real_llm_recommendations_when_provider_returns_valid_output(m
     assert "plan_buy_short_shqd" not in selected
 
 
-def test_ticket_enhancement_rules_are_visible_but_filtered():
+def test_plan_filters_hard_constraints_before_llm_recommendation(monkeypatch):
+    captured_candidate_ids = []
+
+    class _RecordingLLMProvider:
+        source_id = "real_llm"
+
+        def recommend(self, llm_input):
+            captured_candidate_ids.extend(llm_input.candidate_plan_ids)
+            plan_ids = llm_input.candidate_plan_ids[:3]
+            return LLMRecommendationOutput(
+                selected_recommendations=[
+                    RecommendationSlot(recommendation_type=RecommendationType.CHEAPEST, status=RecommendationSlotStatus.AVAILABLE, plan_id=plan_ids[0], reason="LLM selected cheapest from filtered candidates."),
+                    RecommendationSlot(recommendation_type=RecommendationType.MOST_COMFORTABLE, status=RecommendationSlotStatus.AVAILABLE, plan_id=plan_ids[1], reason="LLM selected comfort from filtered candidates."),
+                    RecommendationSlot(recommendation_type=RecommendationType.BALANCED, status=RecommendationSlotStatus.AVAILABLE, plan_id=plan_ids[2], reason="LLM selected balanced from filtered candidates."),
+                ],
+                validation_blockers=[],
+                explanation="valid",
+            )
+
+    monkeypatch.setattr("app.services.recommendation.build_enabled_llm_provider", lambda: _RecordingLLMProvider())
+    response = client.post(
+        "/api/travel/plan",
+        json={"raw_user_input": "我 2026 年 5 月 21 日上午 9 点后，从上海到青岛，只看高铁，不坐飞机。"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["planning_status"] == "COMPLETE"
+    assert captured_candidate_ids
+    assert all("flight" not in plan_id and "mixed" not in plan_id for plan_id in captured_candidate_ids)
+    assert any(item["reason_code"] == "DYNAMIC_PLANNER_CAPABILITY_GAP" for item in body["missing_plan_explanations"])
+
+
+def test_legacy_ticket_enhancement_templates_are_not_runtime_plans():
     response = client.post("/api/travel/plan", json={"raw_user_input": RAW_INPUT})
     assert response.status_code == 200
-    plans = {plan["plan_id"]: plan for plan in response.json()["plans"]}
-    assert plans["plan_ticket_s_shqd"]["recommendation_eligibility"] == "ELIGIBLE"
-    assert plans["plan_ticket_s_shqd"]["ticket_enhancement"]["grade"] == "S"
-    assert plans["plan_ticket_s_shqd"]["can_be_selected_by_llm"] is True
-
-    assert plans["plan_ticket_a_shqd"]["recommendation_eligibility"] == "NOT_RECOMMENDED"
-    assert plans["plan_ticket_a_shqd"]["ticket_enhancement"]["grade"] == "A"
-    assert plans["plan_ticket_a_shqd"]["can_be_selected_by_llm"] is False
-
-    assert plans["plan_buy_short_shqd"]["ticket_enhancement"]["requires_onboard_supplement"] is True
-    assert plans["plan_buy_short_shqd"]["risk_assessment"]["overall_risk_level"] == "HIGH"
-    assert plans["plan_buy_short_shqd"]["can_be_selected_by_llm"] is False
-
+    body = response.json()
+    _assert_no_legacy_runtime_plans(body["plans"])
+    assert any(item["plan_type"] == "RAIL_TICKET_ENHANCEMENT" for item in body["missing_plan_explanations"])
 
 def test_recalculate_rail_seat_updates_cost_comfort_and_stored_snapshot():
     plan_response = client.post("/api/travel/plan", json={"raw_user_input": RAW_INPUT}).json()
-    plan = next(item for item in plan_response["plans"] if item["plan_id"] == "plan_rail_direct_shqd")
+    plan = _first_dynamic_rail_plan(plan_response["plans"])
     rail_segment = next(seg for seg in plan["segments"] if seg["segment_type"] == "RAIL")
     before_total = plan["cost_breakdown"]["total_cost"]["amount_minor"]
     before_duration = plan["total_duration_minutes"]
@@ -154,15 +584,15 @@ def test_recalculate_rail_seat_updates_cost_comfort_and_stored_snapshot():
             "request_id": "req_test",
             "idempotency_key": "idem_test",
             "plan_id": plan["plan_id"],
-            "change_type": "RAIL_SEAT",
+            "change_type": "SEAT_TYPE",
             "target_segment_id": rail_segment["segment_id"],
             "selected_option": {
-                "option_type": "RAIL_SEAT",
+                "option_type": "SEAT",
                 "option_id": "seat_first",
                 "option_value": "一等座",
                 "source_option_version": "provider_test_v1",
             },
-            "recalculate_scope": "PLAN_TOTAL",
+            "recalculate_scope": "PLAN_ONLY",
         },
     )
     assert recalc.status_code == 200
@@ -182,42 +612,12 @@ def test_recalculate_rail_seat_updates_cost_comfort_and_stored_snapshot():
     assert stored.json()["plan"]["cost_breakdown"]["total_cost"] == updated_plan["cost_breakdown"]["total_cost"]
 
 
-def test_recalculate_flight_cabin_and_local_transfer_consistency():
+def test_recalculate_local_transfer_consistency_on_dynamic_rail_plan():
     plan_response = client.post("/api/travel/plan", json={"raw_user_input": RAW_INPUT}).json()
-    flight_plan = next(item for item in plan_response["plans"] if item["plan_id"] == "plan_flight_direct_shqd")
-    flight_segment = next(seg for seg in flight_plan["segments"] if seg["segment_type"] == "FLIGHT")
-    flight_before_total = flight_plan["cost_breakdown"]["total_cost"]["amount_minor"]
-    flight_before_duration = flight_plan["total_duration_minutes"]
-
-    cabin_recalc = client.post(
-        "/api/travel/recalculate",
-        json={
-            "schema_version": "1.15",
-            "request_id": "req_cabin",
-            "idempotency_key": "idem_cabin",
-            "plan_id": flight_plan["plan_id"],
-            "change_type": "FLIGHT_CABIN",
-            "target_segment_id": flight_segment["segment_id"],
-            "selected_option": {
-                "option_type": "FLIGHT_CABIN",
-                "option_id": "cabin_premium",
-                "option_value": "超级经济舱",
-                "source_option_version": "provider_test_v1",
-            },
-            "recalculate_scope": "PLAN_TOTAL",
-        },
-    )
-    assert cabin_recalc.status_code == 200
-    cabin_plan = cabin_recalc.json()["plan"]
-    cabin_segment = next(seg for seg in cabin_plan["segments"] if seg["segment_id"] == flight_segment["segment_id"])
-    assert cabin_recalc.json()["change_summary"]["cost_delta"]["amount_minor"] == 26000
-    assert cabin_plan["cost_breakdown"]["total_cost"]["amount_minor"] == flight_before_total + 26000
-    assert cabin_plan["total_duration_minutes"] == flight_before_duration
-    assert cabin_segment["selected_cabin_option_id"] == "cabin_premium"
-
-    transfer_segment = next(seg for seg in cabin_plan["segments"] if seg["segment_type"] == "LOCAL_TRANSFER")
-    transfer_before_total = cabin_plan["cost_breakdown"]["total_cost"]["amount_minor"]
-    transfer_before_duration = cabin_plan["total_duration_minutes"]
+    plan = _first_dynamic_rail_plan(plan_response["plans"])
+    transfer_segment = next(seg for seg in plan["segments"] if seg["segment_type"] == "LOCAL_TRANSFER")
+    transfer_before_total = plan["cost_breakdown"]["total_cost"]["amount_minor"]
+    transfer_before_duration = plan["total_duration_minutes"]
     subway_option = next(option for option in transfer_segment["transfer_options"] if option["option_id"] == "transfer_subway")
 
     transfer_recalc = client.post(
@@ -226,16 +626,16 @@ def test_recalculate_flight_cabin_and_local_transfer_consistency():
             "schema_version": "1.15",
             "request_id": "req_transfer",
             "idempotency_key": "idem_transfer",
-            "plan_id": cabin_plan["plan_id"],
-            "change_type": "LOCAL_TRANSFER",
+            "plan_id": plan["plan_id"],
+            "change_type": "LOCAL_TRANSFER_MODE",
             "target_segment_id": transfer_segment["segment_id"],
             "selected_option": {
-                "option_type": "LOCAL_TRANSFER",
+                "option_type": "TRANSFER_MODE",
                 "option_id": "transfer_subway",
                 "option_value": "地铁",
                 "source_option_version": "provider_test_v1",
             },
-            "recalculate_scope": "PLAN_TOTAL",
+            "recalculate_scope": "PLAN_ONLY",
         },
     )
     assert transfer_recalc.status_code == 200
@@ -251,10 +651,83 @@ def test_recalculate_flight_cabin_and_local_transfer_consistency():
     assert updated_transfer["option_id"] == "transfer_subway"
     assert updated_transfer["transfer_mode"] == "SUBWAY"
 
+    walk_option = next((option for option in updated_transfer["transfer_options"] if option["option_id"] == "transfer_walk"), None)
+    if walk_option:
+        walk_recalc = client.post(
+            "/api/travel/recalculate",
+            json={
+                "schema_version": "1.15",
+                "request_id": "req_walk",
+                "idempotency_key": "idem_walk",
+                "plan_id": transfer_plan["plan_id"],
+                "change_type": "LOCAL_TRANSFER_MODE",
+                "target_segment_id": updated_transfer["segment_id"],
+                "selected_option": {
+                    "option_type": "TRANSFER_MODE",
+                    "option_id": "transfer_walk",
+                    "option_value": "步行",
+                    "source_option_version": "provider_test_v1",
+                },
+                "recalculate_scope": "PLAN_ONLY",
+            },
+        )
+        assert walk_recalc.status_code == 200
+        walked = next(seg for seg in walk_recalc.json()["plan"]["segments"] if seg["segment_id"] == updated_transfer["segment_id"])
+        assert walked["transfer_mode"] == "WALK"
+        assert walked["estimated_cost"]["amount_minor"] == 0
+
+def test_recalculate_is_idempotent_and_can_refresh_recommendation(monkeypatch):
+    class _ValidLLMProvider:
+        source_id = "real_llm"
+        model_name = "test-recalc-model"
+
+        def recommend(self, llm_input):
+            plan_ids = llm_input.candidate_plan_ids[:3]
+            return LLMRecommendationOutput(
+                selected_recommendations=[
+                    RecommendationSlot(recommendation_type=RecommendationType.CHEAPEST, status=RecommendationSlotStatus.AVAILABLE, plan_id=plan_ids[0], reason="updated cheapest"),
+                    RecommendationSlot(recommendation_type=RecommendationType.MOST_COMFORTABLE, status=RecommendationSlotStatus.AVAILABLE, plan_id=plan_ids[1], reason="updated comfort"),
+                    RecommendationSlot(recommendation_type=RecommendationType.BALANCED, status=RecommendationSlotStatus.AVAILABLE, plan_id=plan_ids[2], reason="updated balanced"),
+                ],
+                validation_blockers=[],
+                explanation="valid",
+            )
+
+    monkeypatch.setattr("app.services.recommendation.build_enabled_llm_provider", lambda: _ValidLLMProvider())
+    plan_response = client.post("/api/travel/plan", json={"raw_user_input": RAW_INPUT}).json()
+    plan = _first_dynamic_rail_plan(plan_response["plans"])
+    rail_segment = next(seg for seg in plan["segments"] if seg["segment_type"] == "RAIL")
+    body = {
+        "schema_version": "1.15",
+        "request_id": "req_recalc_idem",
+        "idempotency_key": "idem_recalc_same",
+        "plan_id": plan["plan_id"],
+        "change_type": "SEAT_TYPE",
+        "target_segment_id": rail_segment["segment_id"],
+        "selected_option": {
+            "option_type": "SEAT",
+            "option_id": "seat_first",
+            "option_value": "一等座",
+            "source_option_version": "provider_test_v1",
+        },
+        "recalculate_scope": "PLAN_AND_RECOMMENDATION",
+    }
+
+    first = client.post("/api/travel/recalculate", json=body)
+    second = client.post("/api/travel/recalculate", json=body)
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    first_body = first.json()
+    second_body = second.json()
+    assert first_body == second_body
+    assert first_body["recommendation_result"] is not None
+    assert first_body["recommendation_result"]["llm_validation_result"]["model_name"] == "test-recalc-model"
+
 
 def test_booking_redirect():
     plan_response = client.post("/api/travel/plan", json={"raw_user_input": RAW_INPUT}).json()
-    plan = next(item for item in plan_response["plans"] if item["plan_id"] == "plan_rail_direct_shqd")
+    plan = _first_dynamic_rail_plan(plan_response["plans"])
     rail_segment = next(seg for seg in plan["segments"] if seg["segment_type"] == "RAIL")
 
     redirect = client.post(
@@ -279,7 +752,7 @@ def test_non_sample_route_without_llm_has_no_generated_recommendation_cards():
     )
     assert response.status_code == 200
     body = response.json()
-    assert any(plan["plan_id"].endswith("_bg") for plan in body["plans"])
+    assert any(plan["plan_id"].startswith("plan_rail_direct_dynamic") for plan in body["plans"])
     assert body["planning_status"] == "PARTIAL"
     assert body["recommendation_result"] is None
 
@@ -290,16 +763,48 @@ def test_non_sample_route_uses_beijing_guangzhou_provider_network():
     body = response.json()
     assert body["travel_request"]["origin_text"] == "北京市朝阳区国贸"
     assert body["travel_request"]["destination_text"] == "广州天河体育中心"
-    assert len(body["plans"]) >= 5
-    assert all(plan["plan_id"].endswith("_bg") for plan in body["plans"])
+    assert body["plans"]
+    _assert_no_legacy_runtime_plans(body["plans"])
+    assert all(plan["plan_id"].startswith("plan_rail_direct_dynamic") for plan in body["plans"])
 
-    direct_rail = next(plan for plan in body["plans"] if plan["plan_id"] == "plan_rail_direct_bg")
+    direct_rail = _first_dynamic_rail_plan(body["plans"])
     rail_segment = next(segment for segment in direct_rail["segments"] if segment["segment_type"] == "RAIL")
     assert rail_segment["origin_station"] == "北京西"
     assert rail_segment["destination_station"] == "广州南"
     assert "广州南" in rail_segment["stop_sequence"]
     assert "上海虹桥" not in rail_segment["origin_station"] + rail_segment["destination_station"]
     assert "青岛北" not in rail_segment["origin_station"] + rail_segment["destination_station"]
+    assert any(item["reason_code"] == "DYNAMIC_PLANNER_CAPABILITY_GAP" for item in body["missing_plan_explanations"])
+
+def test_known_city_pair_uses_dynamic_rail_provider_search():
+    response = client.post(
+        "/api/travel/plan",
+        json={"raw_user_input": "我 2026 年 5 月 21 日上午 9 点后，从成都到深圳，帮我找最舒服的方式。"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["planning_status"] in {"PARTIAL", "COMPLETE"}
+    assert any(plan["plan_id"].startswith("plan_rail_direct_dynamic") for plan in body["plans"])
+    dynamic_rail = next(plan for plan in body["plans"] if plan["plan_id"].startswith("plan_rail_direct_dynamic"))
+    rail_segment = next(segment for segment in dynamic_rail["segments"] if segment["segment_type"] == "RAIL")
+    assert rail_segment["origin_station"] == "成都东"
+    assert rail_segment["destination_station"] == "深圳北"
+    assert "route_coverage" not in body["missing_components"]
+
+
+def test_explicit_poi_route_uses_dynamic_rail_provider_search():
+    response = client.post(
+        "/api/travel/plan",
+        json={"raw_user_input": "从上海东方明珠塔出发，到北京天安门，6月15号下午"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert any(plan["plan_id"].startswith("plan_rail_direct_dynamic") for plan in body["plans"])
+    dynamic_rail = next(plan for plan in body["plans"] if plan["plan_id"].startswith("plan_rail_direct_dynamic"))
+    rail_segment = next(segment for segment in dynamic_rail["segments"] if segment["segment_type"] == "RAIL")
+    assert rail_segment["origin_station"] in {"上海虹桥", "上海站"}
+    assert rail_segment["destination_station"] in {"北京西", "北京南"}
+    assert "route_coverage" not in body["missing_components"]
 
 
 def test_api_error_paths_return_error_response():
@@ -318,22 +823,22 @@ def test_api_error_paths_return_error_response():
             "request_id": "req_missing",
             "idempotency_key": "idem_missing",
             "plan_id": "missing_plan",
-            "change_type": "RAIL_SEAT",
+            "change_type": "SEAT_TYPE",
             "target_segment_id": "seg_missing",
             "selected_option": {
-                "option_type": "RAIL_SEAT",
+                "option_type": "SEAT",
                 "option_id": "seat_first",
                 "option_value": "一等座",
                 "source_option_version": "provider_test_v1",
             },
-            "recalculate_scope": "PLAN_TOTAL",
+            "recalculate_scope": "PLAN_ONLY",
         },
     )
     assert missing_recalc.status_code == 404
     assert missing_recalc.json()["error_code"] == "HTTP_404"
 
     plan_response = client.post("/api/travel/plan", json={"raw_user_input": RAW_INPUT}).json()
-    plan = next(item for item in plan_response["plans"] if item["plan_id"] == "plan_rail_direct_shqd")
+    plan = _first_dynamic_rail_plan(plan_response["plans"])
     rail_segment = next(seg for seg in plan["segments"] if seg["segment_type"] == "RAIL")
     invalid_option = client.post(
         "/api/travel/recalculate",
@@ -342,15 +847,15 @@ def test_api_error_paths_return_error_response():
             "request_id": "req_invalid_option",
             "idempotency_key": "idem_invalid_option",
             "plan_id": plan["plan_id"],
-            "change_type": "RAIL_SEAT",
+            "change_type": "SEAT_TYPE",
             "target_segment_id": rail_segment["segment_id"],
             "selected_option": {
-                "option_type": "RAIL_SEAT",
+                "option_type": "SEAT",
                 "option_id": "seat_missing",
                 "option_value": "不存在座席",
                 "source_option_version": "provider_test_v1",
             },
-            "recalculate_scope": "PLAN_TOTAL",
+            "recalculate_scope": "PLAN_ONLY",
         },
     )
     assert invalid_option.status_code == 400

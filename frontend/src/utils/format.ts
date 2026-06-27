@@ -1,7 +1,7 @@
 import type { Money } from "../types";
 
 export function formatMoney(money: Money) {
-  return money.display_text;
+  return money.display_text ?? `${money.currency} ${(money.amount_minor / 100).toFixed(money.scale)}`;
 }
 
 export function minutesToText(minutes: number) {

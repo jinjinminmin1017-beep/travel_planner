@@ -22,6 +22,7 @@ from app.data_sources.flight_providers import (  # noqa: E402
     FlightSearchRequest,
     FlightStateRequest,
     get_flight_states_with_enabled_provider,
+    price_flight_offer_with_enabled_provider_result,
     search_flight_offers_with_enabled_provider_result,
 )
 from app.data_sources.geocoding_providers import GeocodeRequest, geocode_with_enabled_provider_result  # noqa: E402
@@ -59,6 +60,8 @@ RELEVANT_SOURCE_IDS = [
     "airline_official_redirect",
     "amap_uri_redirect",
 ]
+PUBLIC_SMOKE_PROVIDERS = ["map", "geocode", "flight-status", "weather", "rail-schedule", "redirect"]
+SECRET_SMOKE_PROVIDERS = ["flight", "rail"]
 
 
 def _env(name: str, default: str) -> str:
@@ -76,7 +79,7 @@ def _date_env(name: str, default_days: int = 30) -> date:
 
 def _enabled_ok(source_id: str) -> bool:
     status = next((item for item in runtime_statuses() if item.source_id == source_id), None)
-    return bool(status and status.enabled and status.status == "OK")
+    return bool(status and status.enabled and status.health_status == "OK")
 
 
 def print_status_summary() -> None:
@@ -92,7 +95,7 @@ def print_status_summary() -> None:
             print(f"- {source_id}: 未登记")
             continue
         reason = f", reason={status.degraded_reason}" if status.degraded_reason else ""
-        print(f"- {source_id}: enabled={status.enabled}, status={status.status}{reason}")
+        print(f"- {source_id}: enabled={status.enabled}, status={status.health_status}{reason}")
     print()
 
 
@@ -103,8 +106,8 @@ def smoke_map() -> bool:
         return False
     estimate = estimate_route_with_enabled_provider(
         MapRouteRequest(
-            origin=GeoPoint(latitude=31.295500, longitude=121.323200),
-            destination=GeoPoint(latitude=31.200000, longitude=121.326900),
+            origin=GeoPoint(name="上海嘉定南翔格林公馆", latitude=31.295500, longitude=121.323200),
+            destination=GeoPoint(name="上海虹桥站", latitude=31.200000, longitude=121.326900),
             mode=TransportMode.TAXI,
             origin_city="上海",
             destination_city="上海",
@@ -156,10 +159,17 @@ def smoke_flight() -> bool:
         print(f"- FAIL: 未返回航班 offer。attempted={result.attempted_source_ids}, reason={result.failure_message}")
         return False
     first = result.offers[0]
+    if _enabled_ok("amadeus_flight_price"):
+        price_result = price_flight_offer_with_enabled_provider_result(first)
+        if not price_result.offer:
+            print(f"- FAIL: Flight Price 未确认报价。attempted={price_result.attempted_source_ids}, reason={price_result.failure_message}")
+            return False
+        first = price_result.offer
     first_segment = first.segments[0] if first.segments else None
     route = f"{first_segment.origin_iata}->{first_segment.destination_iata}" if first_segment else "unknown route"
     flight_no = f"{first_segment.carrier_code}{first_segment.flight_number}" if first_segment else "unknown flight"
-    print(f"- OK: {first.data_source.source_id}, {route}, {flight_no}, {first.total_price.display_text}")
+    price_note = "Price confirmed" if first.data_source.source_id == "amadeus_flight_price" else "Offers only"
+    print(f"- OK: {first.data_source.source_id}, {route}, {flight_no}, {first.total_price.display_text}, {price_note}")
     return True
 
 
@@ -288,7 +298,7 @@ def smoke_redirect() -> bool:
 
 
 def _sample_redirect_plan():
-    tp = TimePoint(datetime=_date_env("LIVE_SMOKE_DEPARTURE_DATE").isoformat() + "T09:00:00+08:00")
+    tp = TimePoint(datetime=_date_env("LIVE_SMOKE_DEPARTURE_DATE").isoformat() + "T09:00:00+08:00", timezone="Asia/Shanghai")
     rail_segment = RailSegment.model_construct(
         segment_id="seg_rail",
         segment_type="RAIL",
@@ -334,6 +344,12 @@ def _probe_redirect_url(url: str) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run live smoke checks against configured real travel APIs.")
     parser.add_argument(
+        "--tier",
+        choices=("public", "secret", "full"),
+        default="public",
+        help="public runs no-key read-only/redirect checks; secret runs keyed Amadeus/rail checks; full runs all checks.",
+    )
+    parser.add_argument(
         "--provider",
         action="append",
         choices=("map", "geocode", "flight", "flight-status", "weather", "rail-schedule", "rail", "redirect"),
@@ -344,7 +360,14 @@ def main() -> int:
     load_project_env()
     if args.status:
         print_status_summary()
-    selected = args.provider or ["map", "geocode", "flight", "flight-status", "weather", "rail-schedule", "rail", "redirect"]
+    if args.provider:
+        selected = args.provider
+    elif args.tier == "public":
+        selected = PUBLIC_SMOKE_PROVIDERS
+    elif args.tier == "secret":
+        selected = SECRET_SMOKE_PROVIDERS
+    else:
+        selected = [*PUBLIC_SMOKE_PROVIDERS, *SECRET_SMOKE_PROVIDERS]
     checks = {
         "map": smoke_map,
         "geocode": smoke_geocode,

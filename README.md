@@ -37,18 +37,33 @@ $env:AMAP_WEB_SERVICE_KEY="..."
 
 For Amadeus, use `AMADEUS_BASE_URL=https://test.api.amadeus.com` with test keys. After Amadeus approves the production application, use `AMADEUS_BASE_URL=https://api.amadeus.com` with the production key pair.
 
-Run the configuration check before expecting live provider behavior:
+Run the CI-safe public configuration check before expecting no-key provider behavior:
 
 ```powershell
-.\.venv\Scripts\python scripts\check_real_api_config.py
+.\.venv\Scripts\python scripts\check_real_api_config.py --tier public
 ```
 
-The check intentionally fails while required providers are disabled, pending review, or missing credentials.
-
-After the configuration check passes, run read-only live smoke checks:
+The public tier checks fixture-safe config, `.env.example` drift, no-key read-only providers, and redirect-only official entry points. Use the secret tier only in an authorized environment:
 
 ```powershell
-.\.venv\Scripts\python scripts\live_smoke_real_apis.py
+.\.venv\Scripts\python scripts\check_real_api_config.py --tier secret --source flight
+.\.venv\Scripts\python scripts\check_real_api_config.py --tier secret --source rail
+```
+
+Use `--tier full` only for a production-readiness check after commercial flight and rail providers are approved and configured.
+
+Transport node candidates are loaded from `backend/app/data/transport_nodes.json`. Regenerate that catalog from approved public catalog sources instead of hand-editing city-to-station mappings:
+
+```powershell
+.\.venv\Scripts\python scripts\import_transport_nodes.py --insecure
+```
+
+The importer currently merges existing seed nodes with the 12306 station name catalog and OurAirports airport CSV. The `--insecure` flag is only for local import environments whose Python certificate store cannot validate a source certificate; do not use it in production automation.
+
+After the public configuration check passes, run read-only live smoke checks:
+
+```powershell
+.\.venv\Scripts\python scripts\live_smoke_real_apis.py --tier public
 ```
 
 You can test one provider at a time:
@@ -86,6 +101,18 @@ The helper script uses the same commands:
 .\scripts\dev.ps1 -Target backend
 .\scripts\dev.ps1 -Target frontend
 .\scripts\dev.ps1 -Target test
+```
+
+For physical-device debugging with Expo Go, start both servers and generate a scannable QR image:
+
+```powershell
+.\scripts\device-debug.ps1 -OpenQr
+```
+
+The script detects the computer's LAN IP, starts the backend on `0.0.0.0:8000`, starts Expo with `EXPO_PUBLIC_API_BASE_URL` pointing to that LAN backend, and writes the QR image to `logs\expo-go-qr.png`. Use `Ctrl+C` in the script terminal to stop both servers. If IP detection chooses the wrong adapter, pass it explicitly:
+
+```powershell
+.\scripts\device-debug.ps1 -HostAddress 192.168.1.20 -OpenQr
 ```
 
 ## App API Base URL

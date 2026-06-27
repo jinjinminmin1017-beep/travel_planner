@@ -9,18 +9,25 @@
           "type": "string"
         },
         "timezone": {
-          "default": "Asia/Shanghai",
           "title": "Timezone",
           "type": "string"
         },
         "source_timezone": {
-          "default": "Asia/Shanghai",
-          "title": "Source Timezone",
-          "type": "string"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Timezone"
         }
       },
       "required": [
-        "datetime"
+        "datetime",
+        "timezone"
       ],
       "title": "TimePoint",
       "type": "object"

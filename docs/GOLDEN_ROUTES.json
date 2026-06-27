@@ -1,0 +1,20 @@
+[
+  {
+    "route_id": "shanghai_qingdao_comfort_low_cost",
+    "raw_user_input": "我 2026 年 5 月 21 日上午 9 点后，从上海嘉定南翔格林公馆出发，到青岛金水假日酒店，帮我找最舒服和最便宜的方式。",
+    "expected_any_plan_types": ["DIRECT_RAIL", "TRANSFER_RAIL", "MULTI_TRANSFER_RAIL", "FLIGHT_RAIL_MIXED"],
+    "expected_statuses": ["PARTIAL", "COMPLETE"]
+  },
+  {
+    "route_id": "beijing_guangzhou_comfort",
+    "raw_user_input": "我 2026 年 5 月 21 日上午 9 点后，从北京到广州，帮我找最舒服的方式。",
+    "expected_any_plan_types": ["DIRECT_RAIL", "TRANSFER_RAIL", "MULTI_TRANSFER_RAIL"],
+    "expected_statuses": ["PARTIAL", "COMPLETE"]
+  },
+  {
+    "route_id": "unsupported_chengdu_shenzhen",
+    "raw_user_input": "我 2026 年 5 月 21 日从成都春熙路到深圳福田中心区。",
+    "expected_any_plan_types": [],
+    "expected_statuses": ["FAILED", "PARTIAL"]
+  }
+]

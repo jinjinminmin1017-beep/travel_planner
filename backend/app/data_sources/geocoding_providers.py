@@ -27,6 +27,7 @@ class GeocodeCandidate:
     place_id: str
     display_name: str
     point: GeoPoint
+    address: dict[str, str]
     category: str | None
     place_type: str | None
     importance: float | None
@@ -88,10 +89,13 @@ class NominatimGeocodingProvider:
         lon = item.get("lon")
         if lat is None or lon is None:
             raise GeocodingProviderError("Nominatim result has no coordinates")
+        display_name = str(item.get("display_name") or "")
+        raw_address = item.get("address") if isinstance(item.get("address"), dict) else {}
         return GeocodeCandidate(
             place_id=str(item.get("place_id") or ""),
-            display_name=str(item.get("display_name") or ""),
-            point=GeoPoint(latitude=float(lat), longitude=float(lon)),
+            display_name=display_name,
+            point=GeoPoint(name=display_name, latitude=float(lat), longitude=float(lon)),
+            address={str(key): str(value) for key, value in raw_address.items() if value is not None and value != ""},
             category=_optional_str(item.get("category")),
             place_type=_optional_str(item.get("type")),
             importance=_optional_float(item.get("importance")),
@@ -110,7 +114,6 @@ def geocoding_data_source_metadata(source_id: str, source_name: str) -> DataSour
         license_status="APPROVED",
         commercial_allowed=False,
         fetched_at=now_timepoint(),
-        update_frequency="REALTIME_API",
         cacheable=True,
     )
 

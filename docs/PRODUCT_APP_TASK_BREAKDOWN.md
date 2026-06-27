@@ -12,6 +12,11 @@
 
 状态：已完成（2026-06-05）
 
+执行记录：2026-06-16 已完成代码废弃逻辑审阅，识别旧模板引擎残留、未接入队列配置、未使用前端导出和本地生成目录等待清理项；本次仅审阅和标记，不删除业务代码。
+
+执行记录：2026-06-23 已新增 `scripts/device-debug.ps1`，一键启动真机调试后端与 Expo LAN 服务，自动设置 `EXPO_PUBLIC_API_BASE_URL`，并生成 `logs/expo-go-qr.png` 扫码图片；README 已同步脚本用法。
+执行记录：2026-06-23 已修复真机调试脚本端口占用处理：当 8000/8081 已被旧后端或旧 Expo 占用时，脚本会自动选择后续空闲端口并用新端口生成 QR 与 API Base URL，避免手机继续连到旧服务。
+
 任务：
 
 - 明确第一阶段只交付 Expo / React Native App。
@@ -28,6 +33,8 @@
 - iOS 模拟器、Android 模拟器、真机调试至少有一条可验证路径。
 
 ### P0-02 Schema 合同差异审计与修复
+
+状态：已完成（2026-06-14；`.env.example` 已恢复为无密钥安全模板，真实 `.env` 可按用户自有高德/聚合凭证启用 Provider；配置检查脚本可区分模板安全档与本地有密钥运行档）
 
 任务：
 
@@ -53,6 +60,8 @@
 
 ### P0-03 API 错误与降级语义收口
 
+状态：已完成（2026-06-11）
+
 任务：
 
 - 统一所有错误路径复用 `ErrorResponse`。
@@ -69,6 +78,8 @@
 
 ### P0-04 真实 Provider 配置检查进入 CI
 
+状态：已完成（2026-06-11）
+
 任务：
 
 - 将 `scripts/check_real_api_config.py` 和可免密 live smoke 拆成 CI 可运行的安全档位。
@@ -83,6 +94,8 @@
 - 生产环境 DataSourceConfig 未授权时启动失败或强制禁用。
 
 ### P0-05 产品能力矩阵文档化
+
+状态：已完成（2026-06-12）
 
 任务：
 
@@ -101,6 +114,15 @@
 
 ### P1-01 LLM Intent Parser 产品化
 
+状态：已完成（2026-06-12）
+
+执行记录：2026-06-23 已修复规则解析器对中文点号日期的识别，支持 `2026年6.24号`、`2026/6/24`、`6.24号` 等输入，并补充真机反馈原句回归测试。
+
+执行记录：2026-06-23 已修复真实 LLM 解析链路配置排查问题：`REAL_LLM_BASE_URL` 应填写 OpenAI-compatible 根路径而不是 `/chat/completions` 完整路径；同时补强 Intent Parser Prompt 的 TravelRequest 字段约束，并在 LLM 输出字段不合规且 Repair 失败时回退规则解析器，避免自然语言输入被直接阻断。
+
+执行记录：2026-06-23 已将真实 LLM HTTP 超时从固定 15 秒调整为 `REAL_LLM_TIMEOUT_SECONDS` 可配置项，本地默认配置为 45 秒，以适配 Ark/Doubao 在较长 Intent Parser Prompt 下的响应耗时。
+执行记录：2026-06-23 已修复日期前缀自然语言输入的规则 fallback，例如 `6.26上午，从上海东方明珠塔到云南洱海`；真实 LLM 输出缺失起终点且 Repair 失败时，规则解析器现在可以正确解析出发地、目的地和日期。
+
 任务：
 
 - 按 `LLM_PROMPT_DESIGN.md` 实现 Prompt 模板、版本常量和 LLM 调用日志。
@@ -117,6 +139,10 @@
 
 ### P1-02 地点解析与交通节点候选
 
+状态：已完成（2026-06-12）
+
+执行记录：2026-06-23 根据真机日志 `6.26号上午，从上海静安寺到武汉天地` 补充武汉地点/交通节点覆盖，新增武汉天地、武汉站、汉口站、武昌站和武汉天河机场候选，避免目的地城市为空导致 `route_coverage` 失败。
+
 任务：
 
 - 用 Geocoding Adapter 替换 Planner 内硬编码坐标。
@@ -130,7 +156,16 @@
 - 每个候选带 DataSourceMetadata。
 - 地点歧义时返回可选项。
 
+执行记录：2026-06-23 已完成 `geocode addressdetails -> 城市归一化 -> 交通节点目录` 链路；站点/机场候选改由 `backend/app/data/transport_nodes.json` 生成，Location Resolver 不再为交通节点维护逐城市 Python 常量，目录缺失时不会编造站点。
+执行记录：2026-06-23 已新增交通节点 Catalog Provider 与 `scripts/import_transport_nodes.py`，从 12306 官方站名目录导入铁路站点/城市/电报码，并从 OurAirports CSV 导入中国机场目录；当前生成目录包含 3380 个铁路站点和 417 个机场，铁路站点坐标缺失时会按枢纽等级排序并显式标注坐标边界。
+执行记录：2026-06-24 已修正 OurAirports 中国机场城市归一化：导入时使用 12306 城市拼音别名把 `Sanya` 等英文 municipality 映射到中文城市名，三亚凤凰机场等机场候选可按中文目的地命中；同时保留内部中文 seed 节点优先级，避免英文机场名覆盖既有中文展示。
+执行记录：2026-06-25 已统一 `transport_nodes.json` 节点 schema：内部 seed 与外部导入节点均补齐 `node_type`、外部代码、来源、授权、导入时间和坐标质量字段；导入合并逻辑会在写出前规范化 existing catalog，避免短字段 seed 与长字段导入节点混用。
+执行记录：2026-06-27 已修复 POI/车站地点解析被城市别名误覆盖的问题：`上海东方明珠塔`、`成都太古里` 已补充精确坐标，`上海虹桥站`、`成都东站` 等交通节点会优先于 `上海`/`成都` 城市别名匹配；避免接驳路线用城市中心或春熙路等代表点估算。
+执行记录：2026-06-27 已移除地点记录中的城市级别别名宽松 contains 匹配：`上海`、`成都` 等城市 alias 仅用于明确城市解析/歧义候选，不再把 `上海未知展馆`、`成都东站` 这类具体地点误命中到 `上海市区` 或 `成都春熙路`。
 ### P1-03 本地接驳引擎
+
+状态：已完成（2026-06-12）
+执行记录：2026-06-27 已修正本地接驳距离/时间/费用一致性：接驳 option 现在保留地图 Provider 返回的 `distance_meters`，选中接驳段直接继承真实路线距离，不再用默认分钟反推距离；东方明珠到上海虹桥站、成都东站到成都太古里已用高德 live 路线校验并回归到合理量级。
 
 任务：
 
@@ -146,6 +181,15 @@
 - 接驳方式切换后 1 秒级返回重算结果。
 
 ### P1-04 Rail Planning Engine
+
+状态：已完成（2026-06-16；`rail_authorized_partner` 已调整为聚合数据 817 火车票查询协议，去除旧 `/rail/offers` + Bearer 调用方式；运行时 Planner 已由动态 Provider 方案替换旧规格方案：按地点解析出的候选站点生成站点对查询，由 Provider 返回真实车次/票价/余票后再组装门到门方案；旧铁路/航班规格引擎仅保留为独立测试与后续迁移参考，不再参与 `build_plans()` 运行时结果；中转、多段、票源增强、航班和航铁混合在动态化前明确以能力缺口阻断，不再用旧模板补造）
+
+执行记录：2026-06-23 已补充聚合铁路 Provider 限额/频率/授权/查询失败的错误分类与用户文案；本地响应日志只能说明后端收到的 Provider 错误或空响应，不能直接等同于聚合后台调用统计结论，排查时需先确认用户复现时间点、输入路线、当前 key、接口产品和后台统计口径。
+
+执行记录：2026-06-23 已在铁路 Provider 层增加跨站点对查询的 QPS 限速，默认按 `rail_authorized_partner` 每 1 秒最多 1 次请求串行调用，避免同一次动态规划连续查询多个站点对时触发“每1秒限制1次”的上游频率限制；`.env.example` 和本地 `.env` 已补充 `TRAVEL_SOURCE_RAIL_AUTHORIZED_PARTNER_MIN_INTERVAL_SECONDS`。
+执行记录：2026-06-24 已将 `rail_authorized_partner` 实际调用间隔增加到不少于 1.25 秒并在遇到上游频率/配额限制时停止继续尝试后续站点对；同时把全站点对 `empty response` 正确归类为“暂未返回可验证直达车次”，避免误报为查询失败。
+执行记录：2026-06-24 已接入动态铁路中转 Planner：当直达铁路 Provider 未返回可验证车次时，Planner 会从交通节点目录按城市/地理绕行成本生成中转站候选，分别查询两段铁路 Provider offer，并仅在两段真实车次满足最小换乘时间时生成 `TRANSFER_RAIL`，不再使用旧中转模板补造方案。
+执行记录：2026-06-25 已修复聚合铁路站点对查询参数：无明确车次号时不再发送非文档枚举值 `filter=all`，改为空筛选以允许 Provider 返回全类型车次；补充回归测试覆盖无车次号站点对查询，避免真实可用路线被误判为空响应。
 
 任务：
 
@@ -163,6 +207,10 @@
 
 ### P1-05 Flight Planning Engine
 
+状态：已完成（2026-06-12；规划引擎和 Amadeus Offers/Price 链路验收通过，真实报价仍受用户自有凭证和授权阻塞）
+执行记录：2026-06-24 已将运行时 Planner 从“能力缺口阻断”升级为动态航班/航铁混合接入：机场候选通过交通节点目录解析 IATA 后查询 Flight Offers，直飞和航班中转 offer 可生成 `DIRECT_FLIGHT` / `TRANSFER_FLIGHT`；当直达铁路和直达航班均不可用时，Planner 会尝试航班+铁路或铁路+航班的 Provider 事实组合，并仅在连接时间满足约束时生成 `FLIGHT_RAIL_MIXED`。
+执行记录：2026-06-25 已修正航班 Provider 未启用时的失败语义：当 Amadeus Flight Offers 未启用或缺少凭证时返回 `no enabled flight offer provider` 并归类为 `FLIGHT_PROVIDER_DISABLED`，不再误报为“无航班报价返回”。
+
 任务：
 
 - 使用 Amadeus Flight Offers / Price 形成真实航班报价链路。
@@ -177,6 +225,9 @@
 - 航班核心事实缺失时不生成对应航班方案。
 
 ### P1-06 Candidate Plan Generator
+
+状态：已完成（2026-06-12；同步候选池分层、硬约束过滤和 LLM 候选控制验收通过，异步增量体验继续归入 P2-02/P3-02）
+执行记录：2026-06-27 已新增时间锚点与门到门 schedule 计算：`TravelRequest` 支持 `time_anchor_type`、`time_window_start`、`time_window_end`，Planner 会为接驳段反算 `departure_time`/`arrival_time`，并在重新规划时按主程出发窗口或最终到达约束过滤真实 Provider 返回的车次/航班候选；切换接驳方式后也会刷新整条方案时间线。
 
 任务：
 
@@ -193,6 +244,8 @@
 
 ### P1-07 Cost / Comfort / Risk 引擎
 
+状态：已完成（2026-06-12）
+
 任务：
 
 - 把费用、舒适度、风险从 Planner 辅助函数拆成独立模块。
@@ -207,6 +260,9 @@
 - LLM 只解释，不计算事实字段。
 
 ### P1-08 LLM Recommendation Engine
+
+状态：已完成（2026-06-12；真实 LLM 仍受 `real_llm` 授权阻塞）
+执行记录：2026-06-27 已修复真实 LLM 推荐输出 schema 漂移问题：Recommendation Prompt 现在显式给出 `LLMRecommendationOutput` JSON 模板、允许/禁止字段和三类推荐 slot；当真实 LLM 返回 `recommendations` map、额外 `request_id` 或缺少 `selected_recommendations` 等 schema 错误时，推荐链路会进入一次 repair，而不是直接返回 `recommendation_result = null`。
 
 任务：
 
@@ -223,6 +279,8 @@
 
 ### P1-09 Recalculate 交互闭环
 
+状态：已完成（2026-06-12）
+
 任务：
 
 - 对齐 RecalculateRequest / RecalculateResponse 与 Schema V1.15。
@@ -237,6 +295,8 @@
 - App 更新局部方案，不丢失其他候选。
 
 ### P1-10 Redirect-only Booking Handoff
+
+状态：已完成（2026-06-12；OTA/打车仍受合作方或外部平台授权边界限制）
 
 任务：
 
@@ -257,6 +317,8 @@
 
 ### P2-01 App 信息架构
 
+状态：已完成（2026-06-12：已完成底部双 Tab 信息架构与“云起 / 路明”闭环；云起承载空白 prompt 输入和输入校验，路明承载规划中、结果、方案详情、数据来源、错误、空结果、重算和 redirect-only 跳转；App 仍保持薄客户端，只调用后端 API；已更新 `frontend/ui-preview.html` 与 `frontend/ui-preview-screenshot.png`，并通过 App typecheck、API/Redirect 回归测试和本地预览截图验收。）
+
 任务：
 
 - 设计并实现首页/输入页、规划中页、结果页、方案详情页、数据来源页、错误页、空结果页。
@@ -270,6 +332,10 @@
 - UI 不依赖硬编码样例数据。
 
 ### P2-02 规划中与异步任务体验
+
+状态：已完成（2026-06-12：已新增 AsyncJob Schema、`/api/travel/plan/async` 启动接口、`/api/travel/jobs/{job_id}` 轮询接口和 `/api/travel/jobs/{job_id}/retry` 重试接口；App 提交流程已切换为异步启动 + 轮询，支持 RUNNING 首屏、PARTIAL/COMPLETE/FAILED 最终展示、失败源重试和改写需求入口；生产级队列、取消、超时与并发控制继续归入 P3-02。）
+执行记录：2026-06-27 根据真机日志 `job_925b5a7146cf` 修复前端过早放弃轮询的问题：该次后端约 55 秒后返回 `PARTIAL + 4 个铁路直达候选 + PARTIAL_READY`，但 App 原先 30 次、约 36 秒即进入错误态并显示“规划失败”；现已将轮询窗口扩展到约 120 秒，避免真实 Provider/LLM 辅助链路较慢时误报失败。
+执行记录：2026-06-27 已调整 App 规划中阶段进度展示：解析、地点、接驳、铁路、航班、评分、推荐改为指示灯样式；由于当前后端仅返回粗粒度 `progress` 与 `AsyncJob.job_status`，未提供逐阶段实时状态，前端只标记可确定完成的解析阶段，最终完成态才全量点亮，避免把 55% 等中间进度误展示为多个真实阶段已完成。
 
 任务：
 
@@ -286,6 +352,11 @@
 
 ### P2-03 方案详情与可信解释
 
+状态：已完成（2026-06-12：方案详情页已展示时间线、费用明细、估算标记、风险提示、舒适度拆解、数据完整度/置信度、最新数据更新时间、数据来源、票源增强等级与限制，以及航班中转/多机场/前序风险缺失边界；相关文案避免“保证有票/一定成功”等交易承诺，并已更新 UI 预览截图。）
+执行记录：2026-06-27 根据真机体验反馈收敛方案详情展示：前端已隐藏“可信解释”“提醒”“舒适度拆解”“风险提示/航班风险边界”等区块，保留时间线、费用明细、可调整选项、票源增强和数据来源页；后端仍保留数据质量、舒适度和风险结构化字段供后续产品展示或诊断使用。
+执行记录：2026-06-27 已补充方案时间线中的具体时间点展示：当铁路/航班段包含 `departure_time` 和 `arrival_time` 时，前端会显示类似 `高铁 · 06:01 - 21:53 · 15小时52分`，接驳段继续显示方式与耗时。
+执行记录：2026-06-27 已把接驳段纳入具体时间点展示：后端根据铁路提前 20 分钟、航班提前 90 分钟、到站/落地后缓冲反算本地接驳时刻；App 方案详情页新增紧凑的“主程出发/最晚到达 + HH:mm”重新规划入口，用户调整时间会重新提交 TravelRequest 并重新查询 Planner，而不是前端本地改写旧方案。
+
 任务：
 
 - 展示费用明细、时间线、风险、舒适度拆解、数据来源、更新时间。
@@ -301,6 +372,9 @@
 
 ### P2-04 App 设计系统与可访问性
 
+状态：已完成（2026-06-12：已新增 `frontend/src/designSystem.ts` 管理颜色、间距、圆角、触控热区和内容宽度；App 已接入宽屏内容约束、关键操作 accessibilityRole/accessibilityLabel、触控 hitSlop 与 44px 级最小触控尺寸；风险状态保留文字标签，不只依赖颜色。）
+执行记录：2026-06-27 时间调整 UI 采用 8px 圆角、44px 触控热区、分段控件和紧凑输入行，放在推荐方案与详情之间，避免把时间调整入口做成大块说明卡或打断时间线阅读。
+
 任务：
 
 - 建立颜色、字体、间距、按钮、卡片、表单、状态标签、风险标签组件。
@@ -314,6 +388,8 @@
 - 风险状态不只依赖颜色表达。
 
 ### P2-05 App 原生能力
+
+状态：已完成（2026-06-12：已新增 `frontend/src/nativeCapabilities.ts`，支持系统定位权限请求与手动输入降级、外部 App/系统 URL 跳转封装、分享方案、复制行程摘要、保存最近一次脱敏方案快照，以及 App 回到前台后轮询未完成任务或提示 redirect 过期；未保存第三方账号、cookie、token、支付或实名信息。）
 
 任务：
 
@@ -329,6 +405,8 @@
 - 最近规划不保存第三方账号、支付或实名敏感信息。
 
 ### P2-06 用户反馈和问题上报
+
+状态：已完成（2026-06-12：结果详情页已提供“路线不准 / 价格不准 / 跳转失败 / 看不懂”反馈入口；后端新增 `/api/feedback`，反馈关联 request_id、trace_id、correlation_id、plan_id、source_id，并在内存中按 category/source 聚合计数；后端拒绝包含账号、密码、cookie、token、支付、实名等敏感内容的反馈。）
 
 任务：
 
@@ -347,6 +425,8 @@
 
 ### P3-01 持久化与缓存
 
+状态：已完成（2026-06-12：已新增持久化层 `backend/app/services/persistence.py` 和 TTL 缓存层 `backend/app/services/cache_store.py`；本地默认使用 SQLite 保存 TravelPlanResponse、TravelPlan 快照和反馈，支持清空内存索引后按 plan_id 读取短期方案详情；缓存层保存异步任务和重算幂等结果并定义 TTL；`.env.example` 已补充 PostgreSQL/Redis 配置入口，生产可通过 `TRAVEL_PERSISTENCE_BACKEND=postgres`、`POSTGRES_DSN`、`REDIS_URL` 接入外部服务。）
+
 任务：
 
 - 引入 PostgreSQL 保存用户请求、TravelRequest、TravelPlan 快照、Provider 调用日志、LLM 调用摘要、反馈。
@@ -360,6 +440,8 @@
 - 敏感字段不落库或已脱敏。
 
 ### P3-02 异步任务与队列
+
+状态：已完成（2026-06-12：异步规划已支持 job_id、job_status、polling_url、幂等键复用、重试和取消入口；App 可取消当前规划；新增 `task_queue.py` 管理任务超时、Provider 超时、重试次数和最大并发配置项；异步状态符合 AsyncJob Schema，状态缓存有 TTL。）
 
 任务：
 
@@ -375,6 +457,8 @@
 
 ### P3-03 可观测性
 
+状态：已完成（2026-06-12：已新增 `backend/app/services/observability.py`，按 TravelPlanResponse 聚合请求量、COMPLETE/PARTIAL/FAILED 状态、Provider 失败、LLM repair 指标；新增只读 `/api/observability/metrics` 端点，输出 request/trace/correlation 可串联的统计快照，且不记录第三方账号、token、支付或实名信息。）
+
 任务：
 
 - 结构化日志统一输出 request_id、trace_id、correlation_id、source_id、failure_class、message。
@@ -387,6 +471,8 @@
 - 不记录第三方账号、token、支付或实名敏感信息。
 
 ### P3-04 鉴权、限流与安全
+
+状态：已完成（2026-06-12：已新增 `backend/app/core/security.py`，支持匿名设备标识 `x-device-id`、可选 API Key 闸门、请求体大小限制、每设备分钟级限流，并在响应头回传 request_id/trace_id/correlation_id/device_id；`.env.example` 已补充安全配置项，公共异常仍返回脱敏 ErrorResponse。）
 
 任务：
 
@@ -402,6 +488,8 @@
 - 生产配置不允许未审核数据源。
 
 ### P3-05 App 发布流水线
+
+状态：已完成（2026-06-12：已新增 `.github/workflows/ci.yml`，覆盖 schema 导出/diff、后端测试、App typecheck 和 Expo export；已新增 `docs/RELEASE_CHECKLIST.md` 与 `docs/ROLLBACK_CHECKLIST.md`，包含 staging/production 配置、Provider 授权、iOS/Android 构建验证、发布记录和回滚步骤；本地已验证后端 111 个测试、App typecheck 和 `npm run build`。）
 
 任务：
 
@@ -424,6 +512,8 @@
 
 ### P4-01 数据源运营后台
 
+状态：已完成（2026-06-12：已新增只读 `/api/admin/data-sources`，复用 DataSourceRuntimeStatus 输出数据源健康、授权、最近失败、降级原因和平均延迟等字段；接口不暴露 qps_limit、密钥或 Provider 凭证，可供运营/开发判断当前能力可用性。）
+
 任务：
 
 - 展示数据源健康、授权状态、最近失败、平均延迟、降级原因。
@@ -436,6 +526,8 @@
 - 开发能定位 Provider 失败趋势。
 
 ### P4-02 搜索与规划质量评估
+
+状态：已完成（2026-06-12：已新增 `docs/GOLDEN_ROUTES.json` 和 `scripts/evaluate_quality.py`，输出方案覆盖率、PARTIAL 状态、推荐可用性和 pass_rate；默认模式只报告质量指标，`--strict` 可作为门禁；当前未授权真实核心 Provider 的 DEV 配置下 pass_rate 为 0.3333，反映真实能力边界。）
 
 任务：
 
@@ -450,6 +542,8 @@
 
 ### P4-03 多城市、多语言和个性化
 
+状态：已完成（2026-06-12：规则解析器已支持北京/广州、上海/青岛、成都/深圳、杭州/西安等多城市候选族，并新增英文/中英混合输入的城市对和偏好词解析，如 `from Beijing to Guangzhou, comfortable, train only`；App 已保存最近一次脱敏方案快照和用户偏好入口，个性化不覆盖 hard constraints。）
+
 任务：
 
 - 扩展城市和交通模式覆盖。
@@ -462,6 +556,8 @@
 - 个性化不会越过 hard constraints 和安全边界。
 
 ### P4-04 App 增长与留存
+
+状态：已完成（2026-06-13：App 已将最近规划从单条快照升级为 5 条脱敏历史摘要，并新增收藏方案、行程提醒、价格/状态变化关注、常用出发地与目的地偏好记忆；所有收藏、提醒和偏好均可在 App 内关闭或移除，关闭偏好时会清空对应本地字段；新增增长事件 `RECENT_PLAN_VIEWED`、`FAVORITE_TOGGLED`、`TRIP_REMINDER_TOGGLED`、`PRICE_STATUS_WATCH_TOGGLED`、`PREFERENCE_UPDATED`，并复用 `/api/events` 将输入、规划成功、PARTIAL、推荐点击、跳转、反馈等事件按 request_id/trace_id/plan_id 脱敏关联到 `/api/observability/metrics`；事件 metadata 只保留非敏感字段并拒绝账号、token、支付、实名等内容。）
 
 任务：
 

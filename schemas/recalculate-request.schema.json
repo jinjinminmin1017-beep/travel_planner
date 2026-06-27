@@ -5,9 +5,9 @@
       "properties": {
         "option_type": {
           "enum": [
-            "RAIL_SEAT",
-            "FLIGHT_CABIN",
-            "LOCAL_TRANSFER"
+            "SEAT",
+            "CABIN",
+            "TRANSFER_MODE"
           ],
           "title": "Option Type",
           "type": "string"
@@ -57,9 +57,9 @@
     },
     "change_type": {
       "enum": [
-        "RAIL_SEAT",
-        "FLIGHT_CABIN",
-        "LOCAL_TRANSFER"
+        "SEAT_TYPE",
+        "CABIN_TYPE",
+        "LOCAL_TRANSFER_MODE"
       ],
       "title": "Change Type",
       "type": "string"
@@ -72,10 +72,11 @@
       "$ref": "#/$defs/SelectedOption"
     },
     "recalculate_scope": {
-      "default": "PLAN_TOTAL",
+      "default": "PLAN_ONLY",
       "enum": [
-        "SEGMENT_ONLY",
-        "PLAN_TOTAL"
+        "PLAN_ONLY",
+        "PLAN_AND_RECOMMENDATION",
+        "FULL_REEVALUATION"
       ],
       "title": "Recalculate Scope",
       "type": "string"

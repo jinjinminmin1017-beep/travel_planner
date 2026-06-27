@@ -18,18 +18,15 @@
           "title": "Enabled",
           "type": "boolean"
         },
-        "status": {
+        "health_status": {
           "enum": [
             "OK",
             "DEGRADED",
-            "DOWN"
+            "DOWN",
+            "DISABLED"
           ],
-          "title": "Status",
+          "title": "Health Status",
           "type": "string"
-        },
-        "degraded": {
-          "title": "Degraded",
-          "type": "boolean"
         },
         "degraded_reason": {
           "anyOf": [
@@ -42,6 +39,53 @@
           ],
           "default": null,
           "title": "Degraded Reason"
+        },
+        "authority_level": {
+          "anyOf": [
+            {
+              "enum": [
+                "S",
+                "A",
+                "B",
+                "C"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Authority Level"
+        },
+        "license_status": {
+          "anyOf": [
+            {
+              "enum": [
+                "APPROVED",
+                "PENDING_REVIEW",
+                "NOT_APPROVED"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "License Status"
+        },
+        "commercial_allowed": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Commercial Allowed"
         },
         "last_success_at": {
           "anyOf": [
@@ -97,8 +141,7 @@
         "source_name",
         "source_type",
         "enabled",
-        "status",
-        "degraded",
+        "health_status",
         "checked_at"
       ],
       "title": "DataSourceRuntimeStatus",
@@ -127,7 +170,9 @@
         "DIRECT_FLIGHT",
         "TRANSFER_FLIGHT",
         "MULTI_AIRPORT_FLIGHT",
-        "FLIGHT_RAIL_MIXED"
+        "FLIGHT_RAIL_MIXED",
+        "GROUND_ONLY",
+        "MIXED"
       ],
       "title": "PlanType",
       "type": "string"
@@ -155,6 +200,29 @@
           "title": "Source Id",
           "type": "string"
         },
+        "adapter_name": {
+          "title": "Adapter Name",
+          "type": "string"
+        },
+        "handling_strategy": {
+          "$ref": "#/$defs/SourceFailureHandlingStrategy"
+        },
+        "error_code": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Error Code"
+        },
+        "retry_count": {
+          "minimum": 0,
+          "title": "Retry Count",
+          "type": "integer"
+        },
         "source_used_id": {
           "anyOf": [
             {
@@ -164,7 +232,6 @@
               "type": "null"
             }
           ],
-          "default": null,
           "title": "Source Used Id"
         },
         "fallback_source_id": {
@@ -176,7 +243,6 @@
               "type": "null"
             }
           ],
-          "default": null,
           "title": "Fallback Source Id"
         },
         "fallback_reason": {
@@ -188,7 +254,6 @@
               "type": "null"
             }
           ],
-          "default": null,
           "title": "Fallback Reason"
         },
         "fallback_used": {
@@ -226,6 +291,13 @@
         "trace_id",
         "correlation_id",
         "source_id",
+        "adapter_name",
+        "handling_strategy",
+        "error_code",
+        "retry_count",
+        "source_used_id",
+        "fallback_source_id",
+        "fallback_reason",
         "fallback_used",
         "failure_class",
         "message",
@@ -239,20 +311,23 @@
     },
     "SourceFailureClass": {
       "enum": [
-        "AUXILIARY",
-        "FALLBACK_USED",
-        "CORE_FACT",
-        "SAFETY_CRITICAL"
+        "AUXILIARY_DATA_FAILURE",
+        "FALLBACK_AVAILABLE_FAILURE",
+        "CORE_FACT_FAILURE",
+        "SAFETY_CRITICAL_FAILURE"
       ],
       "title": "SourceFailureClass",
       "type": "string"
     },
     "SourceFailureHandlingStrategy": {
       "enum": [
-        "USE_ORIGINAL",
-        "USE_FALLBACK",
+        "RETRY",
+        "FALLBACK",
         "PARTIAL_RESULT",
-        "BLOCK_PLAN_TYPE"
+        "DEGRADE_CONFIDENCE",
+        "BLOCK_PLAN",
+        "EXPLAIN_ONLY",
+        "LOG_ONLY"
       ],
       "title": "SourceFailureHandlingStrategy",
       "type": "string"
@@ -266,18 +341,25 @@
           "type": "string"
         },
         "timezone": {
-          "default": "Asia/Shanghai",
           "title": "Timezone",
           "type": "string"
         },
         "source_timezone": {
-          "default": "Asia/Shanghai",
-          "title": "Source Timezone",
-          "type": "string"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Timezone"
         }
       },
       "required": [
-        "datetime"
+        "datetime",
+        "timezone"
       ],
       "title": "TimePoint",
       "type": "object"

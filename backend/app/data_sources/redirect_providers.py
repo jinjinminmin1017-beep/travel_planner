@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import Protocol
-from urllib.parse import quote, urlencode
+from urllib.parse import parse_qsl, quote, urlencode, urlparse
 from uuid import uuid4
 
 from app.data_sources.config_loader import has_required_secret, load_data_source_configs
@@ -16,6 +17,7 @@ from app.models.schemas import (
     FlightSegment,
     LocalTransferSegment,
     RailSegment,
+    TimePoint,
     TravelPlan,
     now_timepoint,
 )
@@ -189,7 +191,6 @@ def _metadata_from_config(config: DataSourceConfig) -> DataSourceMetadata:
         license_status=config.license_status,
         commercial_allowed=config.commercial_allowed,
         fetched_at=now_timepoint(),
-        update_frequency="REDIRECT_ONLY",
         cacheable=False,
     )
 
@@ -203,12 +204,13 @@ def _synthetic_metadata(source_id: str, source_name: str, source_type: DataSourc
         license_status="APPROVED",
         commercial_allowed=False,
         fetched_at=now_timepoint(),
-        update_frequency="REDIRECT_ONLY",
         cacheable=False,
     )
 
 
 def _redirect(redirect_type: str, url: str, metadata: DataSourceMetadata, fallback_instruction: str | None = None) -> BookingRedirect:
+    _assert_redirect_only_url(url)
+    generated_at = now_timepoint()
     return BookingRedirect(
         redirect_id=f"redir_{uuid4().hex[:8]}",
         redirect_type=redirect_type,  # type: ignore[arg-type]
@@ -216,8 +218,8 @@ def _redirect(redirect_type: str, url: str, metadata: DataSourceMetadata, fallba
         url=url,
         fallback_instruction=fallback_instruction,
         data_source=metadata,
-        generated_at=now_timepoint(),
-        expires_at=None,
+        generated_at=generated_at,
+        expires_at=_expires_at(generated_at),
     )
 
 
@@ -229,6 +231,7 @@ def _fallback_redirect(redirect_type: str) -> BookingRedirect:
         "MAP_NAVIGATION": "高德/百度地图",
         "RIDE_HAILING": "打车平台",
     }
+    generated_at = now_timepoint()
     return BookingRedirect(
         redirect_id=f"redir_{uuid4().hex[:8]}",
         redirect_type=redirect_type,  # type: ignore[arg-type]
@@ -236,8 +239,8 @@ def _fallback_redirect(redirect_type: str) -> BookingRedirect:
         url=None,
         fallback_instruction=f"请打开{labels.get(redirect_type, '对应平台')}手动搜索，本系统不代下单、不支付、不保存账号。",
         data_source=_synthetic_metadata("redirect_fallback", "Redirect Fallback Instruction", DataSourceType.INTERNAL_CALCULATION),
-        generated_at=now_timepoint(),
-        expires_at=None,
+        generated_at=generated_at,
+        expires_at=_expires_at(generated_at),
     )
 
 
@@ -266,3 +269,21 @@ def _manual_instruction(platform: str, query: dict[str, str]) -> str:
         return f"请打开{platform}手动搜索，本系统仅提供跳转，不代下单或支付。"
     query_text = "，".join(f"{key}={quote(str(value))}" for key, value in query.items())
     return f"请在{platform}手动核验并购票：{query_text}。本系统仅提供跳转，不代下单或支付。"
+
+
+def _expires_at(generated_at: TimePoint) -> TimePoint:
+    return TimePoint(
+        datetime=generated_at.datetime + timedelta(minutes=15),
+        timezone=generated_at.timezone,
+        source_timezone=generated_at.source_timezone,
+    )
+
+
+def _assert_redirect_only_url(url: str) -> None:
+    forbidden_fragments = {"login", "password", "cookie", "token", "pay", "payment", "order", "booking", "reserve", "passenger", "credential", "idcard"}
+    parsed = urlparse(url)
+    values = [parsed.path, parsed.fragment]
+    values.extend(f"{key}={value}" for key, value in parse_qsl(parsed.query, keep_blank_values=True))
+    lowered = " ".join(values).lower()
+    if any(fragment in lowered for fragment in forbidden_fragments):
+        raise RedirectProviderError("redirect URL contains transaction or credential parameters")

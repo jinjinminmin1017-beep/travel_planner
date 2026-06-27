@@ -117,6 +117,37 @@
       "title": "CabinOption",
       "type": "object"
     },
+    "CacheMetadata": {
+      "additionalProperties": false,
+      "properties": {
+        "cacheable": {
+          "title": "Cacheable",
+          "type": "boolean"
+        },
+        "cache_ttl_seconds": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cache Ttl Seconds"
+        },
+        "cache_hit": {
+          "default": false,
+          "title": "Cache Hit",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "cacheable"
+      ],
+      "title": "CacheMetadata",
+      "type": "object"
+    },
     "ComfortScore": {
       "additionalProperties": false,
       "properties": {
@@ -141,6 +172,11 @@
           "minimum": 0.0,
           "title": "Confidence",
           "type": "number"
+        },
+        "score_version": {
+          "default": "comfort_score_v1",
+          "title": "Score Version",
+          "type": "string"
         },
         "explanation": {
           "title": "Explanation",
@@ -254,11 +290,48 @@
           "title": "Authority Level",
           "type": "string"
         },
+        "source_priority": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Priority"
+        },
+        "source_region": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Region"
+        },
+        "api_version": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Api Version"
+        },
         "license_status": {
           "enum": [
             "APPROVED",
             "PENDING_REVIEW",
-            "REJECTED"
+            "NOT_APPROVED"
           ],
           "title": "License Status",
           "type": "string"
@@ -270,13 +343,58 @@
         "fetched_at": {
           "$ref": "#/$defs/TimePoint"
         },
-        "update_frequency": {
-          "title": "Update Frequency",
-          "type": "string"
+        "data_freshness_seconds": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Data Freshness Seconds"
         },
         "cacheable": {
           "title": "Cacheable",
           "type": "boolean"
+        },
+        "cache_ttl_seconds": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cache Ttl Seconds"
+        },
+        "sla_level": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sla Level"
+        },
+        "cache_metadata": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CacheMetadata"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "required": [
@@ -287,7 +405,6 @@
         "license_status",
         "commercial_allowed",
         "fetched_at",
-        "update_frequency",
         "cacheable"
       ],
       "title": "DataSourceMetadata",
@@ -398,6 +515,18 @@
         "duration_minutes": {
           "title": "Duration Minutes",
           "type": "integer"
+        },
+        "distance_meters": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Distance Meters"
         },
         "access_station": {
           "anyOf": [
@@ -518,6 +647,28 @@
           "title": "Transfer Options",
           "type": "array"
         },
+        "departure_time": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TimePoint"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "arrival_time": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TimePoint"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "data_source": {
           "$ref": "#/$defs/DataSourceMetadata"
         },
@@ -558,14 +709,12 @@
           "type": "integer"
         },
         "currency": {
-          "default": "CNY",
           "maxLength": 3,
           "minLength": 3,
           "title": "Currency",
           "type": "string"
         },
         "scale": {
-          "default": 2,
           "maximum": 6,
           "minimum": 0,
           "title": "Scale",
@@ -577,13 +726,22 @@
           "type": "boolean"
         },
         "display_text": {
-          "title": "Display Text",
-          "type": "string"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Display Text"
         }
       },
       "required": [
         "amount_minor",
-        "display_text"
+        "currency",
+        "scale"
       ],
       "title": "Money",
       "type": "object"
@@ -627,9 +785,12 @@
     },
     "PlanLifecycleStatus": {
       "enum": [
-        "ACTIVE",
+        "GENERATED",
+        "PARTIALLY_VERIFIED",
+        "VERIFIED",
         "EXPIRED",
-        "INVALIDATED"
+        "INVALIDATED",
+        "BOOKED"
       ],
       "title": "PlanLifecycleStatus",
       "type": "string"
@@ -643,7 +804,9 @@
         "DIRECT_FLIGHT",
         "TRANSFER_FLIGHT",
         "MULTI_AIRPORT_FLIGHT",
-        "FLIGHT_RAIL_MIXED"
+        "FLIGHT_RAIL_MIXED",
+        "GROUND_ONLY",
+        "MIXED"
       ],
       "title": "PlanType",
       "type": "string"
@@ -942,18 +1105,25 @@
           "type": "string"
         },
         "timezone": {
-          "default": "Asia/Shanghai",
           "title": "Timezone",
           "type": "string"
         },
         "source_timezone": {
-          "default": "Asia/Shanghai",
-          "title": "Source Timezone",
-          "type": "string"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Timezone"
         }
       },
       "required": [
-        "datetime"
+        "datetime",
+        "timezone"
       ],
       "title": "TimePoint",
       "type": "object"
@@ -963,11 +1133,13 @@
         "RAIL",
         "FLIGHT",
         "TAXI",
+        "RIDE_HAILING",
         "SUBWAY",
         "BUS",
         "WALK",
         "AIRPORT_TRANSFER",
-        "RAIL_STATION_TRANSFER"
+        "RAIL_STATION_TRANSFER",
+        "MIXED"
       ],
       "title": "TransportMode",
       "type": "string"

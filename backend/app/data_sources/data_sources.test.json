@@ -211,7 +211,7 @@
   },
   {
     "source_id": "rail_authorized_partner",
-    "source_name": "Authorized Rail Partner API",
+    "source_name": "Juhe Train Query API",
     "source_type": "RAIL",
     "authority_level": "A",
     "environment": "TEST",

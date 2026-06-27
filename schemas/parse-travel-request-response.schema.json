@@ -1,5 +1,113 @@
 {
   "$defs": {
+    "LLMValidationResult": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "1.15",
+          "default": "1.15",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "schema_valid": {
+          "title": "Schema Valid",
+          "type": "boolean"
+        },
+        "semantic_valid": {
+          "title": "Semantic Valid",
+          "type": "boolean"
+        },
+        "repair_attempted": {
+          "title": "Repair Attempted",
+          "type": "boolean"
+        },
+        "final_strategy": {
+          "enum": [
+            "USE_ORIGINAL",
+            "REPAIRED",
+            "REJECTED",
+            "FALLBACK_RULES"
+          ],
+          "title": "Final Strategy",
+          "type": "string"
+        },
+        "invalid_reasons": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Invalid Reasons",
+          "type": "array"
+        },
+        "repair_success": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Repair Success"
+        },
+        "llm_call_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Llm Call Id"
+        },
+        "prompt_version": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Prompt Version"
+        },
+        "model_name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Model Name"
+        },
+        "latency_ms": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Latency Ms"
+        }
+      },
+      "required": [
+        "schema_valid",
+        "semantic_valid",
+        "repair_attempted",
+        "final_strategy"
+      ],
+      "title": "LLMValidationResult",
+      "type": "object"
+    },
     "Money": {
       "additionalProperties": false,
       "properties": {
@@ -9,14 +117,12 @@
           "type": "integer"
         },
         "currency": {
-          "default": "CNY",
           "maxLength": 3,
           "minLength": 3,
           "title": "Currency",
           "type": "string"
         },
         "scale": {
-          "default": 2,
           "maximum": 6,
           "minimum": 0,
           "title": "Scale",
@@ -28,13 +134,22 @@
           "type": "boolean"
         },
         "display_text": {
-          "title": "Display Text",
-          "type": "string"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Display Text"
         }
       },
       "required": [
         "amount_minor",
-        "display_text"
+        "currency",
+        "scale"
       ],
       "title": "Money",
       "type": "object"
@@ -57,18 +172,25 @@
           "type": "string"
         },
         "timezone": {
-          "default": "Asia/Shanghai",
           "title": "Timezone",
           "type": "string"
         },
         "source_timezone": {
-          "default": "Asia/Shanghai",
-          "title": "Source Timezone",
-          "type": "string"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Timezone"
         }
       },
       "required": [
-        "datetime"
+        "datetime",
+        "timezone"
       ],
       "title": "TimePoint",
       "type": "object"
@@ -78,11 +200,13 @@
         "RAIL",
         "FLIGHT",
         "TAXI",
+        "RIDE_HAILING",
         "SUBWAY",
         "BUS",
         "WALK",
         "AIRPORT_TRANSFER",
-        "RAIL_STATION_TRANSFER"
+        "RAIL_STATION_TRANSFER",
+        "MIXED"
       ],
       "title": "TransportMode",
       "type": "string"
@@ -170,6 +294,38 @@
           "format": "date",
           "title": "Travel Date",
           "type": "string"
+        },
+        "time_anchor_type": {
+          "default": "DEPARTURE",
+          "enum": [
+            "DEPARTURE",
+            "ARRIVAL",
+            "AMBIGUOUS"
+          ],
+          "title": "Time Anchor Type",
+          "type": "string"
+        },
+        "time_window_start": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TimePoint"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "time_window_end": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TimePoint"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "earliest_departure_time": {
           "anyOf": [
@@ -336,6 +492,9 @@
     "travel_request": {
       "$ref": "#/$defs/TravelRequest"
     },
+    "llm_validation_result": {
+      "$ref": "#/$defs/LLMValidationResult"
+    },
     "generated_at": {
       "$ref": "#/$defs/TimePoint"
     }
@@ -346,6 +505,7 @@
     "correlation_id",
     "idempotency_key",
     "travel_request",
+    "llm_validation_result",
     "generated_at"
   ],
   "title": "ParseTravelRequestResponse",

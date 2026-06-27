@@ -46,6 +46,8 @@ def test_nominatim_geocode_maps_real_response():
     assert candidate.display_name.startswith("栈桥")
     assert candidate.point.latitude == 36.0611
     assert candidate.point.longitude == 120.3192
+    assert candidate.address["city"] == "青岛市"
+    assert candidate.address["state"] == "山东省"
     assert candidate.category == "tourism"
     assert candidate.place_type == "attraction"
     assert candidate.importance == 0.7
@@ -88,5 +90,11 @@ def _nominatim_payload():
             "type": "attraction",
             "importance": 0.7,
             "display_name": "栈桥, 市南区, 青岛市, 山东省, 中国",
+            "address": {
+                "attraction": "栈桥",
+                "city": "青岛市",
+                "state": "山东省",
+                "country": "中国",
+            },
         }
     ]

@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import os
+import re
+import threading
+import time
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any, Protocol
 
 import httpx
@@ -13,6 +16,12 @@ from app.models.schemas import DataSourceMetadata, DataSourceType, Money, SeatOp
 
 class RailProviderError(RuntimeError):
     pass
+
+
+_RATE_LIMIT_LOCK = threading.Lock()
+_LAST_PROVIDER_CALL_AT: dict[str, float] = {}
+_monotonic = time.monotonic
+_sleep = time.sleep
 
 
 @dataclass(frozen=True)
@@ -101,41 +110,59 @@ class AuthorizedRailPartnerProvider:
         self.client = client or httpx.Client(timeout=10.0)
 
     def search_offers(self, request: RailSearchRequest) -> list[RailOffer]:
+        train_filter = _juhe_train_filter(request.train_number)
         response = self.client.get(
-            f"{self.base_url}/rail/offers",
-            headers={"Authorization": f"Bearer {self.api_key}"},
+            self.base_url,
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
             params={
-                "train_number": request.train_number,
-                "origin_station": request.origin_station,
-                "destination_station": request.destination_station,
-                "departure_date": request.departure_date.isoformat(),
+                "key": self.api_key,
+                "search_type": "1",
+                "departure_station": request.origin_station,
+                "arrival_station": request.destination_station,
+                "date": request.departure_date.isoformat(),
+                "filter": train_filter,
+                "enable_booking": "2",
+                "departure_time_range": "",
             },
         )
         response.raise_for_status()
         payload = response.json()
-        return [self._parse_offer(item) for item in payload.get("data", [])]
+        error_code = int(payload.get("error_code") or 0)
+        if error_code != 0:
+            raise RailProviderError(f"juhe rail query failed: {payload.get('reason') or error_code}")
+        items = payload.get("result") or []
+        if not isinstance(items, list):
+            raise RailProviderError("juhe rail response has invalid result payload")
+        offers = [self._parse_offer(item, request.departure_date) for item in items]
+        if request.train_number:
+            requested_train = request.train_number.strip().upper()
+            offers = [offer for offer in offers if offer.train_number.upper() == requested_train]
+        return sorted(offers, key=lambda offer: 0 if offer.train_number == request.train_number else 1)
 
-    def _parse_offer(self, item: dict[str, Any]) -> RailOffer:
-        train_number = str(item.get("train_number") or "")
-        origin_station = str(item.get("origin_station") or "")
-        destination_station = str(item.get("destination_station") or "")
-        departure_at = _parse_datetime(item.get("departure_at"))
-        arrival_at = _parse_datetime(item.get("arrival_at"))
-        duration_minutes = int((arrival_at - departure_at).total_seconds() // 60)
-        data_source = rail_data_source_metadata("rail_authorized_partner", "Authorized Rail Partner API")
+    def _parse_offer(self, item: dict[str, Any], departure_date: date) -> RailOffer:
+        train_number = str(item.get("train_no") or "")
+        origin_station = str(item.get("departure_station") or "")
+        destination_station = str(item.get("arrival_station") or "")
+        departure_at = _parse_train_time(departure_date, item.get("departure_time"))
+        arrival_at = _parse_train_time(departure_date, item.get("arrival_time"))
+        if arrival_at < departure_at:
+            arrival_at = arrival_at + timedelta(days=1)
+        duration_minutes = _duration_minutes(item.get("duration"), departure_at, arrival_at)
+        data_source = rail_data_source_metadata("rail_authorized_partner", "Juhe Train Query API")
         seats = [
             SeatOption(
-                option_id=str(seat.get("option_id") or f"seat_{index}"),
-                seat_type=str(seat.get("seat_type") or ""),
-                price=_price_to_money(seat.get("price") or seat.get("price_minor") or 0),
-                availability=str(seat.get("availability") or "UNKNOWN"),
-                source_option_version=str(seat.get("source_option_version") or "rail_partner"),
+                option_id=f"seat_{seat.get('seat_type_code') or index}",
+                seat_type=str(seat.get("seat_name") or ""),
+                price=_price_to_money(seat.get("price") or 0),
+                availability=_juhe_availability(seat.get("num")),
+                source_option_version=f"juhe_{train_number}_{seat.get('seat_type_code') or index}",
                 data_source=data_source,
             )
-            for index, seat in enumerate(item.get("seat_options") or [])
+            for index, seat in enumerate(item.get("prices") or [])
+            if seat.get("seat_name") and seat.get("price") is not None
         ]
         if not seats:
-            raise RailProviderError("rail offer has no seat_options")
+            raise RailProviderError("juhe rail offer has no prices")
         return RailOffer(
             train_number=train_number,
             origin_station=origin_station,
@@ -143,7 +170,7 @@ class AuthorizedRailPartnerProvider:
             departure_at=departure_at,
             arrival_at=arrival_at,
             duration_minutes=duration_minutes,
-            stop_sequence=list(item.get("stop_sequence") or [origin_station, destination_station]),
+            stop_sequence=[origin_station, destination_station],
             seat_options=seats,
             data_source=data_source,
         )
@@ -227,7 +254,6 @@ def rail_data_source_metadata(source_id: str, source_name: str) -> DataSourceMet
         license_status="APPROVED",
         commercial_allowed=False,
         fetched_at=now_timepoint(),
-        update_frequency="REALTIME_API",
         cacheable=True,
     )
 
@@ -258,6 +284,7 @@ def search_rail_offers_with_enabled_provider_result(request: RailSearchRequest, 
     for provider in build_enabled_rail_providers(environment):
         attempted_source_ids.append(provider.source_id)
         try:
+            _respect_provider_rate_limit(provider.source_id, environment)
             offers = provider.search_offers(request)
             if offers:
                 return RailProviderSearchResult(offers=offers, attempted_source_ids=attempted_source_ids)
@@ -282,17 +309,96 @@ def search_rail_connections_with_enabled_provider_result(request: RailConnection
     return RailConnectionSearchResult(connections=[], attempted_source_ids=attempted_source_ids, failure_message="; ".join(failure_messages) or None)
 
 
-def _parse_datetime(value: str | None) -> datetime:
-    if not value:
-        raise RailProviderError("rail offer datetime is missing")
-    return datetime.fromisoformat(value)
-
-
 def _price_to_money(value: Any) -> Money:
-    if isinstance(value, int):
-        return money(value)
     amount_minor = int(round(float(value) * 100))
     return money(amount_minor)
+
+
+def _respect_provider_rate_limit(source_id: str, environment: str | None) -> None:
+    interval_seconds = _provider_min_interval_seconds(source_id, environment)
+    if interval_seconds <= 0:
+        return
+    with _RATE_LIMIT_LOCK:
+        now = _monotonic()
+        previous = _LAST_PROVIDER_CALL_AT.get(source_id)
+        if previous is not None:
+            wait_seconds = interval_seconds - (now - previous)
+            if wait_seconds > 0:
+                _sleep(wait_seconds)
+                now = _monotonic()
+        _LAST_PROVIDER_CALL_AT[source_id] = now
+
+
+def _provider_min_interval_seconds(source_id: str, environment: str | None) -> float:
+    env_override = os.getenv(f"TRAVEL_SOURCE_{source_id.upper()}_MIN_INTERVAL_SECONDS")
+    if env_override:
+        interval = _safe_float(env_override, 1.0)
+        return max(interval, 1.25) if source_id == "rail_authorized_partner" else interval
+    configs = {config.source_id: config for config in load_data_source_configs(environment)}
+    config = configs.get(source_id)
+    if config and config.qps_limit > 0:
+        interval = 1.0 / config.qps_limit
+        return max(interval, 1.25) if source_id == "rail_authorized_partner" else interval
+    if source_id == "rail_authorized_partner":
+        return 1.25
+    return 0.0
+
+
+def _safe_float(value: str, fallback: float) -> float:
+    try:
+        return max(0.0, float(value))
+    except ValueError:
+        return fallback
+
+
+def _juhe_train_filter(train_number: str) -> str:
+    prefix = (train_number or "").strip().upper()[:1]
+    if prefix in {"G", "D", "Z", "T", "K"}:
+        return prefix
+    return ""
+
+
+def _parse_train_time(departure_date: date, value: Any) -> datetime:
+    if value is None or value == "":
+        raise RailProviderError("juhe rail offer time is missing")
+    text = str(value).strip()
+    if "T" in text or re.match(r"^\d{4}-\d{2}-\d{2}", text):
+        return datetime.fromisoformat(text)
+    parts = text.split(":")
+    if len(parts) == 2:
+        text = f"{text}:00"
+    return datetime.fromisoformat(f"{departure_date.isoformat()}T{text}")
+
+
+def _duration_minutes(value: Any, departure_at: datetime, arrival_at: datetime) -> int:
+    if value is None or value == "":
+        return max(0, int((arrival_at - departure_at).total_seconds() // 60))
+    text = str(value).strip()
+    if ":" in text:
+        hours_text, minutes_text = text.split(":", 1)
+        return int(hours_text) * 60 + int(minutes_text)
+    match = re.search(r"(?:(\d+)\s*天)?\s*(?:(\d+)\s*(?:小时|时|h))?\s*(?:(\d+)\s*(?:分钟|分|m))?", text)
+    if match and any(match.groups()):
+        days = int(match.group(1) or 0)
+        hours = int(match.group(2) or 0)
+        minutes = int(match.group(3) or 0)
+        return days * 24 * 60 + hours * 60 + minutes
+    return max(0, int((arrival_at - departure_at).total_seconds() // 60))
+
+
+def _juhe_availability(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text or text in {"--", "未知"}:
+        return "UNKNOWN"
+    if text in {"无", "0"}:
+        return "NO_TICKET"
+    if text == "少":
+        return "LIMITED"
+    if text == "有":
+        return "AVAILABLE"
+    if text.isdigit():
+        return "AVAILABLE" if int(text) > 0 else "NO_TICKET"
+    return text
 
 
 def _parse_epoch(value: Any) -> datetime:

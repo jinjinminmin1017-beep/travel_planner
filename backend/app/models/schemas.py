@@ -17,11 +17,13 @@ class TransportMode(str, Enum):
     RAIL = "RAIL"
     FLIGHT = "FLIGHT"
     TAXI = "TAXI"
+    RIDE_HAILING = "RIDE_HAILING"
     SUBWAY = "SUBWAY"
     BUS = "BUS"
     WALK = "WALK"
     AIRPORT_TRANSFER = "AIRPORT_TRANSFER"
     RAIL_STATION_TRANSFER = "RAIL_STATION_TRANSFER"
+    MIXED = "MIXED"
 
 
 class PlanType(str, Enum):
@@ -33,6 +35,8 @@ class PlanType(str, Enum):
     TRANSFER_FLIGHT = "TRANSFER_FLIGHT"
     MULTI_AIRPORT_FLIGHT = "MULTI_AIRPORT_FLIGHT"
     FLIGHT_RAIL_MIXED = "FLIGHT_RAIL_MIXED"
+    GROUND_ONLY = "GROUND_ONLY"
+    MIXED = "MIXED"
 
 
 class RiskLevel(str, Enum):
@@ -43,16 +47,30 @@ class RiskLevel(str, Enum):
 
 
 class PlanLifecycleStatus(str, Enum):
-    ACTIVE = "ACTIVE"
+    GENERATED = "GENERATED"
+    PARTIALLY_VERIFIED = "PARTIALLY_VERIFIED"
+    VERIFIED = "VERIFIED"
     EXPIRED = "EXPIRED"
     INVALIDATED = "INVALIDATED"
+    BOOKED = "BOOKED"
 
 
 class PlanningStatus(str, Enum):
+    PENDING = "PENDING"
     RUNNING = "RUNNING"
     PARTIAL = "PARTIAL"
     COMPLETE = "COMPLETE"
     FAILED = "FAILED"
+
+
+class AsyncJobStatus(str, Enum):
+    QUEUED = "QUEUED"
+    RUNNING = "RUNNING"
+    WAITING_SOURCE = "WAITING_SOURCE"
+    PARTIAL_READY = "PARTIAL_READY"
+    COMPLETE = "COMPLETE"
+    FAILED = "FAILED"
+    CANCELLED = "CANCELLED"
 
 
 class RecommendationEligibility(str, Enum):
@@ -85,17 +103,20 @@ class TicketEnhancementGrade(str, Enum):
 
 
 class SourceFailureClass(str, Enum):
-    AUXILIARY = "AUXILIARY"
-    FALLBACK_USED = "FALLBACK_USED"
-    CORE_FACT = "CORE_FACT"
-    SAFETY_CRITICAL = "SAFETY_CRITICAL"
+    AUXILIARY_DATA_FAILURE = "AUXILIARY_DATA_FAILURE"
+    FALLBACK_AVAILABLE_FAILURE = "FALLBACK_AVAILABLE_FAILURE"
+    CORE_FACT_FAILURE = "CORE_FACT_FAILURE"
+    SAFETY_CRITICAL_FAILURE = "SAFETY_CRITICAL_FAILURE"
 
 
 class SourceFailureHandlingStrategy(str, Enum):
-    USE_ORIGINAL = "USE_ORIGINAL"
-    USE_FALLBACK = "USE_FALLBACK"
+    RETRY = "RETRY"
+    FALLBACK = "FALLBACK"
     PARTIAL_RESULT = "PARTIAL_RESULT"
-    BLOCK_PLAN_TYPE = "BLOCK_PLAN_TYPE"
+    DEGRADE_CONFIDENCE = "DEGRADE_CONFIDENCE"
+    BLOCK_PLAN = "BLOCK_PLAN"
+    EXPLAIN_ONLY = "EXPLAIN_ONLY"
+    LOG_ONLY = "LOG_ONLY"
 
 
 class DataSourceType(str, Enum):
@@ -111,10 +132,10 @@ class DataSourceType(str, Enum):
 
 class Money(StrictModel):
     amount_minor: int = Field(ge=0)
-    currency: str = Field(default="CNY", min_length=3, max_length=3)
-    scale: int = Field(default=2, ge=0, le=6)
+    currency: str = Field(min_length=3, max_length=3)
+    scale: int = Field(ge=0, le=6)
     is_estimated: bool = False
-    display_text: str
+    display_text: str | None = None
 
     @field_validator("currency")
     @classmethod
@@ -124,21 +145,21 @@ class Money(StrictModel):
 
 class MoneyDelta(StrictModel):
     amount_minor: int
-    currency: str = Field(default="CNY", min_length=3, max_length=3)
-    scale: int = Field(default=2, ge=0, le=6)
-    display_text: str
+    currency: str = Field(min_length=3, max_length=3)
+    scale: int = Field(ge=0, le=6)
+    display_text: str | None = None
 
 
 class TimePoint(StrictModel):
     datetime: datetime
-    timezone: str = "Asia/Shanghai"
-    source_timezone: str = "Asia/Shanghai"
+    timezone: str
+    source_timezone: str | None = None
 
 
 class GeoPoint(StrictModel):
-    latitude: float
-    longitude: float
-    coordinate_system: str = "WGS84"
+    name: str
+    latitude: float | None = None
+    longitude: float | None = None
 
 
 class NormalizedScores(StrictModel):
@@ -159,11 +180,17 @@ class DataSourceMetadata(StrictModel):
     source_name: str
     source_type: DataSourceType
     authority_level: Literal["S", "A", "B", "C"]
-    license_status: Literal["APPROVED", "PENDING_REVIEW", "REJECTED"]
+    source_priority: int | None = Field(default=None, ge=0)
+    source_region: str | None = None
+    api_version: str | None = None
+    license_status: Literal["APPROVED", "PENDING_REVIEW", "NOT_APPROVED"]
     commercial_allowed: bool
     fetched_at: TimePoint
-    update_frequency: str
+    data_freshness_seconds: int | None = Field(default=None, ge=0)
     cacheable: bool
+    cache_ttl_seconds: int | None = Field(default=None, ge=0)
+    sla_level: str | None = None
+    cache_metadata: CacheMetadata | None = None
 
 
 class DataSourceConfig(StrictModel):
@@ -172,7 +199,7 @@ class DataSourceConfig(StrictModel):
     source_type: DataSourceType
     authority_level: Literal["S", "A", "B", "C"]
     environment: Literal["DEV", "TEST", "PROD"]
-    license_status: Literal["APPROVED", "PENDING_REVIEW", "REJECTED"]
+    license_status: Literal["APPROVED", "PENDING_REVIEW", "NOT_APPROVED"]
     commercial_allowed: bool
     enabled: bool
     qps_limit: int = Field(ge=0)
@@ -187,9 +214,13 @@ class SourceFailure(StrictModel):
     trace_id: str
     correlation_id: str
     source_id: str
-    source_used_id: str | None = None
-    fallback_source_id: str | None = None
-    fallback_reason: str | None = None
+    adapter_name: str
+    handling_strategy: SourceFailureHandlingStrategy
+    error_code: str | None
+    retry_count: int = Field(ge=0)
+    source_used_id: str | None
+    fallback_source_id: str | None
+    fallback_reason: str | None
     fallback_used: bool
     failure_class: SourceFailureClass
     message: str
@@ -204,9 +235,11 @@ class DataSourceRuntimeStatus(StrictModel):
     source_name: str
     source_type: DataSourceType
     enabled: bool
-    status: Literal["OK", "DEGRADED", "DOWN"]
-    degraded: bool
+    health_status: Literal["OK", "DEGRADED", "DOWN", "DISABLED"]
     degraded_reason: str | None = None
+    authority_level: Literal["S", "A", "B", "C"] | None = None
+    license_status: Literal["APPROVED", "PENDING_REVIEW", "NOT_APPROVED"] | None = None
+    commercial_allowed: bool | None = None
     last_success_at: TimePoint | None = None
     last_failure_at: TimePoint | None = None
     latest_failure: SourceFailure | None = None
@@ -250,6 +283,9 @@ class TravelRequest(StrictModel):
     origin_text: str
     destination_text: str
     travel_date: date
+    time_anchor_type: Literal["DEPARTURE", "ARRIVAL", "AMBIGUOUS"] = "DEPARTURE"
+    time_window_start: TimePoint | None = None
+    time_window_end: TimePoint | None = None
     earliest_departure_time: TimePoint | None = None
     latest_arrival_time: TimePoint | None = None
     preferred_departure_time: TimePoint | None = None
@@ -334,6 +370,7 @@ class LocalTransferOption(StrictModel):
     label: str
     estimated_cost: Money
     duration_minutes: int
+    distance_meters: int | None = None
     access_station: str | None = None
     egress_station: str | None = None
     access_instruction: str
@@ -357,6 +394,8 @@ class LocalTransferSegment(StrictModel):
     option_id: str
     available_options: list[str] = Field(default_factory=list)
     transfer_options: list[LocalTransferOption] = Field(default_factory=list)
+    departure_time: TimePoint | None = None
+    arrival_time: TimePoint | None = None
     data_source: DataSourceMetadata
     redirect_info: BookingRedirect | None = None
 
@@ -429,6 +468,7 @@ class ComfortScore(StrictModel):
     breakdown: dict[str, float]
     score_vector: NormalizedScores
     confidence: float = Field(ge=0, le=1)
+    score_version: str = "comfort_score_v1"
     explanation: str
 
 
@@ -513,8 +553,13 @@ class LLMValidationResult(StrictModel):
     schema_valid: bool
     semantic_valid: bool
     repair_attempted: bool
-    final_strategy: Literal["USE_ORIGINAL", "REPAIRED", "REJECTED"]
+    final_strategy: Literal["USE_ORIGINAL", "REPAIRED", "REJECTED", "FALLBACK_RULES"]
     invalid_reasons: list[str] = Field(default_factory=list)
+    repair_success: bool | None = None
+    llm_call_id: str | None = None
+    prompt_version: str | None = None
+    model_name: str | None = None
+    latency_ms: int | None = None
 
 
 class RecommendationResult(StrictModel):
@@ -532,6 +577,7 @@ class ParseTravelRequestResponse(StrictModel):
     correlation_id: str
     idempotency_key: str
     travel_request: TravelRequest
+    llm_validation_result: LLMValidationResult
     generated_at: TimePoint
 
 
@@ -553,6 +599,14 @@ class DestinationPresentation(StrictModel):
     tags: list[str] = Field(default_factory=list)
 
 
+class AsyncJob(StrictModel):
+    job_id: str
+    job_status: AsyncJobStatus
+    created_at: TimePoint
+    updated_at: TimePoint
+    polling_url: str | None = None
+
+
 class TravelPlanResponse(StrictModel):
     schema_version: Literal["1.15"] = SCHEMA_VERSION
     request_id: str
@@ -570,7 +624,7 @@ class TravelPlanResponse(StrictModel):
     blocked_plan_types: list[PlanType]
     missing_plan_explanations: list[MissingPlanExplanation]
     user_visible_warnings: list[str]
-    async_job: dict[str, Any] | None = None
+    async_job: AsyncJob | None = None
     generated_at: TimePoint
 
 
@@ -585,7 +639,7 @@ class GetTravelPlanResponse(StrictModel):
 
 
 class SelectedOption(StrictModel):
-    option_type: Literal["RAIL_SEAT", "FLIGHT_CABIN", "LOCAL_TRANSFER"]
+    option_type: Literal["SEAT", "CABIN", "TRANSFER_MODE"]
     option_id: str
     option_value: str
     source_option_version: str
@@ -596,14 +650,19 @@ class RecalculateRequest(StrictModel):
     request_id: str
     idempotency_key: str
     plan_id: str
-    change_type: Literal["RAIL_SEAT", "FLIGHT_CABIN", "LOCAL_TRANSFER"]
+    change_type: Literal["SEAT_TYPE", "CABIN_TYPE", "LOCAL_TRANSFER_MODE"]
     target_segment_id: str
     selected_option: SelectedOption
-    recalculate_scope: Literal["SEGMENT_ONLY", "PLAN_TOTAL"] = "PLAN_TOTAL"
+    recalculate_scope: Literal["PLAN_ONLY", "PLAN_AND_RECOMMENDATION", "FULL_REEVALUATION"] = "PLAN_ONLY"
 
     @model_validator(mode="after")
     def change_matches_option(self) -> "RecalculateRequest":
-        if self.change_type != self.selected_option.option_type:
+        expected_option_type = {
+            "SEAT_TYPE": "SEAT",
+            "CABIN_TYPE": "CABIN",
+            "LOCAL_TRANSFER_MODE": "TRANSFER_MODE",
+        }[self.change_type]
+        if expected_option_type != self.selected_option.option_type:
             raise ValueError("change_type must match selected_option.option_type")
         return self
 
@@ -645,6 +704,59 @@ class BookingRedirectResponse(StrictModel):
     idempotency_key: str
     redirect: BookingRedirect
     generated_at: TimePoint
+
+
+class FeedbackRequest(StrictModel):
+    schema_version: Literal["1.15"] = SCHEMA_VERSION
+    request_id: str
+    trace_id: str
+    correlation_id: str
+    plan_id: str
+    source_id: str | None = None
+    category: Literal["ROUTE_INACCURATE", "PRICE_INACCURATE", "REDIRECT_FAILED", "HARD_TO_UNDERSTAND", "OTHER"]
+    message: str | None = Field(default=None, max_length=500)
+
+
+class FeedbackResponse(StrictModel):
+    schema_version: Literal["1.15"] = SCHEMA_VERSION
+    feedback_id: str
+    request_id: str
+    trace_id: str
+    correlation_id: str
+    plan_id: str
+    source_id: str | None = None
+    category: str
+    category_count: int
+    received_at: TimePoint
+
+
+class AppEventRequest(StrictModel):
+    schema_version: Literal["1.15"] = SCHEMA_VERSION
+    event_type: Literal[
+        "INPUT_SUBMITTED",
+        "PLANNING_SUCCESS",
+        "PLANNING_PARTIAL",
+        "RECOMMENDATION_CLICK",
+        "REDIRECT_CLICK",
+        "FEEDBACK_SUBMITTED",
+        "RECENT_PLAN_VIEWED",
+        "FAVORITE_TOGGLED",
+        "TRIP_REMINDER_TOGGLED",
+        "PRICE_STATUS_WATCH_TOGGLED",
+        "PREFERENCE_UPDATED",
+    ]
+    request_id: str | None = None
+    trace_id: str | None = None
+    plan_id: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class AppEventResponse(StrictModel):
+    schema_version: Literal["1.15"] = SCHEMA_VERSION
+    event_id: str
+    event_type: str
+    accepted: bool
+    received_at: TimePoint
 
 
 class HealthResponse(StrictModel):

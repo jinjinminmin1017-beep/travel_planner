@@ -1,0 +1,70 @@
+{
+  "$defs": {
+    "TimePoint": {
+      "additionalProperties": false,
+      "properties": {
+        "datetime": {
+          "format": "date-time",
+          "title": "Datetime",
+          "type": "string"
+        },
+        "timezone": {
+          "title": "Timezone",
+          "type": "string"
+        },
+        "source_timezone": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Timezone"
+        }
+      },
+      "required": [
+        "datetime",
+        "timezone"
+      ],
+      "title": "TimePoint",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "1.15",
+      "default": "1.15",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "event_id": {
+      "title": "Event Id",
+      "type": "string"
+    },
+    "event_type": {
+      "title": "Event Type",
+      "type": "string"
+    },
+    "accepted": {
+      "title": "Accepted",
+      "type": "boolean"
+    },
+    "received_at": {
+      "$ref": "#/$defs/TimePoint"
+    }
+  },
+  "required": [
+    "event_id",
+    "event_type",
+    "accepted",
+    "received_at"
+  ],
+  "title": "AppEventResponse",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "x-schema-version": "1.15"
+}

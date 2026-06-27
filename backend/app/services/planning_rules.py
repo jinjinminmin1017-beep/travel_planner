@@ -3,22 +3,11 @@ from __future__ import annotations
 from app.models.schemas import (
     FlightSegment,
     LocalTransferSegment,
-    PlanLifecycleStatus,
     RecommendationEligibility,
     RiskLevel,
     TravelPlan,
 )
-
-
-def candidate_plans_for_recommendation(plans: list[TravelPlan], limit: int = 15) -> list[TravelPlan]:
-    return [
-        plan
-        for plan in plans
-        if plan.can_be_selected_by_llm
-        and plan.recommendation_eligibility == RecommendationEligibility.ELIGIBLE
-        and plan.plan_lifecycle_status == PlanLifecycleStatus.ACTIVE
-        and plan.risk_assessment.overall_risk_level != RiskLevel.BLOCKED
-    ][:limit]
+from app.services.candidate_generator import candidate_plans_for_recommendation
 
 
 def blocked_or_backup_plans(plans: list[TravelPlan]) -> list[TravelPlan]:

@@ -1,0 +1,661 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AI Travel Planner App UI Preview</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f5f7f8;
+        --surface: #ffffff;
+        --text: #172126;
+        --muted: #66747c;
+        --line: #edf0f1;
+        --teal: #126b75;
+        --teal-soft: #e7f2f3;
+        --warning: #fff8e8;
+        --danger-surface: #fff7f5;
+        --danger: #9d2f21;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        background: #dde6e8;
+        color: var(--text);
+        font-family:
+          -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+          "Microsoft YaHei", sans-serif;
+      }
+
+      .stage {
+        min-height: 100vh;
+        display: grid;
+        grid-template-columns: repeat(4, minmax(260px, 390px));
+        gap: 24px;
+        justify-content: center;
+        padding: 28px;
+      }
+
+      .phone-wrap {
+        display: grid;
+        gap: 12px;
+      }
+
+      .caption {
+        margin: 0;
+        text-align: center;
+        color: #314047;
+        font-size: 14px;
+        font-weight: 800;
+      }
+
+      .phone {
+        height: 844px;
+        overflow: hidden;
+        border: 10px solid #111b20;
+        border-radius: 36px;
+        background: var(--bg);
+        box-shadow: 0 24px 70px rgba(23, 33, 38, 0.24);
+      }
+
+      .screen {
+        height: 100%;
+        display: grid;
+        grid-template-rows: 1fr auto;
+      }
+
+      .scroll {
+        overflow: hidden;
+        padding: 16px;
+      }
+
+      .topbar {
+        margin-bottom: 12px;
+      }
+
+      .app-title {
+        margin: 0;
+        font-size: 28px;
+        font-weight: 800;
+        letter-spacing: 0;
+      }
+
+      .app-subtitle,
+      .muted {
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.45;
+      }
+
+      .app-subtitle {
+        margin: 2px 0 0;
+      }
+
+      .card,
+      .panel,
+      .state,
+      .candidate,
+      .source-card {
+        border-radius: 8px;
+        background: var(--surface);
+      }
+
+      .input-page {
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+      }
+
+      .prompt-stage {
+        flex: 1;
+        display: flex;
+        align-items: flex-end;
+      }
+
+      .panel {
+        width: 100%;
+        padding: 12px;
+      }
+
+      .label {
+        color: var(--teal);
+        font-size: 12px;
+        font-weight: 800;
+      }
+
+      .input {
+        min-height: 156px;
+        margin-top: 10px;
+        color: #8a969b;
+        font-size: 16px;
+        line-height: 1.45;
+      }
+
+      .button {
+        width: 100%;
+        min-height: 48px;
+        margin-top: 10px;
+        border: 0;
+        border-radius: 8px;
+        background: var(--teal);
+        color: #fff;
+        font-size: 16px;
+        font-weight: 800;
+      }
+
+      .input-actions,
+      .detail-actions {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+      }
+
+      .input-actions {
+        margin-top: 10px;
+      }
+
+      .recent-pill {
+        flex: 1;
+        min-height: 44px;
+        padding: 7px 10px;
+        border-radius: 8px;
+        background: #f2f6f7;
+      }
+
+      .detail-actions {
+        align-items: flex-end;
+        flex-direction: column;
+      }
+
+      .feedback-mini {
+        display: grid;
+        gap: 8px;
+        margin-top: 12px;
+        padding: 12px;
+        border-radius: 8px;
+        background: #f7fafb;
+      }
+
+      .feedback-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .hero {
+        min-height: 164px;
+        display: flex;
+        align-items: flex-end;
+        overflow: hidden;
+        border-radius: 8px;
+        background:
+          linear-gradient(rgba(10, 25, 31, 0.08), rgba(10, 25, 31, 0.64)),
+          url("./assets/destination-scenes/qingdao-pier.jpg") center / cover;
+      }
+
+      .hero-copy {
+        width: 100%;
+        padding: 18px;
+      }
+
+      .hero h2 {
+        margin: 4px 0 0;
+        color: #fff;
+        font-size: 28px;
+        font-weight: 800;
+        letter-spacing: 0;
+      }
+
+      .hero p {
+        margin: 8px 0 0;
+        color: #f1f6f7;
+        font-size: 13px;
+        line-height: 1.45;
+      }
+
+      .section-head,
+      .row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+      }
+
+      .section-head {
+        margin-top: 16px;
+      }
+
+      .section-title {
+        margin: 0;
+        font-size: 20px;
+        font-weight: 800;
+      }
+
+      .ghost-button,
+      .pill {
+        border: 0;
+        border-radius: 8px;
+        background: var(--teal-soft);
+        color: var(--teal);
+        font-weight: 800;
+        padding: 8px 10px;
+      }
+
+      .recommendations {
+        display: flex;
+        gap: 10px;
+        margin: 10px -16px 0 0;
+      }
+
+      .card {
+        flex: 0 0 244px;
+        min-height: 154px;
+        padding: 14px;
+      }
+
+      .card.active {
+        border: 2px solid var(--teal);
+      }
+
+      .risk {
+        padding: 4px 8px;
+        border-radius: 999px;
+        background: #24735a;
+        color: #fff;
+        font-size: 12px;
+        font-weight: 800;
+      }
+
+      .risk.medium {
+        background: #956a1d;
+      }
+
+      .card-title,
+      .option-title {
+        margin: 12px 0 0;
+        font-size: 16px;
+        font-weight: 800;
+        line-height: 1.35;
+      }
+
+      .metrics {
+        display: flex;
+        gap: 10px;
+        margin-top: 14px;
+        font-size: 14px;
+        font-weight: 800;
+      }
+
+      .detail {
+        margin-top: 16px;
+        padding: 14px;
+      }
+
+      .metric-band {
+        display: flex;
+        justify-content: space-between;
+        margin-top: 12px;
+        padding: 12px;
+        border-radius: 8px;
+        background: #f2f6f7;
+        font-size: 14px;
+        font-weight: 800;
+      }
+
+      .trust-mini {
+        display: grid;
+        gap: 6px;
+        margin-top: 12px;
+        padding: 12px;
+        border-radius: 8px;
+        background: #eef5f6;
+      }
+
+      .timeline {
+        display: grid;
+        gap: 10px;
+        margin-top: 14px;
+      }
+
+      .timeline-row {
+        display: grid;
+        grid-template-columns: 32px 1fr;
+        gap: 10px;
+      }
+
+      .dot,
+      .stage-dot {
+        border-radius: 50%;
+        background: var(--teal);
+      }
+
+      .dot {
+        display: grid;
+        place-items: center;
+        width: 32px;
+        height: 32px;
+        color: #fff;
+        font-weight: 800;
+      }
+
+      .state {
+        display: grid;
+        gap: 12px;
+        margin-top: 12px;
+        padding: 16px;
+      }
+
+      .state.error {
+        background: var(--danger-surface);
+      }
+
+      .state-title {
+        margin: 0;
+        font-size: 20px;
+        font-weight: 800;
+      }
+
+      .stage-list {
+        display: grid;
+        gap: 9px;
+      }
+
+      .stage-item {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+      }
+
+      .stage-dot {
+        width: 10px;
+        height: 10px;
+      }
+
+      .source-card,
+      .candidate {
+        display: grid;
+        gap: 8px;
+        margin-top: 10px;
+        padding: 12px;
+      }
+
+      .candidate {
+        grid-template-columns: 1fr auto;
+        align-items: center;
+      }
+
+      .warning {
+        margin: 4px 0 0;
+        color: var(--danger);
+        font-size: 12px;
+      }
+
+      .source-card.warning-surface {
+        background: var(--warning);
+      }
+
+      .bottom-tabs {
+        display: flex;
+        gap: 10px;
+        padding: 10px 16px 12px;
+        border-top: 1px solid #dce4e6;
+        background: var(--surface);
+      }
+
+      .tab {
+        flex: 1;
+        display: grid;
+        place-items: center;
+        min-height: 52px;
+        border-radius: 8px;
+        color: var(--muted);
+        font-size: 14px;
+        font-weight: 800;
+      }
+
+      .tab.active {
+        background: var(--teal-soft);
+        color: var(--teal);
+      }
+
+      @media (max-width: 1200px) {
+        .stage {
+          grid-template-columns: repeat(2, minmax(260px, 390px));
+        }
+      }
+
+      @media (max-width: 680px) {
+        .stage {
+          grid-template-columns: minmax(260px, 390px);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="stage">
+      <section class="phone-wrap">
+        <p class="caption">云起：输入</p>
+        <div class="phone">
+          <div class="screen">
+            <div class="scroll input-page">
+              <header class="topbar">
+                <h1 class="app-title">出行搭子</h1>
+                <p class="app-subtitle">一念云起，把出行需求说给搭子听。</p>
+              </header>
+              <section class="prompt-stage">
+                <div class="panel">
+                  <div class="label">你想怎么走？</div>
+                  <div class="input">说说你从哪里出发、到哪里、什么时候走。</div>
+                  <div class="input-actions">
+                    <button class="ghost-button">使用定位</button>
+                    <div class="recent-pill">
+                      <div class="label">最近方案</div>
+                      <div class="muted">约 ¥468 · 6小时12分</div>
+                    </div>
+                  </div>
+                  <button class="button">开始规划</button>
+                </div>
+              </section>
+            </div>
+            <nav class="bottom-tabs" aria-label="底部导航">
+              <div class="tab active">云起</div>
+              <div class="tab">路明</div>
+            </nav>
+          </div>
+        </div>
+      </section>
+
+      <section class="phone-wrap">
+        <p class="caption">路明：规划中</p>
+        <div class="phone">
+          <div class="screen">
+            <div class="scroll">
+              <header class="topbar">
+                <h1 class="app-title">路明</h1>
+                <p class="app-subtitle">正在把需求拆成门到门方案。</p>
+              </header>
+              <section class="state">
+                <h2 class="state-title">正在规划</h2>
+                <div class="stage-list">
+                  <div class="stage-item"><span class="stage-dot"></span><span>解析</span></div>
+                  <div class="stage-item"><span class="stage-dot"></span><span>地点</span></div>
+                  <div class="stage-item"><span class="stage-dot"></span><span>接驳</span></div>
+                  <div class="stage-item"><span class="stage-dot"></span><span>铁路</span></div>
+                  <div class="stage-item"><span class="stage-dot"></span><span>航班</span></div>
+                  <div class="stage-item"><span class="stage-dot"></span><span>评分</span></div>
+                  <div class="stage-item"><span class="stage-dot"></span><span>推荐</span></div>
+                </div>
+              </section>
+              <section class="state error">
+                <h2 class="state-title">规划失败</h2>
+                <p class="muted">缺少到达时间或数据源暂不可用时，保留重试与改写入口。</p>
+                <button class="ghost-button">改写需求</button>
+              </section>
+            </div>
+            <nav class="bottom-tabs" aria-label="底部导航">
+              <div class="tab">云起</div>
+              <div class="tab active">路明</div>
+            </nav>
+          </div>
+        </div>
+      </section>
+
+      <section class="phone-wrap">
+        <p class="caption">路明：结果与详情</p>
+        <div class="phone">
+          <div class="screen">
+            <div class="scroll">
+              <header class="topbar">
+                <h1 class="app-title">路明</h1>
+                <p class="app-subtitle">云开见路，每条方案都保留来源和边界。</p>
+              </header>
+              <section class="hero">
+                <div class="hero-copy">
+                  <div class="label">目的地</div>
+                  <h2>青岛</h2>
+                  <p>地铁接驳 + 高铁直达 + 打车 · 6小时12分 · 约 ¥468</p>
+                </div>
+              </section>
+              <section class="section-head">
+                <h2 class="section-title">推荐方案</h2>
+                <button class="ghost-button">来源</button>
+              </section>
+              <section class="recommendations">
+                <article class="card active">
+                  <div class="row">
+                    <span class="label">综合推荐</span>
+                    <span class="risk">低风险</span>
+                  </div>
+                  <h3 class="card-title">地铁接驳 + 高铁直达 + 打车</h3>
+                  <p class="muted">高铁直达</p>
+                  <div class="metrics"><span>约 ¥468</span><span>6小时12分</span></div>
+                </article>
+                <article class="card">
+                  <div class="row">
+                    <span class="label">最优惠</span>
+                    <span class="risk medium">中风险</span>
+                  </div>
+                  <h3 class="card-title">公交接驳 + 高铁中转 + 地铁</h3>
+                  <p class="muted">高铁中转</p>
+                  <div class="metrics"><span>约 ¥392</span><span>7小时05分</span></div>
+                </article>
+              </section>
+              <section class="panel detail">
+                <div class="row">
+                  <div>
+                    <div class="label">高铁直达</div>
+                    <h2 class="section-title">地铁接驳 + 高铁直达 + 打车</h2>
+                  </div>
+                  <div class="detail-actions">
+                    <button class="ghost-button">分享</button>
+                    <button class="ghost-button">复制</button>
+                    <button class="ghost-button">跳转</button>
+                  </div>
+                </div>
+                <div class="metric-band"><span>约 ¥468</span><span>6小时12分</span><span>低风险</span></div>
+                <div class="trust-mini">
+                  <strong>可信解释</strong>
+                  <span class="muted">完整度 82% · 舒适度置信 76% · 更新 06/12 20:15</span>
+                  <span class="warning">票价和余票以官方平台确认为准。</span>
+                </div>
+                <div class="timeline">
+                  <div class="timeline-row">
+                    <div class="dot">1</div>
+                    <div>
+                      <p class="option-title">地铁 南翔格林公馆 到 上海虹桥站</p>
+                      <p class="muted">地铁 · 52分钟</p>
+                    </div>
+                  </div>
+                  <div class="timeline-row">
+                    <div class="dot">2</div>
+                    <div>
+                      <p class="option-title">G234 上海虹桥 到 青岛北</p>
+                      <p class="muted">高铁 · 4小时58分</p>
+                    </div>
+                  </div>
+                </div>
+                <div class="feedback-mini">
+                  <strong>问题反馈</strong>
+                  <div class="feedback-row">
+                    <button class="ghost-button">路线不准</button>
+                    <button class="ghost-button">价格不准</button>
+                    <button class="ghost-button">跳转失败</button>
+                    <button class="ghost-button">看不懂</button>
+                  </div>
+                </div>
+              </section>
+            </div>
+            <nav class="bottom-tabs" aria-label="底部导航">
+              <div class="tab">云起</div>
+              <div class="tab active">路明</div>
+            </nav>
+          </div>
+        </div>
+      </section>
+
+      <section class="phone-wrap">
+        <p class="caption">路明：数据来源</p>
+        <div class="phone">
+          <div class="screen">
+            <div class="scroll">
+              <header class="topbar">
+                <h1 class="app-title">路明</h1>
+                <p class="app-subtitle">云开见路，每条方案都保留来源和边界。</p>
+              </header>
+              <section class="row">
+                <div>
+                  <div class="label">request_id</div>
+                  <strong>req_demo_preview</strong>
+                </div>
+                <button class="ghost-button">返回</button>
+              </section>
+              <section class="section-head">
+                <h2 class="section-title">数据来源</h2>
+              </section>
+              <article class="source-card">
+                <div class="row">
+                  <strong>Internal Calculation</strong>
+                  <span class="pill">ACTIVE</span>
+                </div>
+                <p class="muted">internal_calc · INTERNAL_CALCULATION · 可缓存</p>
+              </article>
+              <article class="source-card">
+                <div class="row">
+                  <strong>Rail 12306 Redirect</strong>
+                  <span class="pill">REDIRECT</span>
+                </div>
+                <p class="muted">只跳转，不登录、不下单、不支付。</p>
+              </article>
+              <section class="section-head">
+                <h2 class="section-title">缺失与降级</h2>
+              </section>
+              <article class="source-card warning-surface">
+                <div class="row">
+                  <strong>amadeus_flight_price</strong>
+                  <span class="pill">禁用</span>
+                </div>
+                <p class="muted">未授权时不展示真实航班报价或可售承诺。</p>
+              </article>
+              <section class="candidate">
+                <div>
+                  <p class="option-title">暂无可用方案</p>
+                  <p class="muted">空结果页会展示缺失组件和改写入口。</p>
+                </div>
+                <button class="ghost-button">重新输入</button>
+              </section>
+            </div>
+            <nav class="bottom-tabs" aria-label="底部导航">
+              <div class="tab">云起</div>
+              <div class="tab active">路明</div>
+            </nav>
+          </div>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>

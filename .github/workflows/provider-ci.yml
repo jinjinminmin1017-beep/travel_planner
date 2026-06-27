@@ -1,0 +1,90 @@
+name: Provider CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  fixture-and-public-provider-checks:
+    runs-on: ubuntu-latest
+    env:
+      APP_ENV: DEV
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install backend dependencies
+        run: python -m pip install -r backend/requirements.txt
+
+      - name: Run fixture tests
+        run: python -m pytest backend/app/tests
+
+      - name: Check public provider config tier
+        run: python scripts/check_real_api_config.py --tier public
+
+      - name: Run public no-key live smoke
+        run: python scripts/live_smoke_real_apis.py --tier public --status
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Typecheck app
+        working-directory: frontend
+        run: npm run typecheck
+
+  secret-provider-smoke:
+    runs-on: ubuntu-latest
+    env:
+      APP_ENV: DEV
+      AMADEUS_CLIENT_ID: ${{ secrets.AMADEUS_CLIENT_ID }}
+      AMADEUS_CLIENT_SECRET: ${{ secrets.AMADEUS_CLIENT_SECRET }}
+      AMADEUS_BASE_URL: ${{ secrets.AMADEUS_BASE_URL }}
+      RAIL_PARTNER_API_KEY: ${{ secrets.RAIL_PARTNER_API_KEY }}
+      RAIL_PARTNER_BASE_URL: ${{ secrets.RAIL_PARTNER_BASE_URL }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install backend dependencies
+        run: python -m pip install -r backend/requirements.txt
+
+      - name: Run Amadeus smoke when secrets are present
+        env:
+          TRAVEL_SOURCE_AMADEUS_FLIGHT_OFFERS_ENABLED: "true"
+          TRAVEL_SOURCE_AMADEUS_FLIGHT_OFFERS_LICENSE_STATUS: APPROVED
+          TRAVEL_SOURCE_AMADEUS_FLIGHT_OFFERS_QPS_LIMIT: "1"
+        run: |
+          if [ -n "$AMADEUS_CLIENT_ID" ] && [ -n "$AMADEUS_CLIENT_SECRET" ]; then
+            python scripts/check_real_api_config.py --tier secret --source flight
+            python scripts/live_smoke_real_apis.py --provider flight --status
+          else
+            echo "Skipping Amadeus smoke: AMADEUS_CLIENT_ID/AMADEUS_CLIENT_SECRET are not configured."
+          fi
+
+      - name: Run authorized rail partner smoke when secrets are present
+        env:
+          TRAVEL_SOURCE_RAIL_AUTHORIZED_PARTNER_ENABLED: "true"
+          TRAVEL_SOURCE_RAIL_AUTHORIZED_PARTNER_LICENSE_STATUS: APPROVED
+          TRAVEL_SOURCE_RAIL_AUTHORIZED_PARTNER_QPS_LIMIT: "1"
+        run: |
+          if [ -n "$RAIL_PARTNER_API_KEY" ]; then
+            python scripts/check_real_api_config.py --tier secret --source rail
+            python scripts/live_smoke_real_apis.py --provider rail --status
+          else
+            echo "Skipping authorized rail smoke: RAIL_PARTNER_API_KEY is not configured."
+          fi

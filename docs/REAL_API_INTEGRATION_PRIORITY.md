@@ -35,7 +35,7 @@
 | `amadeus_flight_offers` | FLIGHT | Adapter 已实现 | 否 | Amadeus Flight Offers Search；需要用户自有 client id/secret。 |
 | `amadeus_flight_price` | FLIGHT | Adapter 方法已实现 | 否 | Amadeus Flight Offers Price；需要用户自有 client id/secret。 |
 | `irail_connections` | RAIL | Adapter 已实现并 live smoke 调通 | 是 | iRail 比利时铁路公开连接/时刻 API；不提供中国铁路票价或余票。 |
-| `rail_authorized_partner` | RAIL | 通用 Adapter 已实现 | 否 | 铁路时刻、票价、余票授权 Partner；需要商务授权或合同。 |
+| `rail_authorized_partner` | RAIL | 聚合数据 817 Adapter 已实现 | 否 | 铁路时刻、票价、余票授权 Partner；需要聚合数据 key 与授权范围确认。 |
 | `rail_12306_redirect` | RAIL | Redirect 已实现并 live smoke 调通 | 是 | 12306 官方入口跳转；不逆向、不登录、不下单。 |
 | `airline_official_redirect` | FLIGHT | Redirect 已实现并 live smoke 调通 | 是 | 航司官网跳转。 |
 | `amap_uri_redirect` | MAP | Redirect 已实现并 live smoke 调通 | 是 | 高德导航 URI 跳转。 |
@@ -71,5 +71,5 @@
 说明：
 - `map`、`geocode`、`flight-status`、`weather`、`rail-schedule`、`redirect` 当前可在无用户私钥的情况下用合法公开/官方入口做 live smoke。
 - `flight` 需要 Amadeus 用户自有凭证。
-- `rail` 需要铁路授权 Partner 的 `RAIL_PARTNER_BASE_URL` 和 `RAIL_PARTNER_API_KEY`。
+- `rail` 需要铁路授权 Partner 的 `RAIL_PARTNER_BASE_URL=https://apis.juhe.cn/fapigw/train/query` 和 `RAIL_PARTNER_API_KEY`。
 - `check_real_api_config.py` 只有在航班报价与铁路票价/余票授权也满足后才会整体通过。

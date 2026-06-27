@@ -106,10 +106,18 @@ def load_data_source_configs(environment: str | None = None) -> list[DataSourceC
     payload = json.loads(path.read_text(encoding="utf-8"))
     configs = [_apply_env_overrides(DataSourceConfig.model_validate(item)) for item in payload]
     if env == "PROD":
-        for config in configs:
-            if config.license_status != "APPROVED" or config.authority_level == "C":
-                raise ValueError(f"data source {config.source_id} is not production approved")
+        validate_production_data_source_configs(configs)
     return configs
+
+
+def validate_production_data_source_configs(configs: list[DataSourceConfig]) -> None:
+    for config in configs:
+        if config.enabled and config.license_status != "APPROVED":
+            raise ValueError(f"data source {config.source_id} is enabled but not production approved")
+        if config.enabled and config.authority_level == "C":
+            raise ValueError(f"data source {config.source_id} is enabled with unsupported production authority level C")
+        if config.enabled and config.commercial_allowed and config.license_status != "APPROVED":
+            raise ValueError(f"data source {config.source_id} allows commercial usage without approval")
 
 
 def runtime_statuses(environment: str | None = None) -> list[DataSourceRuntimeStatus]:
@@ -127,16 +135,18 @@ def runtime_statuses(environment: str | None = None) -> list[DataSourceRuntimeSt
             degraded_reason = "data source license is not approved"
         else:
             degraded_reason = None
-        status = "DEGRADED" if degraded else ("OK" if config.enabled else "DOWN")
+        health_status = "DEGRADED" if degraded else ("OK" if config.enabled else "DISABLED")
         statuses.append(
             DataSourceRuntimeStatus(
                 source_id=config.source_id,
                 source_name=config.source_name,
                 source_type=config.source_type,
                 enabled=config.enabled,
-                status=status,
-                degraded=degraded,
+                health_status=health_status,
                 degraded_reason=degraded_reason,
+                authority_level=config.authority_level,
+                license_status=config.license_status,
+                commercial_allowed=config.commercial_allowed,
                 last_success_at=now_timepoint() if config.enabled and not degraded else None,
                 last_failure_at=now_timepoint() if degraded else None,
                 latest_failure=None,

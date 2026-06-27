@@ -9,10 +9,13 @@ from app.data_sources.flight_providers import (
     FlightStateRequest,
     OpenSkyStatesProvider,
     build_enabled_flight_providers,
+    build_enabled_flight_price_providers,
     build_enabled_flight_state_providers,
     flight_data_source_metadata,
+    price_flight_offer_with_enabled_provider_result,
+    search_flight_offers_with_enabled_provider_result,
 )
-from app.models.schemas import RecommendationType, TravelHardConstraints, TravelRequest, TravelSoftPreferences, money
+from app.models.schemas import PlanType, RecommendationType, TravelHardConstraints, TravelRequest, TravelSoftPreferences, money
 from app.services.planner import build_plans
 
 
@@ -111,6 +114,62 @@ def test_enabled_amadeus_provider_requires_flag_approval_and_secret_pair(monkeyp
     assert providers[0].base_url == "https://api.amadeus.com"
 
 
+def test_flight_search_result_reports_disabled_provider_when_not_configured():
+    result = search_flight_offers_with_enabled_provider_result(
+        FlightSearchRequest(origin_iata="SHA", destination_iata="WNZ", departure_date=date(2026, 6, 28)),
+        environment="DEV",
+    )
+
+    assert result.offers == []
+    assert result.attempted_source_ids == ["amadeus_flight_offers"]
+    assert result.failure_message == "no enabled flight offer provider"
+
+
+def test_enabled_amadeus_price_provider_requires_price_flag_and_secret_pair(monkeypatch):
+    assert build_enabled_flight_price_providers("DEV") == []
+
+    monkeypatch.setenv("TRAVEL_SOURCE_AMADEUS_FLIGHT_PRICE_ENABLED", "true")
+    monkeypatch.setenv("TRAVEL_SOURCE_AMADEUS_FLIGHT_PRICE_LICENSE_STATUS", "APPROVED")
+    monkeypatch.setenv("AMADEUS_CLIENT_ID", "client_id")
+    monkeypatch.setenv("AMADEUS_CLIENT_SECRET", "client_secret")
+    providers = build_enabled_flight_price_providers("DEV")
+
+    assert [provider.source_id for provider in providers] == ["amadeus_flight_offers"]
+
+
+def test_price_wrapper_confirms_offer_with_enabled_price_provider(monkeypatch):
+    class _PriceProvider:
+        def price_offer(self, offer):
+            return FlightOffer(
+                offer_id="priced_1",
+                source="GDS",
+                total_price=money(99000),
+                currency="CNY",
+                segments=[],
+                validating_airline_codes=["MU"],
+                raw_offer=offer,
+                data_source=flight_data_source_metadata("amadeus_flight_price", "Amadeus Flight Offers Price API"),
+            )
+
+    monkeypatch.setattr("app.data_sources.flight_providers.build_enabled_flight_price_providers", lambda environment=None: [_PriceProvider()])
+    offer = FlightOffer(
+        offer_id="offer_1",
+        source="GDS",
+        total_price=money(94000),
+        currency="CNY",
+        segments=[],
+        validating_airline_codes=["MU"],
+        raw_offer={"id": "offer_1"},
+        data_source=flight_data_source_metadata("amadeus_flight_offers", "Amadeus Flight Offers Search API"),
+    )
+
+    result = price_flight_offer_with_enabled_provider_result(offer)
+
+    assert result.offer.offer_id == "priced_1"
+    assert result.offer.total_price.amount_minor == 99000
+    assert result.offer.data_source.source_id == "amadeus_flight_price"
+
+
 def test_opensky_states_maps_real_response():
     class _OpenSkyClient:
         def __init__(self):
@@ -165,35 +224,13 @@ def test_opensky_state_provider_is_enabled_by_default():
     assert [provider.source_id for provider in providers] == ["opensky_states"]
 
 
-def test_planner_uses_real_flight_offer_when_provider_returns_data(monkeypatch):
-    real_source = flight_data_source_metadata("amadeus_flight_offers", "Amadeus Flight Offers Search API")
+def test_planner_runtime_no_longer_generates_legacy_flight_templates(monkeypatch):
+    called = False
 
     def fake_search(request, environment=None):
-        assert request.origin_iata == "SHA"
-        assert request.destination_iata == "TAO"
-        assert request.non_stop is True
-        return FlightProviderSearchResult(offers=[
-            FlightOffer(
-                offer_id="real_1",
-                source="GDS",
-                total_price=money(88800),
-                currency="CNY",
-                segments=[
-                    FlightOfferSegment(
-                        carrier_code="MU",
-                        flight_number="5511",
-                        origin_iata="SHA",
-                        destination_iata="TAO",
-                        departure_at=datetime(2026, 5, 21, 12, 10),
-                        arrival_at=datetime(2026, 5, 21, 13, 40),
-                        duration="PT1H30M",
-                    )
-                ],
-                validating_airline_codes=["MU"],
-                raw_offer={"id": "real_1"},
-                data_source=real_source,
-            )
-        ], attempted_source_ids=["amadeus_flight_offers"])
+        nonlocal called
+        called = True
+        return FlightProviderSearchResult(offers=[], attempted_source_ids=["amadeus_flight_offers"], failure_message="should not be called")
 
     monkeypatch.setattr("app.services.planner.search_flight_offers_with_enabled_provider_result", fake_search)
     request = TravelRequest(
@@ -208,17 +245,18 @@ def test_planner_uses_real_flight_offer_when_provider_returns_data(monkeypatch):
         soft_preferences=TravelSoftPreferences(prefer_comfort=True),
     )
 
-    plans, *_ = build_plans(request)
-    flight_plan = next(plan for plan in plans if plan.plan_id == "plan_flight_direct_shqd")
-    flight_segment = next(segment for segment in flight_plan.segments if getattr(segment, "segment_type", None) == "FLIGHT")
+    plans, failures, missing, blocked_types, explanations, _ = build_plans(request)
 
-    assert flight_segment.data_source.source_id == "amadeus_flight_offers"
-    assert flight_segment.cabin_options[0].price.amount_minor == 88800
-    assert flight_segment.duration_minutes == 90
-    assert any(source.source_id == "amadeus_flight_offers" for source in flight_plan.data_sources)
+    assert plans
+    assert called is True
+    assert not any(any(getattr(segment, "segment_type", None) == "FLIGHT" for segment in plan.segments) for plan in plans)
+    assert "flight_core_fact" in missing
+    assert any(failure.source_id == "amadeus_flight_offers" for failure in failures)
+    assert PlanType.DIRECT_FLIGHT in blocked_types
+    assert any(item.plan_type == PlanType.DIRECT_FLIGHT and item.reason_code == "CORE_FACT_UNAVAILABLE" for item in explanations)
 
 
-def test_planner_does_not_fallback_to_simulated_data_when_real_flight_provider_is_empty(monkeypatch):
+def test_planner_blocks_flight_plans_when_real_flight_provider_is_empty(monkeypatch):
     def fake_empty_search(request, environment=None):
         return FlightProviderSearchResult(offers=[], attempted_source_ids=["amadeus_flight_offers"], failure_message="empty real response")
 
@@ -235,13 +273,14 @@ def test_planner_does_not_fallback_to_simulated_data_when_real_flight_provider_i
         soft_preferences=TravelSoftPreferences(prefer_comfort=True),
     )
 
-    try:
-        build_plans(request)
-    except ValueError as exc:
-        assert "real flight provider unavailable" in str(exc)
-        assert "empty real response" in str(exc)
-    else:
-        raise AssertionError("planner must not create a simulated flight when the real provider returns no offers")
+    plans, failures, missing, blocked_types, explanations, _ = build_plans(request)
+
+    assert plans
+    assert not any(any(getattr(segment, "segment_type", None) == "FLIGHT" for segment in plan.segments) for plan in plans)
+    assert "flight_core_fact" in missing
+    assert PlanType.DIRECT_FLIGHT in blocked_types
+    assert any(item.plan_type == PlanType.DIRECT_FLIGHT and item.reason_code == "CORE_FACT_UNAVAILABLE" for item in explanations)
+    assert any(failure.source_id == "amadeus_flight_offers" for failure in failures)
 
 
 def _amadeus_offer(offer_id: str, total: str):

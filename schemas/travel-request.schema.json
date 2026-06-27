@@ -9,14 +9,12 @@
           "type": "integer"
         },
         "currency": {
-          "default": "CNY",
           "maxLength": 3,
           "minLength": 3,
           "title": "Currency",
           "type": "string"
         },
         "scale": {
-          "default": 2,
           "maximum": 6,
           "minimum": 0,
           "title": "Scale",
@@ -28,13 +26,22 @@
           "type": "boolean"
         },
         "display_text": {
-          "title": "Display Text",
-          "type": "string"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Display Text"
         }
       },
       "required": [
         "amount_minor",
-        "display_text"
+        "currency",
+        "scale"
       ],
       "title": "Money",
       "type": "object"
@@ -57,18 +64,25 @@
           "type": "string"
         },
         "timezone": {
-          "default": "Asia/Shanghai",
           "title": "Timezone",
           "type": "string"
         },
         "source_timezone": {
-          "default": "Asia/Shanghai",
-          "title": "Source Timezone",
-          "type": "string"
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Timezone"
         }
       },
       "required": [
-        "datetime"
+        "datetime",
+        "timezone"
       ],
       "title": "TimePoint",
       "type": "object"
@@ -78,11 +92,13 @@
         "RAIL",
         "FLIGHT",
         "TAXI",
+        "RIDE_HAILING",
         "SUBWAY",
         "BUS",
         "WALK",
         "AIRPORT_TRANSFER",
-        "RAIL_STATION_TRANSFER"
+        "RAIL_STATION_TRANSFER",
+        "MIXED"
       ],
       "title": "TransportMode",
       "type": "string"
@@ -214,6 +230,38 @@
       "format": "date",
       "title": "Travel Date",
       "type": "string"
+    },
+    "time_anchor_type": {
+      "default": "DEPARTURE",
+      "enum": [
+        "DEPARTURE",
+        "ARRIVAL",
+        "AMBIGUOUS"
+      ],
+      "title": "Time Anchor Type",
+      "type": "string"
+    },
+    "time_window_start": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/TimePoint"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "time_window_end": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/TimePoint"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     },
     "earliest_departure_time": {
       "anyOf": [

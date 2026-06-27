@@ -1,0 +1,102 @@
+{
+  "$defs": {
+    "TimePoint": {
+      "additionalProperties": false,
+      "properties": {
+        "datetime": {
+          "format": "date-time",
+          "title": "Datetime",
+          "type": "string"
+        },
+        "timezone": {
+          "title": "Timezone",
+          "type": "string"
+        },
+        "source_timezone": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Timezone"
+        }
+      },
+      "required": [
+        "datetime",
+        "timezone"
+      ],
+      "title": "TimePoint",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "1.15",
+      "default": "1.15",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "feedback_id": {
+      "title": "Feedback Id",
+      "type": "string"
+    },
+    "request_id": {
+      "title": "Request Id",
+      "type": "string"
+    },
+    "trace_id": {
+      "title": "Trace Id",
+      "type": "string"
+    },
+    "correlation_id": {
+      "title": "Correlation Id",
+      "type": "string"
+    },
+    "plan_id": {
+      "title": "Plan Id",
+      "type": "string"
+    },
+    "source_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Source Id"
+    },
+    "category": {
+      "title": "Category",
+      "type": "string"
+    },
+    "category_count": {
+      "title": "Category Count",
+      "type": "integer"
+    },
+    "received_at": {
+      "$ref": "#/$defs/TimePoint"
+    }
+  },
+  "required": [
+    "feedback_id",
+    "request_id",
+    "trace_id",
+    "correlation_id",
+    "plan_id",
+    "category",
+    "category_count",
+    "received_at"
+  ],
+  "title": "FeedbackResponse",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "x-schema-version": "1.15"
+}
