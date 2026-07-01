@@ -4,6 +4,7 @@ import {
   Alert,
   AppState,
   ImageBackground,
+  Modal,
   type ImageSourcePropType,
   Pressable,
   SafeAreaView,
@@ -46,6 +47,27 @@ const POLL_INTERVAL_MS = 1200;
 const MAX_POLL_ATTEMPTS = 100;
 const ACTIVE_PLANNING_STATUSES = new Set(["PENDING", "RUNNING"]);
 const ACTIVE_JOB_STATUSES = new Set(["QUEUED", "RUNNING", "WAITING_SOURCE"]);
+const HOUR_OPTIONS = Array.from({ length: 24 }, (_, index) => index);
+const MINUTE_OPTIONS = Array.from({ length: 12 }, (_, index) => index * 5);
+const WORLD_MAP_LANDS = [
+  { key: "north-america", style: { left: "8%", top: "24%", width: "24%", height: "24%", transform: [{ rotate: "-10deg" }] } },
+  { key: "south-america", style: { left: "28%", top: "50%", width: "13%", height: "30%", transform: [{ rotate: "14deg" }] } },
+  { key: "europe", style: { left: "48%", top: "28%", width: "13%", height: "13%", transform: [{ rotate: "8deg" }] } },
+  { key: "africa", style: { left: "48%", top: "43%", width: "17%", height: "30%", transform: [{ rotate: "-4deg" }] } },
+  { key: "asia", style: { left: "62%", top: "27%", width: "28%", height: "25%", transform: [{ rotate: "5deg" }] } },
+  { key: "australia", style: { left: "77%", top: "65%", width: "15%", height: "12%", transform: [{ rotate: "-8deg" }] } }
+] as const;
+const WORLD_MAP_SPOTS = [
+  { key: "canada", name: "加拿大", left: "20%", top: "29%" },
+  { key: "brazil", name: "巴西", left: "34%", top: "62%" },
+  { key: "uk", name: "英国", left: "51%", top: "32%" },
+  { key: "egypt", name: "埃及", left: "56%", top: "48%" },
+  { key: "south-africa", name: "南非", left: "57%", top: "69%" },
+  { key: "india", name: "印度", left: "68%", top: "51%" },
+  { key: "china", name: "中国", left: "75%", top: "41%" },
+  { key: "japan", name: "日本", left: "84%", top: "43%" },
+  { key: "australia", name: "澳大利亚", left: "84%", top: "70%" }
+] as const;
 
 function findPlan(response: TravelPlanResponse | null, planId: string | null) {
   if (!response || !planId) return null;
@@ -132,6 +154,18 @@ function timePointForTravelDate(travelDate: string, value: string): TimePoint | 
     timezone: "Asia/Shanghai",
     source_timezone: "Asia/Shanghai"
   };
+}
+
+function clockPartsFromTime(time?: TimePoint | null) {
+  return parseClockInput(clockInputValue(time)) ?? { hour: 9, minute: 0 };
+}
+
+function formatClockParts(hour: number, minute: number) {
+  return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+}
+
+function snapMinute(value: number) {
+  return Math.max(0, Math.min(55, Math.round(value / 5) * 5));
 }
 
 function segmentTimeLabel(segment: Segment) {
@@ -368,21 +402,38 @@ function ScheduleAdjustPanel({
   onApply: (anchor: TimeAnchor, value: string) => void;
 }) {
   const initialAnchor: TimeAnchor = response.travel_request.time_anchor_type === "ARRIVAL" ? "ARRIVAL" : "DEPARTURE";
+  const initialTime = clockPartsFromTime(initialAnchor === "ARRIVAL" ? plan?.arrival_time ?? response.travel_request.latest_arrival_time : plan?.departure_time ?? response.travel_request.earliest_departure_time);
   const [anchor, setAnchor] = useState<TimeAnchor>(initialAnchor);
-  const [clockValue, setClockValue] = useState(() => clockInputValue(initialAnchor === "ARRIVAL" ? plan?.arrival_time ?? response.travel_request.latest_arrival_time : plan?.departure_time ?? response.travel_request.earliest_departure_time));
+  const [selectedHour, setSelectedHour] = useState(initialTime.hour);
+  const [selectedMinute, setSelectedMinute] = useState(snapMinute(initialTime.minute));
+  const [timeModalOpen, setTimeModalOpen] = useState(false);
+  const [draftHour, setDraftHour] = useState(initialTime.hour);
+  const [draftMinute, setDraftMinute] = useState(snapMinute(initialTime.minute));
 
   useEffect(() => {
     const nextAnchor: TimeAnchor = response.travel_request.time_anchor_type === "ARRIVAL" ? "ARRIVAL" : "DEPARTURE";
+    const nextTime = clockPartsFromTime(nextAnchor === "ARRIVAL" ? plan?.arrival_time ?? response.travel_request.latest_arrival_time : plan?.departure_time ?? response.travel_request.earliest_departure_time);
     setAnchor(nextAnchor);
-    setClockValue(clockInputValue(nextAnchor === "ARRIVAL" ? plan?.arrival_time ?? response.travel_request.latest_arrival_time : plan?.departure_time ?? response.travel_request.earliest_departure_time));
+    setSelectedHour(nextTime.hour);
+    setSelectedMinute(snapMinute(nextTime.minute));
+    setDraftHour(nextTime.hour);
+    setDraftMinute(snapMinute(nextTime.minute));
   }, [response.request_id, plan?.plan_id]);
 
+  function openTimeModal() {
+    setDraftHour(selectedHour);
+    setDraftMinute(selectedMinute);
+    setTimeModalOpen(true);
+  }
+
+  function confirmTimeModal() {
+    setSelectedHour(draftHour);
+    setSelectedMinute(draftMinute);
+    setTimeModalOpen(false);
+  }
+
   function apply() {
-    if (!parseClockInput(clockValue)) {
-      Alert.alert("时间格式不对", "请按 HH:mm 输入，例如 09:30。");
-      return;
-    }
-    onApply(anchor, clockValue);
+    onApply(anchor, formatClockParts(selectedHour, selectedMinute));
   }
 
   return (
@@ -393,54 +444,136 @@ function ScheduleAdjustPanel({
           {(["DEPARTURE", "ARRIVAL"] as TimeAnchor[]).map((item) => (
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel={item === "DEPARTURE" ? "按主程出发时间重新规划" : "按最晚到达时间重新规划"}
+              accessibilityLabel={item === "DEPARTURE" ? "按预估出发时间重新规划" : "按最晚到达时间重新规划"}
               accessibilityState={{ selected: anchor === item }}
               hitSlop={ui.hitSlop}
               key={item}
               style={[styles.segmentedButton, anchor === item && styles.segmentedButtonActive]}
               onPress={() => setAnchor(item)}
             >
-              <Text style={[styles.segmentedButtonText, anchor === item && styles.segmentedButtonTextActive]}>{item === "DEPARTURE" ? "主程出发" : "最晚到达"}</Text>
+              <Text style={[styles.segmentedButtonText, anchor === item && styles.segmentedButtonTextActive]}>{item === "DEPARTURE" ? "预估出发" : "最晚到达"}</Text>
             </Pressable>
           ))}
         </View>
       </View>
-      <View style={styles.scheduleInputRow}>
-        <TextInput
-          accessibilityLabel="时间，格式为小时冒号分钟"
-          style={[styles.compactInput, styles.timeInput]}
-          value={clockValue}
-          onChangeText={setClockValue}
-          placeholder="09:30"
-          keyboardType="numbers-and-punctuation"
-        />
+      <View style={styles.scheduleApplyRow}>
+        <Pressable accessibilityRole="button" accessibilityLabel={`选择时间，当前为${formatClockParts(selectedHour, selectedMinute)}`} hitSlop={ui.hitSlop} style={styles.selectedTimeButton} onPress={openTimeModal}>
+          <Text style={styles.selectedTimeText}>{formatClockParts(selectedHour, selectedMinute)}</Text>
+        </Pressable>
         <Pressable accessibilityRole="button" accessibilityLabel="按当前时间重新规划" hitSlop={ui.hitSlop} style={styles.primarySmallButton} onPress={apply} disabled={loading}>
           <Text style={styles.primarySmallButtonText}>{loading ? "规划中" : "重新规划"}</Text>
         </Pressable>
       </View>
+      <Modal animationType="fade" transparent visible={timeModalOpen} onRequestClose={() => setTimeModalOpen(false)}>
+        <View style={styles.modalOverlay}>
+          <Pressable style={styles.modalBackdrop} accessibilityRole="button" accessibilityLabel="关闭时间选择" onPress={() => setTimeModalOpen(false)} />
+          <View style={styles.timeModalSheet}>
+            <View style={styles.rowBetween}>
+              <Text style={styles.subheadingCompact}>{anchor === "DEPARTURE" ? "选择预估出发" : "选择最晚到达"}</Text>
+              <Pressable accessibilityRole="button" accessibilityLabel="关闭时间选择" hitSlop={ui.hitSlop} style={styles.modalCloseButton} onPress={() => setTimeModalOpen(false)}>
+                <Text style={styles.iconButtonText}>关闭</Text>
+              </Pressable>
+            </View>
+            <View style={styles.timeWheel}>
+              <TimeWheelColumn
+                label="小时"
+                options={HOUR_OPTIONS}
+                selectedValue={draftHour}
+                onSelect={setDraftHour}
+              />
+              <Text style={styles.timeWheelSeparator}>:</Text>
+              <TimeWheelColumn
+                label="分钟"
+                options={MINUTE_OPTIONS}
+                selectedValue={draftMinute}
+                onSelect={setDraftMinute}
+              />
+            </View>
+            <View style={styles.scheduleApplyRow}>
+              <Text style={styles.selectedTimeText}>{formatClockParts(draftHour, draftMinute)}</Text>
+              <Pressable accessibilityRole="button" accessibilityLabel="确认选择时间" hitSlop={ui.hitSlop} style={styles.primarySmallButton} onPress={confirmTimeModal}>
+                <Text style={styles.primarySmallButtonText}>确认</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+    </View>
+  );
+}
+
+function TimeWheelColumn({
+  label,
+  options,
+  selectedValue,
+  onSelect
+}: {
+  label: string;
+  options: number[];
+  selectedValue: number;
+  onSelect: (value: number) => void;
+}) {
+  return (
+    <View style={styles.timeWheelColumn}>
+      <Text style={styles.timeWheelLabel}>{label}</Text>
+      <ScrollView nestedScrollEnabled showsVerticalScrollIndicator={false} style={styles.timeWheelScroll} contentContainerStyle={styles.timeWheelContent}>
+        {options.map((value) => {
+          const selected = value === selectedValue;
+          return (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={`选择${label}${String(value).padStart(2, "0")}`}
+              accessibilityState={{ selected }}
+              hitSlop={ui.hitSlop}
+              key={value}
+              style={[styles.timeWheelOption, selected && styles.timeWheelOptionSelected]}
+              onPress={() => onSelect(value)}
+            >
+              <Text style={[styles.timeWheelOptionText, selected && styles.timeWheelOptionTextSelected]}>{String(value).padStart(2, "0")}</Text>
+            </Pressable>
+          );
+        })}
+      </ScrollView>
     </View>
   );
 }
 
 function PlanningScreen({ progress = 0, onCancel }: { progress?: number; onCancel?: () => void }) {
-  const stages = ["解析", "地点", "接驳", "铁路", "航班", "评分", "推荐"];
   const normalizedProgress = Math.max(0, Math.min(100, Math.round(progress)));
-  const completedStages = new Set(normalizedProgress >= 100 ? stages : normalizedProgress > 0 ? ["解析"] : []);
+  const allRegionsActive = normalizedProgress >= 100;
+  const [activeRegionIndex, setActiveRegionIndex] = useState(0);
+
+  useEffect(() => {
+    if (allRegionsActive) return undefined;
+    const timer = setInterval(() => {
+      setActiveRegionIndex((current) => (current + 1) % WORLD_MAP_SPOTS.length);
+    }, 650);
+    return () => clearInterval(timer);
+  }, [allRegionsActive]);
+
   return (
     <View style={styles.statePage}>
       <ActivityIndicator color="#126b75" size="large" />
       <Text style={styles.stateTitle}>正在规划</Text>
       <Text style={styles.secondaryText}>当前进度 {normalizedProgress}%</Text>
-      <View style={styles.stageList}>
-        {stages.map((stage) => {
-          const completed = completedStages.has(stage);
-          return (
-            <View accessible accessibilityLabel={`${stage}${completed ? "已完成" : "未完成"}`} style={styles.stageItem} key={stage}>
-              <View style={[styles.stageDot, completed ? styles.stageDotComplete : styles.stageDotPending]} />
-              <Text style={styles.bodyText}>{stage}</Text>
-            </View>
-          );
-        })}
+      <View
+        accessible
+        accessibilityLabel={allRegionsActive ? "规划中的世界地图，全部地区已亮起" : `规划中的世界地图，${WORLD_MAP_SPOTS[activeRegionIndex].name}正在亮起`}
+        style={styles.worldMapCard}
+      >
+        <View style={styles.worldMapOcean}>
+          {WORLD_MAP_LANDS.map((land) => (
+            <View key={land.key} style={[styles.worldMapLand, land.style]} />
+          ))}
+          {WORLD_MAP_SPOTS.map((spot, index) => {
+            const active = allRegionsActive || index === activeRegionIndex;
+            return (
+              <View key={spot.key} style={[styles.worldMapSignal, { left: spot.left, top: spot.top }, active ? styles.worldMapSignalActive : styles.worldMapSignalIdle]}>
+                <View style={[styles.worldMapSignalCore, active && styles.worldMapSignalCoreActive]} />
+              </View>
+            );
+          })}
+        </View>
       </View>
       {onCancel && (
         <Pressable accessibilityRole="button" accessibilityLabel="取消当前规划任务" hitSlop={ui.hitSlop} style={styles.secondarySmallButton} onPress={onCancel}>
@@ -1165,7 +1298,7 @@ export default function App() {
               <Text style={styles.appSubtitle}>{loading ? "正在把需求拆成门到门方案。" : "云开见路，每条方案都保留来源和边界。"}</Text>
             </View>
 
-            {loading && (!response || response.plans.length === 0) ? (
+            {loading ? (
               <PlanningScreen progress={response?.progress ?? 0} onCancel={response?.async_job ? cancelCurrentJob : undefined} />
             ) : error ? (
               <ErrorState message={error} onRetry={submit} onEdit={() => setActiveTab("input")} />
@@ -1628,14 +1761,104 @@ const styles = StyleSheet.create({
   segmentedButtonTextActive: {
     color: "#ffffff"
   },
-  scheduleInputRow: {
+  timeWheel: {
     alignItems: "center",
     flexDirection: "row",
-    gap: 10
+    gap: 8,
+    justifyContent: "center"
   },
-  timeInput: {
+  timeWheelColumn: {
     flex: 1,
-    minHeight: ui.touchTarget
+    maxWidth: 132
+  },
+  timeWheelLabel: {
+    color: "#66747c",
+    fontSize: 12,
+    fontWeight: "800",
+    marginBottom: 6,
+    textAlign: "center"
+  },
+  timeWheelScroll: {
+    backgroundColor: "#ffffff",
+    borderColor: "#dce4e6",
+    borderRadius: 8,
+    borderWidth: 1,
+    height: 156
+  },
+  timeWheelContent: {
+    paddingVertical: 6
+  },
+  timeWheelOption: {
+    alignItems: "center",
+    borderRadius: 6,
+    height: 44,
+    justifyContent: "center",
+    marginHorizontal: 6,
+    marginVertical: 2
+  },
+  timeWheelOptionSelected: {
+    backgroundColor: "#126b75"
+  },
+  timeWheelOptionText: {
+    color: "#314047",
+    fontSize: 18,
+    fontWeight: "800"
+  },
+  timeWheelOptionTextSelected: {
+    color: "#ffffff"
+  },
+  timeWheelSeparator: {
+    color: "#126b75",
+    fontSize: 24,
+    fontWeight: "800",
+    paddingTop: 18
+  },
+  scheduleApplyRow: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: 10,
+    justifyContent: "space-between"
+  },
+  selectedTimeButton: {
+    alignItems: "center",
+    backgroundColor: "#ffffff",
+    borderColor: "#dce4e6",
+    borderRadius: 8,
+    borderWidth: 1,
+    justifyContent: "center",
+    minHeight: 64,
+    minWidth: 142,
+    paddingHorizontal: 18,
+    paddingVertical: 10
+  },
+  selectedTimeText: {
+    color: "#172126",
+    fontSize: 22,
+    fontWeight: "800"
+  },
+  modalOverlay: {
+    flex: 1,
+    justifyContent: "flex-end"
+  },
+  modalBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "rgba(10, 25, 31, 0.32)"
+  },
+  timeModalSheet: {
+    backgroundColor: "#ffffff",
+    borderTopLeftRadius: 8,
+    borderTopRightRadius: 8,
+    gap: 14,
+    padding: 16,
+    paddingBottom: 22
+  },
+  modalCloseButton: {
+    backgroundColor: "#e7f2f3",
+    borderRadius: 8,
+    justifyContent: "center",
+    minHeight: ui.touchTarget,
+    paddingHorizontal: 12,
+    paddingVertical: 8
   },
   statusPill: {
     backgroundColor: "#d6e8ea",
@@ -1822,30 +2045,57 @@ const styles = StyleSheet.create({
     fontSize: 20,
     fontWeight: "800"
   },
-  stageList: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 10,
+  worldMapCard: {
+    backgroundColor: "#edf6f7",
+    borderColor: "#d6e8ea",
+    borderRadius: 8,
+    borderWidth: 1,
+    overflow: "hidden",
+    padding: 10,
     width: "100%"
   },
-  stageItem: {
+  worldMapOcean: {
+    aspectRatio: 1.85,
+    backgroundColor: "#d7eef0",
+    borderRadius: 8,
+    minHeight: 176,
+    overflow: "hidden",
+    position: "relative",
+    width: "100%"
+  },
+  worldMapLand: {
+    backgroundColor: "#75aea4",
+    borderRadius: 28,
+    opacity: 0.72,
+    position: "absolute"
+  },
+  worldMapSignal: {
     alignItems: "center",
-    flexDirection: "row",
-    gap: 6,
-    minHeight: 24
+    borderColor: "rgba(18, 107, 117, 0.18)",
+    borderRadius: 16,
+    borderWidth: 1,
+    height: 28,
+    justifyContent: "center",
+    marginLeft: -14,
+    marginTop: -14,
+    position: "absolute",
+    width: 28
   },
-  stageDot: {
-    borderColor: "#126b75",
-    borderRadius: 6,
-    borderWidth: 2,
-    height: 12,
-    width: 12
+  worldMapSignalIdle: {
+    backgroundColor: "rgba(255, 255, 255, 0.42)"
   },
-  stageDotComplete: {
-    backgroundColor: "#126b75"
+  worldMapSignalActive: {
+    backgroundColor: "rgba(245, 177, 66, 0.24)",
+    borderColor: "rgba(245, 177, 66, 0.72)"
   },
-  stageDotPending: {
-    backgroundColor: "#ffffff"
+  worldMapSignalCore: {
+    backgroundColor: "#9fb5ba",
+    borderRadius: 5,
+    height: 10,
+    width: 10
+  },
+  worldMapSignalCoreActive: {
+    backgroundColor: "#f5b142"
   },
   actionRow: {
     flexDirection: "row",

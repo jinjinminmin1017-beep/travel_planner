@@ -1,4 +1,5 @@
 from app.core.context import RequestContext
+from app.data_sources.llm_providers import _recommendation_selection_payload, _recommendation_user_prompt
 from app.models.schemas import (
     LLMRecommendationInput,
     LLMRecommendationOutput,
@@ -27,6 +28,8 @@ def _llm_input():
     )
     request.earliest_departure_time = None
     request.hard_constraints.earliest_departure_time = None
+    request.time_window_start = None
+    request.time_window_end = None
     plans, *_ = build_plans(request)
     candidates = generate_candidate_plan_pool(plans, request).llm_candidate_plans
     llm_input = LLMRecommendationInput(
@@ -58,6 +61,31 @@ def test_validate_llm_output_rejects_candidate_pool_violations():
     reasons = validate_llm_output(invalid, llm_input)
 
     assert any("not in candidate_plan_ids" in reason for reason in reasons)
+
+
+def test_recommendation_prompt_lists_exact_plan_ids_without_copyable_plan_id_placeholder():
+    llm_input = _llm_input()
+
+    prompt = _recommendation_user_prompt(llm_input)
+
+    assert "合法 plan_id 列表" in prompt
+    for plan_id in llm_input.candidate_plan_ids:
+        assert f"- {plan_id}" in prompt
+    assert '"plan_id":"必须来自合法 candidate_plan_ids"' not in prompt
+    assert '"plan_id": "必须来自 input.candidate_plan_ids"' not in prompt
+
+
+def test_recommendation_prompt_uses_compact_selection_payload():
+    llm_input = _llm_input()
+
+    payload = _recommendation_selection_payload(llm_input)
+    prompt = _recommendation_user_prompt(llm_input)
+
+    assert len(prompt) < len(llm_input.model_dump_json())
+    assert "transfer_options" not in prompt
+    assert "booking_redirects" not in prompt
+    assert payload["candidate_plan_ids"] == llm_input.candidate_plan_ids
+    assert {plan["plan_id"] for plan in payload["candidate_plans"]} == set(llm_input.candidate_plan_ids)
 
 
 def test_validate_llm_output_rejects_non_eligible_plan():

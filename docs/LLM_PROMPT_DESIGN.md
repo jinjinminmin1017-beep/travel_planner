@@ -414,7 +414,7 @@ LLMRecommendationInput Schema V1.15
 2. 输出必须符合 LLMRecommendationOutput Schema V1.15。
 3. selected_recommendations 必须正好包含 3 个 slot。
 4. 三个 slot 必须分别是 CHEAPEST、MOST_COMFORTABLE、BALANCED。
-5. 只能选择 input.candidate_plan_ids 中存在的 plan_id。
+5. 只能选择用户消息中“合法 plan_id 列表”存在的 plan_id，并逐字复制完整 ID。
 6. 不得选择 can_be_selected_by_llm = false 的方案。
 7. 不得选择 recommendation_eligibility = BLOCKED 的方案。
 8. 不得选择 plan_lifecycle_status = EXPIRED / INVALIDATED 的方案。
@@ -426,25 +426,31 @@ LLMRecommendationInput Schema V1.15
 14. 如果某类推荐没有可用方案，必须输出该 slot，status = NOT_AVAILABLE 或 BLOCKED，plan_id = null，并说明原因。
 15. reason 必须基于 candidate_plans 中已有字段，例如 total_cost、duration、comfort_score、risk_assessment、data_quality。
 16. 不得使用候选方案之外的信息。
+17. 不得把说明文字、字段名、模板文本或占位符写入 plan_id。
 ```
 
 ### 7.5 Recommendation User Prompt Template
 
 ```text
-请基于以下 LLMRecommendationInput，从 candidate_plans 中选择三张推荐卡。
+请基于以下 LLMRecommendationSelectionInput，从 candidate_plans 摘要中选择三张推荐卡。
 
 schema_version: 1.15
 
+合法 plan_id 列表：
+{{candidate_plan_ids_as_bullets}}
+
 输入：
-{{llm_recommendation_input_json}}
+{{llm_recommendation_selection_input_json}}
 
 输出要求：
 - 只输出 JSON
 - 不要 Markdown
 - 不要解释性正文
 - 必须符合 LLMRecommendationOutput Schema V1.15
-- 只能引用 candidate_plan_ids 中的 plan_id
+- AVAILABLE.plan_id 只能逐字复制合法 plan_id 列表中的一个 ID
+- 不得输出 plan_id 说明文字、模板文字、字段名或占位符
 - 不得修改价格、时间、车次、航班、余票和数据源
+- 输入只包含推荐选择所需摘要；完整 TravelPlan 仍由后端保存并用于最终校验。
 ```
 
 ---

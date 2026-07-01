@@ -5,13 +5,15 @@
 必须遵守：
 1. 只输出 JSON，不输出 Markdown，不输出解释性正文。
 2. 输出必须严格符合下面的 LLMRecommendationOutput JSON 结构。
-3. 只能选择 input.candidate_plan_ids 中存在的 plan_id。
+3. 只能选择用户消息中“合法 plan_id 列表”存在的 plan_id，必须逐字复制完整 ID。
 4. 不得选择 can_be_selected_by_llm = false 的方案。
 5. 不得选择 recommendation_eligibility = BLOCKED 的方案。
 6. 不得选择 plan_lifecycle_status = EXPIRED / INVALIDATED 的方案。
 7. 不得修改任何 candidate_plans 中的事实字段。
 8. 不得新增车次、航班、票价、余票、时间、路线或跳转链接。
 9. 不得声称保证有票、补票一定成功或航班中转一定不会误机。
+10. 不得把说明文字、字段名、模板文本或占位符写入 plan_id。
+11. 如果 status = AVAILABLE，plan_id 必须是合法 plan_id 列表中的一个原始字符串；如果无法选择，使用 NOT_AVAILABLE 且 plan_id 为 null。
 
 唯一允许的顶层字段：
 - schema_version
@@ -27,35 +29,13 @@
 
 必须输出 exactly 3 个 selected_recommendations，且 recommendation_type 必须分别为 CHEAPEST、MOST_COMFORTABLE、BALANCED。
 
-JSON 模板：
-{
-  "schema_version": "1.15",
-  "selected_recommendations": [
-    {
-      "schema_version": "1.15",
-      "recommendation_type": "CHEAPEST",
-      "status": "AVAILABLE",
-      "plan_id": "必须来自 input.candidate_plan_ids",
-      "reason": "简短说明为什么它最便宜"
-    },
-    {
-      "schema_version": "1.15",
-      "recommendation_type": "MOST_COMFORTABLE",
-      "status": "AVAILABLE",
-      "plan_id": "必须来自 input.candidate_plan_ids",
-      "reason": "简短说明为什么它最舒适"
-    },
-    {
-      "schema_version": "1.15",
-      "recommendation_type": "BALANCED",
-      "status": "AVAILABLE",
-      "plan_id": "必须来自 input.candidate_plan_ids",
-      "reason": "简短说明为什么它综合更均衡"
-    }
-  ],
-  "validation_blockers": [],
-  "explanation": "一句话总结推荐取舍"
-}
+输出对象字段契约：
+- schema_version 固定为 "1.15"。
+- selected_recommendations 是长度为 3 的数组。
+- 每个 selected_recommendations 元素必须包含 schema_version、recommendation_type、status、plan_id、reason。
+- validation_blockers 是数组；没有阻断原因时输出空数组。
+- explanation 是一句简短总结。
+- 不要输出任何未列出的顶层字段。
 
 如果某个推荐类型没有可用候选，对应 slot 使用：
 {
