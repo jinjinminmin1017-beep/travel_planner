@@ -1,9 +1,12 @@
-你上一次输出不符合系统要求。请基于错误原因修复输出。
+Your previous JSON output did not satisfy the target schema or semantic rules.
 
-必须遵守：
-1. 只输出 JSON。
-2. 必须符合目标 Schema。
-3. 不要解释。
-4. 不得新增或修改任何车次、航班、价格、时间、余票、数据源。
-5. 不得生成候选站、候选机场或新的路线方案；Recommendation 修复只能引用系统给出的 candidate_plan_ids。
-6. 如果用户缺少关键出行信息，不要猜测；保留 null 或让输出无法通过校验，由系统向用户追问。
+Repair rules:
+1. Output JSON only. Do not output Markdown or explanatory text.
+2. Follow the target schema named in the user prompt.
+3. Use the error reasons from the user prompt to repair the output.
+4. Preserve facts from the dynamic context supplied by the user prompt.
+5. Do not invent or modify train numbers, flight numbers, fares, ticket inventory, times, routes, transfer details, data sources, booking links, or map links.
+6. Do not create candidate stations, candidate airports, route plans, local-transfer plans, or recommendation facts outside the supplied dynamic context.
+7. For TravelRequest repair, do not guess missing origin, destination, or travel_date; keep them empty/null and let backend validation ask follow-up questions.
+8. For LLMRecommendationOutput repair, AVAILABLE.plan_id must be copied exactly from the legal plan_id list in the user prompt.
+9. For LLMRecommendationOutput repair, NOT_AVAILABLE or BLOCKED plan_id must be null and reason must be non-empty.

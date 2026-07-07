@@ -1,5 +1,8 @@
+import json
+from datetime import date
+
 from app.core.context import RequestContext
-from app.data_sources.llm_providers import _recommendation_selection_payload, _recommendation_user_prompt
+from app.data_sources.llm_providers import OpenAICompatibleLLMProvider, _prompt, _recommendation_selection_payload, _recommendation_user_prompt
 from app.models.schemas import (
     LLMRecommendationInput,
     LLMRecommendationOutput,
@@ -17,13 +20,35 @@ from app.services.recommendation import recommend_with_validation, validate_llm_
 _BASE_LLM_INPUT_JSON: str | None = None
 
 
+class _FakeLLMResponse:
+    def __init__(self, content: str) -> None:
+        self.content = content
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def json(self):
+        return {"choices": [{"message": {"content": self.content}}]}
+
+
+class _RecordingLLMClient:
+    def __init__(self, responses: list[str]) -> None:
+        self.responses = responses
+        self.requests: list[dict] = []
+
+    def post(self, url, headers, json):
+        self.requests.append({"url": url, "headers": headers, "json": json})
+        content = self.responses.pop(0)
+        return _FakeLLMResponse(content)
+
+
 def _llm_input():
     global _BASE_LLM_INPUT_JSON
     if _BASE_LLM_INPUT_JSON:
         return LLMRecommendationInput.model_validate_json(_BASE_LLM_INPUT_JSON)
     ctx = RequestContext("req_rec", "trace_rec", "corr_rec", "idem_rec")
     request = parse_travel_request(
-        "我 2026 年 5 月 21 日上午 9 点后，从上海嘉定南翔格林公馆出发，到青岛金水假日酒店，帮我找最舒服和最便宜的方式。",
+        "2026-05-21 from Beijing to Guangzhou, comfortable and cheapest, train or flight",
         ctx,
     )
     request.earliest_departure_time = None
@@ -63,16 +88,38 @@ def test_validate_llm_output_rejects_candidate_pool_violations():
     assert any("not in candidate_plan_ids" in reason for reason in reasons)
 
 
+def test_intent_prompt_uses_minimal_contract_and_dynamic_user_context():
+    system_prompt = _prompt("intent_parser_prompt_v1_0.txt")
+    client = _RecordingLLMClient(['{"schema_version":"1.15"}'])
+    provider = OpenAICompatibleLLMProvider(api_key="test-key", model="test-model", client=client)
+
+    provider.parse_intent("2026-07-09 from Beijing to Shanghai in the morning", "req_prompt", date(2026, 7, 7), "Asia/Shanghai")
+
+    request_payload = client.requests[0]["json"]
+    user_prompt = request_payload["messages"][1]["content"]
+    assert request_payload["response_format"] == {"type": "json_object"}
+    assert "full TravelRequest Schema" not in system_prompt
+    assert "Required minimum fields" in system_prompt
+    assert "time_window_start" in system_prompt
+    assert "TimePoint object has exactly these fields: datetime, timezone, source_timezone" in system_prompt
+    assert "request_id: req_prompt" in user_prompt
+    assert "default_timezone: Asia/Shanghai" in user_prompt
+    assert "current_date: 2026-07-07" in user_prompt
+    assert "2026-07-09 from Beijing to Shanghai in the morning" in user_prompt
+
+
 def test_recommendation_prompt_lists_exact_plan_ids_without_copyable_plan_id_placeholder():
     llm_input = _llm_input()
+    system_prompt = _prompt("recommendation_prompt_v1_0.txt")
 
     prompt = _recommendation_user_prompt(llm_input)
 
-    assert "合法 plan_id 列表" in prompt
+    assert "Legal plan_id list" in prompt
     for plan_id in llm_input.candidate_plan_ids:
         assert f"- {plan_id}" in prompt
-    assert '"plan_id":"必须来自合法 candidate_plan_ids"' not in prompt
-    assert '"plan_id": "必须来自 input.candidate_plan_ids"' not in prompt
+    assert "copy-from-user-prompt" not in system_prompt
+    assert '"plan_id":"must come from legal candidate_plan_ids"' not in prompt
+    assert '"plan_id": "must come from input.candidate_plan_ids"' not in prompt
 
 
 def test_recommendation_prompt_uses_compact_selection_payload():
@@ -86,6 +133,26 @@ def test_recommendation_prompt_uses_compact_selection_payload():
     assert "booking_redirects" not in prompt
     assert payload["candidate_plan_ids"] == llm_input.candidate_plan_ids
     assert {plan["plan_id"] for plan in payload["candidate_plans"]} == set(llm_input.candidate_plan_ids)
+
+
+def test_recommendation_repair_prompt_repeats_legal_plan_ids_and_original_output():
+    llm_input = _llm_input()
+    raw_invalid_output = '{"schema_version":"1.15","recommendations":[]}'
+    repaired_output = _output(llm_input.candidate_plan_ids[:3]).model_dump(mode="json")
+    client = _RecordingLLMClient([json.dumps(repaired_output)])
+    provider = OpenAICompatibleLLMProvider(api_key="test-key", model="test-model", client=client)
+    provider._last_recommendation_raw_output = raw_invalid_output
+
+    provider.repair_recommendation(llm_input, ["schema validation failed: recommendations extra input"])
+
+    user_prompt = client.requests[0]["json"]["messages"][1]["content"]
+    assert "target_schema: LLMRecommendationOutput Schema V1.15" in user_prompt
+    assert "schema validation failed: recommendations extra input" in user_prompt
+    assert "previous_raw_llm_output:" in user_prompt
+    assert raw_invalid_output in user_prompt
+    assert "Legal plan_id list" in user_prompt
+    for plan_id in llm_input.candidate_plan_ids:
+        assert f"- {plan_id}" in user_prompt
 
 
 def test_validate_llm_output_rejects_non_eligible_plan():

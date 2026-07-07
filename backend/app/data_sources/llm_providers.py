@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import os
 import json
+import os
 from datetime import date
 from pathlib import Path
 from typing import Any, Protocol
@@ -49,26 +49,29 @@ class OpenAICompatibleLLMProvider:
         self.model_name = model
         self.client = client or httpx.Client(timeout=_llm_timeout_seconds())
         self.base_url = base_url.rstrip("/")
+        self._last_recommendation_raw_output: str | None = None
 
     def parse_intent(self, raw_user_input: str, request_id: str, current_date: date, default_timezone: str) -> str:
         user_prompt = "\n".join(
             [
-                "请将以下用户出行需求解析为 TravelRequest JSON。",
+                "Parse the following user travel request into TravelRequest JSON.",
                 "",
                 "schema_version: 1.15",
                 f"request_id: {request_id}",
                 f"default_timezone: {default_timezone}",
                 f"current_date: {current_date.isoformat()}",
                 "",
-                "用户输入：",
+                "raw_user_input:",
                 raw_user_input,
                 "",
-                "输出要求：",
-                "- 只输出 JSON",
-                "- 不要 Markdown",
-                "- 不要解释",
-                "- 不要生成车次、航班、价格、余票或路线方案",
-                "- 必须符合 TravelRequest Schema V1.15",
+                "Output requirements:",
+                "- Output JSON only.",
+                "- Do not output Markdown or explanations.",
+                "- Copy request_id and raw_user_input exactly.",
+                '- Use schema_version "1.15".',
+                "- TimePoint fields must be null or objects with datetime, timezone, and source_timezone.",
+                '- Do not output bare time strings such as "08:00" for time_window_start or time_window_end.',
+                "- Do not generate trains, flights, fares, ticket inventory, candidate places, routes, transfers, recommendations, booking links, or map links.",
             ]
         )
         return self._complete_json(_prompt("intent_parser_prompt_v1_0.txt"), user_prompt)
@@ -76,21 +79,23 @@ class OpenAICompatibleLLMProvider:
     def repair_intent(self, raw_llm_output: str, invalid_reasons: list[str], raw_user_input: str, request_id: str) -> str:
         user_prompt = "\n".join(
             [
-                "你的上一次 Intent Parser 输出非法。",
+                "Repair the previous Intent Parser output.",
                 "",
-                "错误原因：",
+                "target_schema: TravelRequest Schema V1.15",
+                "",
+                "error_reasons:",
                 "\n".join(f"- {reason}" for reason in invalid_reasons),
                 "",
                 "request_id:",
                 request_id,
                 "",
-                "用户原始输入：",
+                "raw_user_input:",
                 raw_user_input,
                 "",
-                "原始 LLM 输出：",
+                "previous_raw_llm_output:",
                 raw_llm_output,
                 "",
-                "请重新输出符合 TravelRequest Schema V1.15 的 JSON。",
+                "Return repaired JSON only. Copy request_id and raw_user_input exactly. Do not guess missing origin, destination, or travel_date.",
             ]
         )
         return self._complete_json(_prompt("repair_prompt_v1_0.txt"), user_prompt)
@@ -100,28 +105,35 @@ class OpenAICompatibleLLMProvider:
             _prompt("recommendation_prompt_v1_0.txt"),
             _recommendation_user_prompt(llm_input),
         )
+        self._last_recommendation_raw_output = content
         return LLMRecommendationOutput.model_validate_json(content)
 
     def repair_recommendation(self, llm_input: LLMRecommendationInput, invalid_reasons: list[str]) -> LLMRecommendationOutput:
+        previous_raw_output = self._last_recommendation_raw_output or "UNAVAILABLE"
         user_prompt = "\n".join(
             [
-                "你的上一次 Recommendation 输出非法。",
+                "Repair the previous Recommendation output.",
                 "",
-                "错误原因：",
+                "target_schema: LLMRecommendationOutput Schema V1.15",
+                "",
+                "error_reasons:",
                 "\n".join(f"- {reason}" for reason in invalid_reasons),
+                "",
+                "previous_raw_llm_output:",
+                previous_raw_output,
                 "",
                 _valid_plan_id_section(llm_input),
                 "",
-                "LLMRecommendationSelectionInput JSON：",
+                "LLMRecommendationSelectionInput JSON:",
                 json.dumps(_recommendation_selection_payload(llm_input), ensure_ascii=False, separators=(",", ":")),
                 "",
-                "请重新输出符合 LLMRecommendationOutput Schema V1.15 的 JSON。",
+                "Return repaired JSON for LLMRecommendationOutput Schema V1.15.",
                 "",
-                "唯一允许的顶层字段：schema_version, selected_recommendations, validation_blockers, explanation。",
-                "禁止输出顶层字段：request_id, recommendations, candidate_plan_ids, candidate_plans。",
-                "selected_recommendations 必须正好包含 CHEAPEST、MOST_COMFORTABLE、BALANCED 三个 slot。",
-                "如果 status=AVAILABLE，plan_id 必须逐字复制合法 plan_id 列表中的某一个 ID；不得输出说明文字、字段名、模板文本或占位符。",
-                "如果没有可用候选，对应 slot 使用 status=NOT_AVAILABLE 且 plan_id=null。",
+                "Allowed top-level fields: schema_version, selected_recommendations, validation_blockers, explanation.",
+                "Forbidden top-level fields: request_id, recommendations, candidate_plan_ids, candidate_plans.",
+                "selected_recommendations must contain exactly CHEAPEST, MOST_COMFORTABLE, and BALANCED.",
+                "If status=AVAILABLE, plan_id must exactly match one ID from the legal plan_id list.",
+                "If no candidate is available for a slot, use status=NOT_AVAILABLE and plan_id=null.",
             ]
         )
         content = self._complete_json(_prompt("repair_prompt_v1_0.txt"), user_prompt)
@@ -176,7 +188,7 @@ def _valid_plan_id_section(llm_input: LLMRecommendationInput) -> str:
     plan_ids = "\n".join(f"- {plan_id}" for plan_id in llm_input.candidate_plan_ids)
     return "\n".join(
         [
-            "合法 plan_id 列表（AVAILABLE.plan_id 只能逐字复制下面某一行的 ID）：",
+            "Legal plan_id list. AVAILABLE.plan_id may only copy one complete ID from a line below:",
             plan_ids,
         ]
     )
@@ -188,14 +200,14 @@ def _recommendation_user_prompt(llm_input: LLMRecommendationInput) -> str:
         [
             _valid_plan_id_section(llm_input),
             "",
-            "输出前自检：",
-            "- 顶层字段只能是 schema_version, selected_recommendations, validation_blockers, explanation。",
-            "- selected_recommendations 必须正好包含 CHEAPEST、MOST_COMFORTABLE、BALANCED 三个 slot。",
-            "- 任一 AVAILABLE.plan_id 必须逐字等于合法 plan_id 列表中的一个 ID。",
-            "- 不要输出 plan_id 说明文字、模板文字、字段名或占位符。",
-            "- 不要修改 candidate_plans 中的任何事实字段。",
+            "Before output, self-check:",
+            "- Top-level fields must be only schema_version, selected_recommendations, validation_blockers, explanation.",
+            "- selected_recommendations must contain exactly CHEAPEST, MOST_COMFORTABLE, and BALANCED.",
+            "- Every AVAILABLE.plan_id must exactly equal one ID from the legal plan_id list.",
+            "- Do not output plan_id explanations, template text, field names, or placeholders.",
+            "- Do not modify any candidate_plans fact field.",
             "",
-            "LLMRecommendationSelectionInput JSON（仅含选择推荐所需摘要；完整方案由后端校验）：",
+            "LLMRecommendationSelectionInput JSON. This is a compact summary for selection only; backend validation owns the full TravelPlan objects:",
             json.dumps(selection_payload, ensure_ascii=False, separators=(",", ":")),
         ]
     )
