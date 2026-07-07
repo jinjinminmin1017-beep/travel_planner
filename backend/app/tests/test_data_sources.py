@@ -3,6 +3,7 @@ import os
 import pytest
 
 from app.data_sources.config_loader import load_data_source_configs, load_project_env, runtime_statuses, validate_production_data_source_configs
+from app.data_sources.llm_providers import OpenAICompatibleLLMProvider
 from app.models.schemas import DataSourceConfig
 from scripts.check_real_api_config import validate_env_example_sync, validate_public_tier
 
@@ -66,10 +67,35 @@ def clear_local_real_source_env(monkeypatch):
         "TRAVEL_SOURCE_REAL_LLM_QPS_LIMIT",
         "OPENAI_API_KEY",
         "LLM_API_KEY",
+        "REAL_LLM_MAX_TOKENS",
+        "REAL_LLM_THINKING_DISABLED",
         "VARIFLIGHT_API_KEY",
         "OTA_PARTNER_ID",
         "OTA_PARTNER_BASE_URL",
     ]:
+
+class _FakeLLMResponse:
+    def raise_for_status(self) -> None:
+        return None
+
+    def json(self):
+        return {"choices": [{"message": {"content": '{"schema_version":"1.15"}'}}]}
+
+
+class _RecordingLLMClient:
+    def __init__(self) -> None:
+        self.requests: list[dict] = []
+
+    def post(self, url, headers, json):
+        self.requests.append({"url": url, "headers": headers, "json": json})
+        return _FakeLLMResponse()
+
+
+def _llm_request_json() -> dict:
+    client = _RecordingLLMClient()
+    provider = OpenAICompatibleLLMProvider(api_key="test-key", model="test-model", client=client)
+    provider._complete_json("system prompt", "user prompt")
+    return client.requests[0]["json"]
         monkeypatch.delenv(key, raising=False)
 
 
@@ -136,6 +162,40 @@ def test_enabled_real_source_without_approval_or_key_is_degraded(monkeypatch):
     status = {item.source_id: item for item in runtime_statuses("DEV")}["amap_route"]
     assert status.health_status == "OK"
     assert status.degraded_reason is None
+
+def test_llm_provider_disables_thinking_and_uses_default_max_tokens():
+    request_json = _llm_request_json()
+
+    assert request_json["thinking"] == {"type": "disabled"}
+    assert request_json["max_tokens"] == 800
+    assert request_json["response_format"] == {"type": "json_object"}
+    assert "thinking" not in request_json["messages"][0]
+    assert "thinking" not in request_json["messages"][1]
+
+
+def test_llm_provider_max_tokens_can_be_overridden(monkeypatch):
+    monkeypatch.setenv("REAL_LLM_MAX_TOKENS", "1200")
+
+    request_json = _llm_request_json()
+
+    assert request_json["max_tokens"] == 1200
+
+
+@pytest.mark.parametrize("raw_value", ["bad", "0", "-5"])
+def test_llm_provider_invalid_max_tokens_falls_back_to_default(monkeypatch, raw_value):
+    monkeypatch.setenv("REAL_LLM_MAX_TOKENS", raw_value)
+
+    request_json = _llm_request_json()
+
+    assert request_json["max_tokens"] == 800
+
+
+def test_llm_provider_can_omit_thinking_when_explicitly_enabled(monkeypatch):
+    monkeypatch.setenv("REAL_LLM_THINKING_DISABLED", "false")
+
+    request_json = _llm_request_json()
+    assert "thinking" not in request_json
+    assert request_json["max_tokens"] == 800
 
 
 def test_project_env_loader_reads_local_env_file_without_overriding_existing_values(tmp_path, monkeypatch):

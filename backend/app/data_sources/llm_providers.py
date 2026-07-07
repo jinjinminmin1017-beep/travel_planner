@@ -12,6 +12,7 @@ from app.data_sources.config_loader import has_required_secret, load_data_source
 from app.models.schemas import LLMRecommendationInput, LLMRecommendationOutput
 
 PROMPT_DIR = Path(__file__).resolve().parents[1] / "llm" / "prompts"
+DEFAULT_REAL_LLM_MAX_TOKENS = 800
 
 
 class LLMProviderError(RuntimeError):
@@ -140,24 +141,29 @@ class OpenAICompatibleLLMProvider:
         return LLMRecommendationOutput.model_validate_json(content)
 
     def _complete_json(self, system_prompt: str, user_prompt: str) -> str:
+        request_json = {
+            "model": self.model,
+            "temperature": 0,
+            "response_format": {"type": "json_object"},
+            "max_tokens": _llm_max_tokens(),
+            "messages": [
+                {
+                    "role": "system",
+                    "content": system_prompt,
+                },
+                {
+                    "role": "user",
+                    "content": user_prompt,
+                },
+            ],
+        }
+        if _llm_thinking_disabled():
+            request_json["thinking"] = {"type": "disabled"}
+
         response = self.client.post(
             f"{self.base_url}/chat/completions",
             headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
-            json={
-                "model": self.model,
-                "temperature": 0,
-                "response_format": {"type": "json_object"},
-                "messages": [
-                    {
-                        "role": "system",
-                        "content": system_prompt,
-                    },
-                    {
-                        "role": "user",
-                        "content": user_prompt,
-                    },
-                ],
-            },
+            json=request_json,
         )
         response.raise_for_status()
         payload = response.json()
@@ -352,6 +358,19 @@ def _llm_timeout_seconds() -> float:
         return max(1.0, float(raw_value))
     except ValueError:
         return 45.0
+
+
+def _llm_max_tokens() -> int:
+    raw_value = os.getenv("REAL_LLM_MAX_TOKENS", str(DEFAULT_REAL_LLM_MAX_TOKENS))
+    try:
+        value = int(raw_value)
+    except ValueError:
+        return DEFAULT_REAL_LLM_MAX_TOKENS
+    return value if value >= 1 else DEFAULT_REAL_LLM_MAX_TOKENS
+
+
+def _llm_thinking_disabled() -> bool:
+    return os.getenv("REAL_LLM_THINKING_DISABLED", "true").strip().lower() != "false"
 
 
 def _prompt(filename: str) -> str:
