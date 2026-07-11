@@ -1,3 +1,16 @@
+## 2026-07-11 08:02:41 +08:00
+
+- 任务：路径规划前端落地 Phase 1（设计系统与 helper）。
+- 代码提交：`b4293563a51d49ec0cecbe2c33a095167d15f709`。
+- 修改内容：
+  - 扩展前端语义颜色、圆角和 4px 基础间距 Token，并保留旧颜色字段兼容别名。
+  - 新增路线标题、核心指标、有效换乘次数、推算时间轴和真实方案差异 helper。
+  - 新增 Node 原生 helper 测试脚本与 4 个最小回归测试，不引入第三方依赖。
+- 验证：
+  - `npm run test:helpers`：通过，4 passed。
+  - `npm run typecheck`：通过。
+  - `npm run build`：通过，Expo iOS / Android 导出成功。
+
 ## 2026-07-07 23:16:02 +08:00
 
 - 任务：ARC-20260707-02 为真实 LLM 调用关闭 Thinking 并限制输出 token。
