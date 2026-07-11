@@ -8,6 +8,7 @@ export const ui = {
     primary: "#126b75",
     primaryDeep: "#0b5159",
     primarySoft: "#e4f1ef",
+    onPrimaryMuted: "#d5e9e6",
     connection: "#bfe4dc",
     warning: "#8a5a18",
     warningSurface: "#fff4de",
@@ -38,7 +39,7 @@ export const ui = {
     xl: 24,
     xxl: 32
   },
-  touchTarget: 44,
+  touchTarget: 48,
   contentMaxWidth: 720,
   hitSlop: {
     top: 8,

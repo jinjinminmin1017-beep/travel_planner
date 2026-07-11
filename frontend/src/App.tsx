@@ -3,7 +3,6 @@ import {
   ActivityIndicator,
   Alert,
   AppState,
-  ImageBackground,
   Modal,
   type ImageSourcePropType,
   Pressable,
@@ -16,31 +15,32 @@ import {
   View
 } from "react-native";
 import qingdaoHero from "../assets/destination-scenes/qingdao-pier.jpg";
-import { bookingRedirect, cancelPlanningJob, planTripAsync, pollPlanningJob, recalculate, retryPlanningJob, submitFeedback, trackEvent } from "./api/client";
+import { cancelPlanningJob, planTripAsync, pollPlanningJob, retryPlanningJob, trackEvent } from "./api/client";
 import { ui } from "./designSystem";
+import { PlanningProgressScreen } from "./components/planning/PlanningProgressScreen";
+import { ResultsBottomAction } from "./components/results/ResultsBottomAction";
+import { ResultsOverview } from "./components/results/ResultsOverview";
+import { RouteDetailScreen } from "./components/results/RouteDetailScreen";
 import {
-  copyPlanSummary,
   hasExpiredRedirect,
   loadFavoritePlanSnapshots,
   loadRecentPlanSnapshots,
   loadRetentionPreferences,
-  openExternalUrl,
   type RecentPlanSnapshot,
   requestLocationPermission,
   saveRecentPlanSnapshot,
   saveRetentionPreferences,
-  sharePlan,
   toggleFavoritePlanSnapshot
 } from "./nativeCapabilities";
-import type { DataSourceMetadata, DestinationPresentation, FeedbackCategory, LocalTransferOption, RecalculateChangeType, RecalculateResponse, RecommendationSlot, Segment, SourceFailure, TimePoint, TravelPlan, TravelPlanResponse, TravelRequest } from "./types";
-import { formatMoney, minutesToText, riskLabel, slotLabel } from "./utils/format";
+import type { DataSourceMetadata, RecalculateResponse, SourceFailure, TimePoint, TravelPlan, TravelPlanResponse, TravelRequest } from "./types";
+import { minutesToText } from "./utils/format";
 
 const HERO_IMAGES: Record<string, ImageSourcePropType> = {
   qingdao: qingdaoHero
 };
 
 type ActiveTab = "input" | "results";
-type ResultsPane = "overview" | "sources";
+type ResultsPane = "overview" | "details" | "sources";
 type TimeAnchor = "DEPARTURE" | "ARRIVAL";
 
 const POLL_INTERVAL_MS = 1200;
@@ -49,26 +49,6 @@ const ACTIVE_PLANNING_STATUSES = new Set(["PENDING", "RUNNING"]);
 const ACTIVE_JOB_STATUSES = new Set(["QUEUED", "RUNNING", "WAITING_SOURCE"]);
 const HOUR_OPTIONS = Array.from({ length: 24 }, (_, index) => index);
 const MINUTE_OPTIONS = Array.from({ length: 12 }, (_, index) => index * 5);
-const WORLD_MAP_LANDS = [
-  { key: "north-america", style: { left: "8%", top: "24%", width: "24%", height: "24%", transform: [{ rotate: "-10deg" }] } },
-  { key: "south-america", style: { left: "28%", top: "50%", width: "13%", height: "30%", transform: [{ rotate: "14deg" }] } },
-  { key: "europe", style: { left: "48%", top: "28%", width: "13%", height: "13%", transform: [{ rotate: "8deg" }] } },
-  { key: "africa", style: { left: "48%", top: "43%", width: "17%", height: "30%", transform: [{ rotate: "-4deg" }] } },
-  { key: "asia", style: { left: "62%", top: "27%", width: "28%", height: "25%", transform: [{ rotate: "5deg" }] } },
-  { key: "australia", style: { left: "77%", top: "65%", width: "15%", height: "12%", transform: [{ rotate: "-8deg" }] } }
-] as const;
-const WORLD_MAP_SPOTS = [
-  { key: "canada", name: "加拿大", left: "20%", top: "29%" },
-  { key: "brazil", name: "巴西", left: "34%", top: "62%" },
-  { key: "uk", name: "英国", left: "51%", top: "32%" },
-  { key: "egypt", name: "埃及", left: "56%", top: "48%" },
-  { key: "south-africa", name: "南非", left: "57%", top: "69%" },
-  { key: "india", name: "印度", left: "68%", top: "51%" },
-  { key: "china", name: "中国", left: "75%", top: "41%" },
-  { key: "japan", name: "日本", left: "84%", top: "43%" },
-  { key: "australia", name: "澳大利亚", left: "84%", top: "70%" }
-] as const;
-
 function findPlan(response: TravelPlanResponse | null, planId: string | null) {
   if (!response || !planId) return null;
   return response.plans.find((plan) => plan.plan_id === planId) ?? null;
@@ -96,27 +76,6 @@ function planTypeLabel(type: string) {
     MIXED: "混合方案"
   };
   return labels[type] ?? type;
-}
-
-function transferModeLabel(mode: string) {
-  const normalized = mode.replace("transfer_", "").toUpperCase();
-  if (normalized === "TAXI") return "打车";
-  if (normalized === "SUBWAY") return "地铁";
-  if (normalized === "BUS") return "公交";
-  if (normalized === "WALK") return "步行";
-  return mode.replace("transfer_", "");
-}
-
-function formatTimePoint(time?: TimePoint | null) {
-  if (!time?.datetime) return "时间待确认";
-  const parsed = new Date(time.datetime);
-  if (Number.isNaN(parsed.getTime())) return time.datetime;
-  return new Intl.DateTimeFormat("zh-CN", {
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit"
-  }).format(parsed);
 }
 
 function formatClockTime(time?: TimePoint | null) {
@@ -168,91 +127,6 @@ function snapMinute(value: number) {
   return Math.max(0, Math.min(55, Math.round(value / 5) * 5));
 }
 
-function segmentTimeLabel(segment: Segment) {
-  const departure = formatClockTime(segment.departure_time);
-  const arrival = formatClockTime(segment.arrival_time);
-  if (departure && arrival) {
-    return `${departure} - ${arrival}`;
-  }
-  if (departure) return `${departure} 出发`;
-  if (arrival) return `${arrival} 到达`;
-  return null;
-}
-
-function sourceFreshnessLabel(source?: DataSourceMetadata | null) {
-  if (!source) return "来源待确认";
-  return `${source.source_name} · ${source.license_status} · 更新 ${formatTimePoint(source.fetched_at)}`;
-}
-
-function latestSource(plan: TravelPlan) {
-  return [...plan.data_sources].sort((left, right) => new Date(right.fetched_at.datetime).getTime() - new Date(left.fetched_at.datetime).getTime())[0] ?? null;
-}
-
-function segmentTitle(segment: Segment) {
-  if (segment.segment_type === "RAIL") return `${segment.train_number} ${segment.origin_station} 到 ${segment.destination_station}`;
-  if (segment.segment_type === "FLIGHT") return `${segment.flight_number} ${segment.origin_airport} 到 ${segment.destination_airport}`;
-  return `${transferModeLabel(segment.transfer_mode ?? "")} ${segment.origin} 到 ${segment.destination}`;
-}
-
-function segmentModeLabel(segment: Segment) {
-  if (segment.segment_type === "LOCAL_TRANSFER") return transferModeLabel(segment.transfer_mode ?? "");
-  if (segment.segment_type === "RAIL") return "高铁";
-  if (segment.segment_type === "FLIGHT") return "航班";
-  return segment.segment_type;
-}
-
-function segmentMetaLabel(segment: Segment) {
-  const parts = [segmentModeLabel(segment), segmentTimeLabel(segment), minutesToText(segment.duration_minutes)];
-  return parts.filter(Boolean).join(" · ");
-}
-
-function planDisplayName(plan: TravelPlan) {
-  const originalParts = plan.plan_name.split("+").map((part) => part.trim());
-  if (originalParts.length === plan.segments.length) {
-    return plan.segments.map((segment, index) => (segment.segment_type === "LOCAL_TRANSFER" ? segmentModeLabel(segment) : originalParts[index])).join(" + ");
-  }
-  return plan.segments.map(segmentModeLabel).join(" + ");
-}
-
-function fallbackTransferOption(segment: Segment, optionId: string): LocalTransferOption {
-  const mode = optionId.replace("transfer_", "").toUpperCase();
-  const label = transferModeLabel(optionId);
-  return {
-    option_id: optionId,
-    transfer_mode: mode,
-    label,
-    estimated_cost: segment.estimated_cost ?? { amount_minor: 0, currency: "CNY", scale: 2, is_estimated: true, display_text: "待估算" },
-    duration_minutes: segment.duration_minutes,
-    access_station: mode === "TAXI" ? null : `${segment.origin ?? "出发地"}附近${mode === "SUBWAY" ? "地铁站" : "公交站"}`,
-    egress_station: mode === "TAXI" ? null : `${segment.destination ?? "目的地"}附近${mode === "SUBWAY" ? "地铁站" : "公交站"}`,
-    access_instruction: mode === "TAXI" ? `从 ${segment.origin} 上车。` : `从 ${segment.origin} 前往上车站点。`,
-    ride_instruction: mode === "TAXI" ? `直达 ${segment.destination}。` : `乘坐${label}到下车站点。`,
-    egress_instruction: mode === "TAXI" ? `在 ${segment.destination} 下车。` : `从下车站点前往 ${segment.destination}。`,
-    walking_distance_meters: 0,
-    data_source: segment.data_source
-  };
-}
-
-function transferOptionsFor(segment: Segment) {
-  return segment.transfer_options?.length ? segment.transfer_options : segment.available_options?.map((option) => fallbackTransferOption(segment, option)) ?? [];
-}
-
-function selectedTransferOption(segment: Segment) {
-  return transferOptionsFor(segment).find((option) => option.option_id === segment.option_id) ?? transferOptionsFor(segment)[0] ?? null;
-}
-
-function selectedRailSeat(segment: Segment) {
-  return segment.seat_options?.find((option) => option.option_id === segment.selected_seat_option_id) ?? segment.seat_options?.[0] ?? null;
-}
-
-function selectedFlightCabin(segment: Segment) {
-  return segment.cabin_options?.find((option) => option.option_id === segment.selected_cabin_option_id) ?? segment.cabin_options?.[0] ?? null;
-}
-
-function percentLabel(value: number) {
-  return `${Math.round(value * 100)}%`;
-}
-
 function compactStatusLabel(value: string) {
   const labels: Record<string, string> = {
     AUTHORIZED: "已授权",
@@ -266,128 +140,6 @@ function compactStatusLabel(value: string) {
     RATE_LIMITED: "限流"
   };
   return labels[value] ?? value;
-}
-
-function Hero({ presentation, plan }: { presentation: DestinationPresentation | null; plan: TravelPlan | null }) {
-  const destinationKey = presentation?.destination_key ?? "generic";
-  const imageSource = HERO_IMAGES[destinationKey];
-  const content = (
-    <View style={styles.heroShade}>
-      <Text style={styles.heroKicker}>目的地</Text>
-      <Text style={styles.heroTitle}>{presentation?.display_name ?? "出行搭子"}</Text>
-      {plan && (
-        <Text style={styles.heroMeta}>
-          {planDisplayName(plan)} · {minutesToText(plan.total_duration_minutes)} · {formatMoney(plan.cost_breakdown.total_cost)}
-        </Text>
-      )}
-    </View>
-  );
-
-  if (!imageSource) {
-    return <View style={[styles.hero, styles.heroFallback]}>{content}</View>;
-  }
-  return (
-    <ImageBackground source={imageSource} style={styles.hero} imageStyle={styles.heroImage}>
-      {content}
-    </ImageBackground>
-  );
-}
-
-function RecommendationCard({ slot, plan, selected, onSelect }: { slot: RecommendationSlot; plan: TravelPlan | null; selected: boolean; onSelect: (plan: TravelPlan) => void }) {
-  return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={plan ? `${slotLabel(slot.recommendation_type)}：${planDisplayName(plan)}，${riskLabel(plan.risk_assessment.overall_risk_level)}` : `${slotLabel(slot.recommendation_type)}不可用`}
-      accessibilityState={{ selected, disabled: !plan }}
-      hitSlop={ui.hitSlop}
-      style={[styles.card, styles.recommendationCard, selected && styles.cardSelected]}
-      disabled={!plan}
-      onPress={() => plan && onSelect(plan)}
-    >
-      <View style={styles.rowBetween}>
-        <Text style={styles.kicker}>{slotLabel(slot.recommendation_type)}</Text>
-        <Text style={[styles.riskPill, riskStyle(plan?.risk_assessment.overall_risk_level ?? slot.status)]}>{plan ? riskLabel(plan.risk_assessment.overall_risk_level) : slot.status}</Text>
-      </View>
-      {plan ? (
-        <>
-          <Text style={styles.cardTitle}>{planDisplayName(plan)}</Text>
-          <Text style={styles.secondaryText}>{planTypeLabel(plan.plan_type)}</Text>
-          <View style={styles.metricRow}>
-            <Text style={styles.metricText}>{formatMoney(plan.cost_breakdown.total_cost)}</Text>
-            <Text style={styles.metricText}>{minutesToText(plan.total_duration_minutes)}</Text>
-          </View>
-        </>
-      ) : (
-        <Text style={styles.cardTitle}>{slot.reason || "当前不可推荐"}</Text>
-      )}
-    </Pressable>
-  );
-}
-
-function SegmentTimeline({ segments }: { segments: Segment[] }) {
-  return (
-    <View style={styles.timeline}>
-      {segments.map((segment, index) => (
-        <View style={styles.timelineRow} key={segment.segment_id}>
-          <View style={styles.timelineIndex}>
-            <Text style={styles.timelineIndexText}>{index + 1}</Text>
-          </View>
-          <View style={styles.timelineCopy}>
-            <Text style={styles.timelineTitle}>{segmentTitle(segment)}</Text>
-            <Text style={styles.secondaryText}>{segmentMetaLabel(segment)}</Text>
-          </View>
-        </View>
-      ))}
-    </View>
-  );
-}
-
-function TransferRouteSummary({ option }: { option: LocalTransferOption }) {
-  return (
-    <View style={styles.transferSummary}>
-      {(option.access_station || option.egress_station) && (
-        <Text style={styles.secondaryText}>
-          {option.access_station ?? "上车点"} 到 {option.egress_station ?? "下车点"}
-        </Text>
-      )}
-      <Text style={styles.bodyText}>
-        {option.access_instruction} {option.ride_instruction} {option.egress_instruction}
-      </Text>
-    </View>
-  );
-}
-
-function DataStatusPanel({ response, onRetrySources, retrying }: { response: TravelPlanResponse; onRetrySources?: () => void; retrying?: boolean }) {
-  const firstFailures = response.source_failures.slice(0, 3);
-  const hasContent = response.user_visible_warnings.length > 0 || response.missing_components.length > 0 || firstFailures.length > 0;
-  if (!hasContent) return null;
-
-  return (
-    <View style={styles.dataStatusPanel}>
-      <View style={styles.rowBetween}>
-        <Text style={styles.subheadingCompact}>数据状态</Text>
-        <Text style={styles.statusPill}>{response.planning_status}</Text>
-      </View>
-      {response.user_visible_warnings.map((warning) => (
-        <Text style={styles.bodyText} key={warning}>{warning}</Text>
-      ))}
-      {response.missing_components.length > 0 && (
-        <Text style={styles.secondaryText}>缺失：{response.missing_components.join("、")}</Text>
-      )}
-      {firstFailures.map((failure) => (
-        <View style={styles.failureRow} key={failure.failure_id}>
-          <Text style={styles.noticeTitle}>{failure.source_id}</Text>
-          <Text style={styles.secondaryText}>{failure.user_visible_message}</Text>
-          {failure.fallback_used && <Text style={styles.secondaryText}>下一步：可继续查看候选，跳转后以第三方平台确认为准。</Text>}
-        </View>
-      ))}
-      {response.async_job && onRetrySources && firstFailures.length > 0 && (
-        <Pressable accessibilityRole="button" accessibilityLabel="重试失败的数据来源" hitSlop={ui.hitSlop} style={styles.secondarySmallButton} onPress={onRetrySources} disabled={retrying}>
-          <Text style={styles.iconButtonText}>{retrying ? "重试中" : "重试来源"}</Text>
-        </Pressable>
-      )}
-    </View>
-  );
 }
 
 function ScheduleAdjustPanel({
@@ -538,52 +290,6 @@ function TimeWheelColumn({
   );
 }
 
-function PlanningScreen({ progress = 0, onCancel }: { progress?: number; onCancel?: () => void }) {
-  const normalizedProgress = Math.max(0, Math.min(100, Math.round(progress)));
-  const allRegionsActive = normalizedProgress >= 100;
-  const [activeRegionIndex, setActiveRegionIndex] = useState(0);
-
-  useEffect(() => {
-    if (allRegionsActive) return undefined;
-    const timer = setInterval(() => {
-      setActiveRegionIndex((current) => (current + 1) % WORLD_MAP_SPOTS.length);
-    }, 650);
-    return () => clearInterval(timer);
-  }, [allRegionsActive]);
-
-  return (
-    <View style={styles.statePage}>
-      <ActivityIndicator color="#126b75" size="large" />
-      <Text style={styles.stateTitle}>正在规划</Text>
-      <Text style={styles.secondaryText}>当前进度 {normalizedProgress}%</Text>
-      <View
-        accessible
-        accessibilityLabel={allRegionsActive ? "规划中的世界地图，全部地区已亮起" : `规划中的世界地图，${WORLD_MAP_SPOTS[activeRegionIndex].name}正在亮起`}
-        style={styles.worldMapCard}
-      >
-        <View style={styles.worldMapOcean}>
-          {WORLD_MAP_LANDS.map((land) => (
-            <View key={land.key} style={[styles.worldMapLand, land.style]} />
-          ))}
-          {WORLD_MAP_SPOTS.map((spot, index) => {
-            const active = allRegionsActive || index === activeRegionIndex;
-            return (
-              <View key={spot.key} style={[styles.worldMapSignal, { left: spot.left, top: spot.top }, active ? styles.worldMapSignalActive : styles.worldMapSignalIdle]}>
-                <View style={[styles.worldMapSignalCore, active && styles.worldMapSignalCoreActive]} />
-              </View>
-            );
-          })}
-        </View>
-      </View>
-      {onCancel && (
-        <Pressable accessibilityRole="button" accessibilityLabel="取消当前规划任务" hitSlop={ui.hitSlop} style={styles.secondarySmallButton} onPress={onCancel}>
-          <Text style={styles.iconButtonText}>取消规划</Text>
-        </Pressable>
-      )}
-    </View>
-  );
-}
-
 function ErrorState({ message, onRetry, onEdit }: { message: string; onRetry: () => void; onEdit: () => void }) {
   return (
     <View style={[styles.statePage, styles.errorStatePage]}>
@@ -657,7 +363,7 @@ function DataSourcesPage({ response, plan, onBack }: { response: TravelPlanRespo
           <Text style={styles.kicker}>request_id</Text>
           <Text style={styles.requestIdText}>{response.request_id}</Text>
         </View>
-        <Pressable accessibilityRole="button" accessibilityLabel="返回方案详情" hitSlop={ui.hitSlop} style={styles.secondarySmallButton} onPress={onBack}>
+        <Pressable accessibilityRole="button" accessibilityLabel="返回方案总览" hitSlop={ui.hitSlop} style={styles.secondarySmallButton} onPress={onBack}>
           <Text style={styles.iconButtonText}>返回</Text>
         </Pressable>
       </View>
@@ -675,255 +381,6 @@ function DataSourcesPage({ response, plan, onBack }: { response: TravelPlanRespo
         <Text style={styles.secondaryText}>没有记录到数据源失败。</Text>
       )}
     </View>
-  );
-}
-
-function TicketEnhancementPanel({ plan }: { plan: TravelPlan }) {
-  if (!plan.ticket_enhancement) return null;
-  const ticket = plan.ticket_enhancement;
-  return (
-    <View style={styles.notice}>
-      <View style={styles.rowBetween}>
-        <Text style={styles.noticeTitle}>票源增强 {ticket.grade}</Text>
-        <Text style={styles.statusPill}>{riskLabel(ticket.risk_level)}</Text>
-      </View>
-      <Text style={styles.bodyText}>{ticket.recommendation_message}</Text>
-      <Text style={styles.secondaryText}>
-        实乘 {ticket.actual_origin} 到 {ticket.actual_destination}；购票区间 {ticket.ticket_origin} 到 {ticket.ticket_destination}
-      </Text>
-      <Text style={styles.secondaryText}>
-        额外成本 {formatMoney(ticket.extra_cost)} · 未乘区间 {percentLabel(ticket.unused_distance_ratio)}
-      </Text>
-      {ticket.requires_onboard_supplement && <Text style={styles.warningText}>可能需要车上补票或人工确认，跳转后以官方平台和现场规则为准。</Text>}
-      <Text style={styles.secondaryText}>{sourceFreshnessLabel(ticket.data_source)}</Text>
-    </View>
-  );
-}
-
-const FEEDBACK_OPTIONS: Array<{ category: FeedbackCategory; label: string }> = [
-  { category: "ROUTE_INACCURATE", label: "路线不准" },
-  { category: "PRICE_INACCURATE", label: "价格不准" },
-  { category: "REDIRECT_FAILED", label: "跳转失败" },
-  { category: "HARD_TO_UNDERSTAND", label: "看不懂" }
-];
-
-function FeedbackPanel({ response, plan }: { response: TravelPlanResponse; plan: TravelPlan }) {
-  const [busyCategory, setBusyCategory] = useState<FeedbackCategory | null>(null);
-
-  async function send(category: FeedbackCategory) {
-    setBusyCategory(category);
-    try {
-      const feedback = await submitFeedback({
-        requestId: response.request_id,
-        traceId: response.trace_id,
-        correlationId: response.correlation_id,
-        planId: plan.plan_id,
-        sourceId: latestSource(plan)?.source_id ?? null,
-        category
-      });
-      void trackEvent({ eventType: "FEEDBACK_SUBMITTED", requestId: response.request_id, traceId: response.trace_id, planId: plan.plan_id, metadata: { category } }).catch(() => undefined);
-      Alert.alert("已收到", `反馈编号 ${feedback.feedback_id}`);
-    } catch (error) {
-      Alert.alert("反馈失败", error instanceof Error ? error.message : "请稍后重试。");
-    } finally {
-      setBusyCategory(null);
-    }
-  }
-
-  return (
-    <View style={styles.feedbackPanel}>
-      <Text style={styles.subheadingCompact}>问题反馈</Text>
-      <View style={styles.feedbackGrid}>
-        {FEEDBACK_OPTIONS.map((option) => (
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={`反馈${option.label}`}
-            hitSlop={ui.hitSlop}
-            key={option.category}
-            style={styles.feedbackButton}
-            disabled={busyCategory !== null}
-            onPress={() => send(option.category)}
-          >
-            <Text style={styles.iconButtonText}>{busyCategory === option.category ? "提交中" : option.label}</Text>
-          </Pressable>
-        ))}
-      </View>
-      <Text style={styles.secondaryText}>反馈会关联 request_id、trace_id 和当前方案，不需要填写账号或支付信息。</Text>
-    </View>
-  );
-}
-
-function DetailPanel({
-  response,
-  plan,
-  favorite,
-  onFavoriteToggle,
-  onRecalculated
-}: {
-  response: TravelPlanResponse;
-  plan: TravelPlan;
-  favorite: boolean;
-  onFavoriteToggle: (plan: TravelPlan) => void;
-  onRecalculated: (response: RecalculateResponse) => void;
-}) {
-  const [busy, setBusy] = useState(false);
-  const [expandedSegmentId, setExpandedSegmentId] = useState<string | null>(null);
-
-  async function applyOption(segment: Segment, changeType: RecalculateChangeType, optionId: string, label: string) {
-    setBusy(true);
-    try {
-      const response = await recalculate(plan.plan_id, segment.segment_id, changeType, optionId, label);
-      onRecalculated(response);
-      Alert.alert("已重算", `${response.change_summary.message} ${response.change_summary.cost_delta.display_text}`);
-    } catch (error) {
-      Alert.alert("重算失败", error instanceof Error ? error.message : "请稍后重试。");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function openRedirect() {
-    const first = plan.segments.find((segment) => segment.segment_type === "RAIL" || segment.segment_type === "FLIGHT");
-    const redirectType = first?.segment_type === "FLIGHT" ? "AIRLINE" : "RAIL_12306";
-    setBusy(true);
-    try {
-      const redirectResponse = await bookingRedirect(plan.plan_id, first?.segment_id ?? null, redirectType);
-      void trackEvent({ eventType: "REDIRECT_CLICK", requestId: response.request_id, traceId: response.trace_id, planId: plan.plan_id, metadata: { redirectType } }).catch(() => undefined);
-      if (redirectResponse.redirect.url_available && redirectResponse.redirect.url) {
-        const opened = await openExternalUrl(redirectResponse.redirect.url);
-        if (!opened.opened) {
-          Alert.alert("请手动确认", redirectResponse.redirect.fallback_instruction ?? opened.message ?? "请打开对应平台确认。");
-        }
-      } else {
-        Alert.alert("请手动确认", redirectResponse.redirect.fallback_instruction ?? "请打开对应平台确认。");
-      }
-    } catch (error) {
-      Alert.alert("跳转失败", error instanceof Error ? error.message : "请稍后重试。");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function shareCurrentPlan() {
-    try {
-      await sharePlan(plan);
-    } catch (error) {
-      Alert.alert("分享失败", error instanceof Error ? error.message : "请稍后重试。");
-    }
-  }
-
-  async function copyCurrentPlan() {
-    try {
-      const copied = await copyPlanSummary(plan);
-      Alert.alert(copied ? "已复制" : "无法直接复制", copied ? "行程摘要已复制。" : "当前平台没有剪贴板能力，可使用分享入口。");
-    } catch (error) {
-      Alert.alert("复制失败", error instanceof Error ? error.message : "请稍后重试。");
-    }
-  }
-
-  return (
-    <View style={styles.detail}>
-      <View style={styles.rowBetween}>
-        <View style={styles.flex}>
-          <Text style={styles.kicker}>{planTypeLabel(plan.plan_type)}</Text>
-          <Text style={styles.sectionTitle}>{planDisplayName(plan)}</Text>
-        </View>
-        <View style={styles.detailActions}>
-          <Pressable accessibilityRole="button" accessibilityLabel={favorite ? "取消收藏当前方案" : "收藏当前方案"} hitSlop={ui.hitSlop} style={styles.iconButton} onPress={() => onFavoriteToggle(plan)} disabled={busy}>
-            <Text style={styles.iconButtonText}>{favorite ? "已收藏" : "收藏"}</Text>
-          </Pressable>
-          <Pressable accessibilityRole="button" accessibilityLabel="分享行程摘要" hitSlop={ui.hitSlop} style={styles.iconButton} onPress={shareCurrentPlan} disabled={busy}>
-            <Text style={styles.iconButtonText}>分享</Text>
-          </Pressable>
-          <Pressable accessibilityRole="button" accessibilityLabel="复制行程摘要" hitSlop={ui.hitSlop} style={styles.iconButton} onPress={copyCurrentPlan} disabled={busy}>
-            <Text style={styles.iconButtonText}>复制</Text>
-          </Pressable>
-          <Pressable accessibilityRole="button" accessibilityLabel="跳转到第三方平台确认" hitSlop={ui.hitSlop} style={styles.iconButton} onPress={openRedirect} disabled={busy}>
-            <Text style={styles.iconButtonText}>跳转</Text>
-          </Pressable>
-        </View>
-      </View>
-
-      <View style={styles.metricBand}>
-        <Text style={styles.metricText}>{formatMoney(plan.cost_breakdown.total_cost)}</Text>
-        <Text style={styles.metricText}>{minutesToText(plan.total_duration_minutes)}</Text>
-      </View>
-
-      <SegmentTimeline segments={plan.segments} />
-
-      <Text style={styles.subheading}>费用明细</Text>
-      {plan.cost_breakdown.items.map((item) => (
-        <View style={styles.costRow} key={`${item.label}-${item.amount.amount_minor}`}>
-          <Text style={styles.bodyText}>{item.label}</Text>
-          <View style={styles.costValue}>
-            <Text style={styles.costText}>{formatMoney(item.amount)}</Text>
-            {item.amount.is_estimated && <Text style={styles.estimateText}>估算</Text>}
-          </View>
-        </View>
-      ))}
-
-      <TicketEnhancementPanel plan={plan} />
-
-      <Text style={styles.subheading}>可调整选项</Text>
-      {plan.segments.map((segment) => {
-        const expanded = expandedSegmentId === segment.segment_id;
-        const transferOption = segment.segment_type === "LOCAL_TRANSFER" ? selectedTransferOption(segment) : null;
-        const railSeat = segment.segment_type === "RAIL" ? selectedRailSeat(segment) : null;
-        const flightCabin = segment.segment_type === "FLIGHT" ? selectedFlightCabin(segment) : null;
-        return (
-          <View style={styles.optionGroup} key={segment.segment_id}>
-            <Pressable accessibilityRole="button" accessibilityLabel={`${expanded ? "收起" : "展开"}${segmentTitle(segment)}的可调整选项`} hitSlop={ui.hitSlop} style={styles.rowBetween} onPress={() => setExpandedSegmentId(expanded ? null : segment.segment_id)}>
-              <View style={styles.flex}>
-                <Text style={styles.optionTitle}>{segmentTitle(segment)}</Text>
-                {transferOption && <Text style={styles.secondaryText}>{transferOption.label} · {formatMoney(transferOption.estimated_cost)}</Text>}
-                {railSeat && <Text style={styles.secondaryText}>{railSeat.seat_type} · {formatMoney(railSeat.price)}</Text>}
-                {flightCabin && <Text style={styles.secondaryText}>{flightCabin.cabin_type} · {formatMoney(flightCabin.price)}</Text>}
-              </View>
-              <Text style={styles.expandText}>{expanded ? "收起" : "展开"}</Text>
-            </Pressable>
-
-            {expanded && (
-              <View style={styles.optionPanel}>
-                {transferOption && <TransferRouteSummary option={transferOption} />}
-                {segment.seat_options?.map((option) => (
-                  <OptionButton
-                    key={option.option_id}
-                    disabled={busy || option.option_id === segment.selected_seat_option_id}
-                    label={`${option.seat_type} ${formatMoney(option.price)}`}
-                    onPress={() => applyOption(segment, "SEAT_TYPE", option.option_id, option.seat_type)}
-                  />
-                ))}
-                {segment.cabin_options?.map((option) => (
-                  <OptionButton
-                    key={option.option_id}
-                    disabled={busy || option.option_id === segment.selected_cabin_option_id}
-                    label={`${option.cabin_type} ${formatMoney(option.price)}`}
-                    onPress={() => applyOption(segment, "CABIN_TYPE", option.option_id, option.cabin_type)}
-                  />
-                ))}
-                {segment.segment_type === "LOCAL_TRANSFER" && transferOptionsFor(segment).map((option) => (
-                  <OptionButton
-                    key={option.option_id}
-                    disabled={busy || option.option_id === segment.option_id}
-                    label={`${option.label} ${formatMoney(option.estimated_cost)} · ${minutesToText(option.duration_minutes)}`}
-                    onPress={() => applyOption(segment, "LOCAL_TRANSFER_MODE", option.option_id, option.label)}
-                  />
-                ))}
-              </View>
-            )}
-          </View>
-        );
-      })}
-      <FeedbackPanel response={response} plan={plan} />
-    </View>
-  );
-}
-
-function OptionButton({ label, disabled, onPress }: { label: string; disabled?: boolean; onPress: () => void }) {
-  return (
-    <Pressable accessibilityRole="button" accessibilityLabel={label} hitSlop={ui.hitSlop} style={[styles.optionButton, disabled && styles.optionButtonDisabled]} disabled={disabled} onPress={onPress}>
-      <Text style={[styles.optionButtonText, disabled && styles.optionButtonTextDisabled]}>{label}</Text>
-    </Pressable>
   );
 }
 
@@ -960,13 +417,6 @@ function RetentionPlanList({
   );
 }
 
-function riskStyle(level: string) {
-  if (level === "LOW") return styles.riskLow;
-  if (level === "MEDIUM") return styles.riskMedium;
-  if (level === "HIGH") return styles.riskHigh;
-  return styles.riskBlocked;
-}
-
 export default function App() {
   const { width } = useWindowDimensions();
   const wideLayout = width >= ui.contentMaxWidth;
@@ -978,6 +428,7 @@ export default function App() {
   const [error, setError] = useState("");
   const [activeTab, setActiveTab] = useState<ActiveTab>("input");
   const [resultsPane, setResultsPane] = useState<ResultsPane>("overview");
+  const [scheduleExpanded, setScheduleExpanded] = useState(false);
   const [recentPlans, setRecentPlans] = useState<RecentPlanSnapshot[]>(() => loadRecentPlanSnapshots());
   const [favoritePlans, setFavoritePlans] = useState<RecentPlanSnapshot[]>(() => loadFavoritePlanSnapshots());
   const [retentionPreferences, setRetentionPreferences] = useState(() => loadRetentionPreferences());
@@ -1029,7 +480,7 @@ export default function App() {
     setSelectedPlanId((current) => findPlan(nextResponse, current)?.plan_id ?? preferredRecommendationPlanId(nextResponse) ?? nextResponse.plans[0]?.plan_id ?? null);
   }
 
-  async function pollUntilSettled(initialResponse: TravelPlanResponse, runId: number) {
+  async function pollUntilSettled(initialResponse: TravelPlanResponse, runId: number, preserveCurrentResults = false) {
     let current = initialResponse;
     for (let attempt = 0; attempt < MAX_POLL_ATTEMPTS; attempt += 1) {
       if (runId !== planningRunId.current) return;
@@ -1037,8 +488,10 @@ export default function App() {
       await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
       if (runId !== planningRunId.current) return;
       current = await pollPlanningJob(current.async_job.polling_url);
-      setResponse(current);
-      syncSelection(current);
+      if (!preserveCurrentResults || current.plans.length > 0) {
+        setResponse(current);
+        syncSelection(current);
+      }
       if (!isPlanningActive(current)) {
         void trackEvent({
           eventType: current.planning_status === "PARTIAL" ? "PLANNING_PARTIAL" : "PLANNING_SUCCESS",
@@ -1053,10 +506,10 @@ export default function App() {
     setError("规划仍在进行中，请稍后重试或改写需求。");
   }
 
-  async function startPlanning(input: string | TravelRequest, metadata: Record<string, unknown> = {}) {
+  async function startPlanning(input: string | TravelRequest, metadata: Record<string, unknown> = {}, preserveCurrentResults = false) {
     setLoading(true);
     setError("");
-    setResponse(null);
+    if (!preserveCurrentResults) setResponse(null);
     setResultsPane("overview");
     setActiveTab("results");
     const runId = planningRunId.current + 1;
@@ -1064,9 +517,11 @@ export default function App() {
     try {
       void trackEvent({ eventType: "INPUT_SUBMITTED", metadata }).catch(() => undefined);
       const result = await planTripAsync(input);
-      setResponse(result);
-      syncSelection(result);
-      await pollUntilSettled(result, runId);
+      if (!preserveCurrentResults || result.plans.length > 0) {
+        setResponse(result);
+        syncSelection(result);
+      }
+      await pollUntilSettled(result, runId, preserveCurrentResults);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "请求失败");
     } finally {
@@ -1106,7 +561,7 @@ export default function App() {
         latest_arrival_time: anchor === "ARRIVAL" ? point : null
       }
     };
-    await startPlanning(request, { source: "time_adjustment", time_anchor_type: anchor, time_value: value });
+    await startPlanning(request, { source: "time_adjustment", time_anchor_type: anchor, time_value: value }, true);
   }
 
   async function requestLocation() {
@@ -1182,9 +637,11 @@ export default function App() {
       const runId = planningRunId.current + 1;
       planningRunId.current = runId;
       const result = await retryPlanningJob(jobId);
-      setResponse(result);
-      syncSelection(result);
-      await pollUntilSettled(result, runId);
+      if (result.plans.length > 0) {
+        setResponse(result);
+        syncSelection(result);
+      }
+      await pollUntilSettled(result, runId, true);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "重试失败");
     } finally {
@@ -1293,14 +750,15 @@ export default function App() {
           </ScrollView>
         ) : (
           <ScrollView style={styles.screen} contentContainerStyle={[styles.content, wideLayout && styles.contentWide]}>
-            <View style={styles.topbar}>
-              <Text style={styles.appTitle}>路明</Text>
-              <Text style={styles.appSubtitle}>{loading ? "正在把需求拆成门到门方案。" : "云开见路，每条方案都保留来源和边界。"}</Text>
-            </View>
-
-            {loading ? (
-              <PlanningScreen progress={response?.progress ?? 0} onCancel={response?.async_job ? cancelCurrentJob : undefined} />
-            ) : error ? (
+            {loading && (!response || response.plans.length === 0) ? (
+              <PlanningProgressScreen
+                destinationText={response?.travel_request.destination_text}
+                onCancel={response?.async_job ? cancelCurrentJob : undefined}
+                originText={response?.travel_request.origin_text}
+                progress={response?.progress ?? 0}
+                statusText={response?.async_job?.job_status === "WAITING_SOURCE" ? "正在等待外部数据来源返回" : undefined}
+              />
+            ) : error && !response ? (
               <ErrorState message={error} onRetry={submit} onEdit={() => setActiveTab("input")} />
             ) : !response ? (
               <View style={styles.emptyState}>
@@ -1314,70 +772,50 @@ export default function App() {
               <EmptyResults response={response} onEdit={() => setActiveTab("input")} />
             ) : resultsPane === "sources" ? (
               <DataSourcesPage response={response} plan={selectedPlan} onBack={() => setResultsPane("overview")} />
-            ) : (
+            ) : resultsPane === "details" && selectedPlan ? (
+              <RouteDetailScreen
+                favorite={selectedPlanFavorite}
+                onBack={() => setResultsPane("overview")}
+                onFavoriteToggle={toggleFavorite}
+                onRecalculated={replacePlan}
+                onSources={() => setResultsPane("sources")}
+                plan={selectedPlan}
+                response={response}
+              />
+            ) : selectedPlan ? (
               <>
-                <Hero presentation={response.destination_presentation ?? null} plan={selectedPlan} />
-
-                <View style={styles.sectionHeader}>
-                  <Text style={styles.sectionTitle}>推荐方案</Text>
-                  <View style={styles.headerActions}>
-                    <Text style={styles.secondaryText}>{response.planning_status}</Text>
-                    <Pressable accessibilityRole="button" accessibilityLabel="查看数据来源" hitSlop={ui.hitSlop} style={styles.sourceButton} onPress={() => setResultsPane("sources")}>
-                      <Text style={styles.iconButtonText}>来源</Text>
-                    </Pressable>
-                  </View>
-                </View>
-                <DataStatusPanel response={response} onRetrySources={retrySources} retrying={loading} />
-                {recommendations.length === 0 && (
-                  <View style={[styles.card, styles.mutedCard]}>
-                    <Text style={styles.cardTitle}>推荐暂不可用</Text>
-                    <Text style={styles.secondaryText}>系统未使用代码生成三张推荐卡，你仍可以查看候选方案。</Text>
-                  </View>
-                )}
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.horizontalList}>
-                  {recommendations.map((slot) => (
-                    <RecommendationCard
-                      key={slot.recommendation_type}
-                      slot={slot}
-                      plan={findPlan(response, slot.plan_id)}
-                      selected={slot.plan_id === selectedPlan?.plan_id}
-                      onSelect={(plan) => {
-                        setSelectedPlanId(plan.plan_id);
-                        void trackEvent({ eventType: "RECOMMENDATION_CLICK", requestId: response.request_id, traceId: response.trace_id, planId: plan.plan_id, metadata: { recommendation_type: slot.recommendation_type } }).catch(() => undefined);
-                      }}
-                    />
-                  ))}
-                </ScrollView>
-
-                <ScheduleAdjustPanel response={response} plan={selectedPlan} loading={loading} onApply={replanWithTime} />
-
-                {selectedPlan && (
-                  <DetailPanel
-                    response={response}
-                    plan={selectedPlan}
-                    favorite={selectedPlanFavorite}
-                    onFavoriteToggle={toggleFavorite}
-                    onRecalculated={replacePlan}
-                  />
-                )}
-
-                <Text style={styles.sectionTitle}>候选方案</Text>
-                {candidatePlans.map((plan) => (
-                  <Pressable accessibilityRole="button" accessibilityLabel={`选择候选方案：${planDisplayName(plan)}`} hitSlop={ui.hitSlop} style={[styles.candidate, plan.plan_id === selectedPlan?.plan_id && styles.candidateActive]} key={plan.plan_id} onPress={() => setSelectedPlanId(plan.plan_id)}>
-                    <View style={styles.flex}>
-                      <Text style={styles.optionTitle}>{planDisplayName(plan)}</Text>
-                      <Text style={styles.secondaryText}>
-                        {planTypeLabel(plan.plan_type)} · {riskLabel(plan.risk_assessment.overall_risk_level)}
-                      </Text>
-                      {!plan.can_be_selected_by_llm && <Text style={styles.warningText}>{plan.block_reason_message ?? "不进入主推荐"}</Text>}
+                {error ? <Text style={styles.errorPanel}>{error}</Text> : null}
+                <ResultsOverview
+                  busy={loading}
+                  candidatePlans={candidatePlans}
+                  imageSource={HERO_IMAGES[response.destination_presentation?.destination_key ?? "generic"]}
+                  onRetrySources={retrySources}
+                  onSelectCandidate={(plan) => setSelectedPlanId(plan.plan_id)}
+                  onSelectRecommendation={(plan, slot) => {
+                    setSelectedPlanId(plan.plan_id);
+                    void trackEvent({ eventType: "RECOMMENDATION_CLICK", requestId: response.request_id, traceId: response.trace_id, planId: plan.plan_id, metadata: { recommendation_type: slot.recommendation_type } }).catch(() => undefined);
+                  }}
+                  onSources={() => setResultsPane("sources")}
+                  plan={selectedPlan}
+                  recommendations={recommendations}
+                  response={response}
+                  schedulePanel={
+                    <View>
+                      <Pressable accessibilityRole="button" accessibilityLabel={`${scheduleExpanded ? "收起" : "展开"}时间调整`} accessibilityState={{ expanded: scheduleExpanded }} hitSlop={ui.hitSlop} onPress={() => setScheduleExpanded((current) => !current)} style={styles.scheduleToggle}>
+                        <Text style={styles.scheduleToggleText}>{scheduleExpanded ? "收起时间调整" : "调整时间"}</Text>
+                      </Pressable>
+                      {scheduleExpanded ? <ScheduleAdjustPanel response={response} plan={selectedPlan} loading={loading} onApply={replanWithTime} /> : null}
                     </View>
-                    <Text style={styles.costText}>{formatMoney(plan.cost_breakdown.total_cost)}</Text>
-                  </Pressable>
-                ))}
+                  }
+                />
               </>
-            )}
+            ) : <EmptyResults response={response} onEdit={() => setActiveTab("input")} />}
           </ScrollView>
         )}
+
+        {activeTab === "results" && resultsPane === "overview" && selectedPlan && response?.plans.length ? (
+          <ResultsBottomAction disabled={loading} favorite={selectedPlanFavorite} onDetails={() => setResultsPane("details")} onFavorite={() => toggleFavorite(selectedPlan)} />
+        ) : null}
 
         <View style={styles.bottomTabs}>
           <Pressable
@@ -1425,6 +863,18 @@ const styles = StyleSheet.create({
     alignSelf: "center",
     maxWidth: ui.contentMaxWidth,
     width: "100%"
+  },
+  scheduleToggle: {
+    alignItems: "center",
+    alignSelf: "flex-start",
+    justifyContent: "center",
+    minHeight: ui.touchTarget,
+    paddingHorizontal: ui.spacing.sm
+  },
+  scheduleToggleText: {
+    color: ui.colors.primary,
+    fontSize: 13,
+    fontWeight: "800"
   },
   inputContent: {
     flexGrow: 1
@@ -2055,47 +1505,40 @@ const styles = StyleSheet.create({
     width: "100%"
   },
   worldMapOcean: {
-    aspectRatio: 1.85,
-    backgroundColor: "#d7eef0",
+    aspectRatio: 1.3,
+    backgroundColor: "#183b42",
     borderRadius: 8,
-    minHeight: 176,
+    minHeight: 238,
     overflow: "hidden",
     position: "relative",
     width: "100%"
   },
-  worldMapLand: {
-    backgroundColor: "#75aea4",
-    borderRadius: 28,
-    opacity: 0.72,
-    position: "absolute"
-  },
-  worldMapSignal: {
-    alignItems: "center",
-    borderColor: "rgba(18, 107, 117, 0.18)",
-    borderRadius: 16,
-    borderWidth: 1,
-    height: 28,
-    justifyContent: "center",
-    marginLeft: -14,
-    marginTop: -14,
+  worldMapLayer: {
+    height: "100%",
+    left: 0,
     position: "absolute",
-    width: 28
+    top: 0,
+    width: "100%",
+    transform: [{ scale: 1.02 }]
   },
-  worldMapSignalIdle: {
-    backgroundColor: "rgba(255, 255, 255, 0.42)"
+  worldMapBaseLayer: {
+    opacity: 0.96,
+    zIndex: 0
   },
-  worldMapSignalActive: {
-    backgroundColor: "rgba(245, 177, 66, 0.24)",
-    borderColor: "rgba(245, 177, 66, 0.72)"
+  worldMapFlowClip: {
+    bottom: 0,
+    left: 0,
+    overflow: "hidden",
+    position: "absolute",
+    top: 0,
+    zIndex: 1
   },
-  worldMapSignalCore: {
-    backgroundColor: "#9fb5ba",
-    borderRadius: 5,
-    height: 10,
-    width: 10
+  worldMapFlowGlowLayer: {
+    opacity: 0.14,
+    transform: [{ scale: 1.04 }]
   },
-  worldMapSignalCoreActive: {
-    backgroundColor: "#f5b142"
+  worldMapFlowLayer: {
+    opacity: 1
   },
   actionRow: {
     flexDirection: "row",

@@ -6,7 +6,8 @@ import {
   buildRouteTitle,
   calculatePlanDifference,
   countTransfers,
-  findRecommendationReason
+  findRecommendationReason,
+  moneyDelta
 } from "../src/utils/routePlanning.ts";
 
 const source = {
@@ -79,4 +80,5 @@ test("recommendation reason and comparison use response facts", () => {
   const cheaper = plan({ plan_id: "plan-b", total_duration_minutes: 240, cost_breakdown: { total_cost: money(25000), items: [] } });
   assert.equal(findRecommendationReason(selected, [{ schema_version: "1.15", recommendation_type: "BALANCED", status: "AVAILABLE", plan_id: "plan-a", reason: "价格与时间更均衡" }]), "价格与时间更均衡");
   assert.deepEqual(calculatePlanDifference(selected, cheaper), { comparedPlanId: "plan-b", costDeltaMinor: 5000, durationDeltaMinutes: -60 });
+  assert.equal(moneyDelta(selected.cost_breakdown.total_cost, 5000).display_text, "¥50.00");
 });

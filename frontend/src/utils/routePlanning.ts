@@ -100,10 +100,11 @@ export function findFastestPlan(plans: TravelPlan[]) {
 
 export function moneyDelta(base: Money, amountMinor: number): Money {
   const absoluteAmount = Math.abs(amountMinor);
+  const numericText = (absoluteAmount / 10 ** base.scale).toFixed(base.scale);
   return {
     amount_minor: absoluteAmount,
     currency: base.currency,
     scale: base.scale,
-    display_text: null
+    display_text: base.currency === "CNY" ? `¥${numericText}` : null
   };
 }
