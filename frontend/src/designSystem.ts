@@ -1,27 +1,42 @@
 export const ui = {
   colors: {
-    background: "#f5f7f8",
+    background: "#eff4f3",
     surface: "#ffffff",
-    text: "#172126",
-    muted: "#66747c",
-    line: "#edf0f1",
+    text: "#15282b",
+    textSecondary: "#5d7073",
+    line: "#d9e3e1",
+    primary: "#126b75",
+    primaryDeep: "#0b5159",
+    primarySoft: "#e4f1ef",
+    connection: "#bfe4dc",
+    warning: "#8a5a18",
+    warningSurface: "#fff4de",
+    danger: "#9b4334",
+    dangerSurface: "#fff1ee",
+    success: "#26705a",
+    disabled: "#dce5e3",
+    disabledText: "#728184",
+
+    // Compatibility aliases for screens that have not moved to semantic tokens yet.
+    muted: "#5d7073",
     teal: "#126b75",
-    tealSoft: "#e7f2f3",
-    warningSurface: "#fff8e8",
-    warningText: "#6f4a06",
-    danger: "#9d2f21",
-    dangerSurface: "#fff7f5"
+    tealSoft: "#e4f1ef",
+    warningText: "#8a5a18"
   },
   radius: {
-    control: 8,
+    small: 9,
+    control: 12,
+    card: 16,
     pill: 999
   },
   spacing: {
-    xs: 4,
+    xxs: 4,
+    xs: 6,
     sm: 8,
     md: 12,
     lg: 16,
-    xl: 24
+    xl: 24,
+    xxl: 32
   },
   touchTarget: 44,
   contentMaxWidth: 720,
