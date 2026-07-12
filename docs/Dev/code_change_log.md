@@ -109,3 +109,18 @@
   - `npm run typecheck`：通过。
   - `npm run build`：通过，Expo iOS / Android / Web 导出成功。
   - 本地浏览器 360×800、390×844、430×932：无横向溢出，核心指标完整，详情分段卡与固定操作区正常。
+
+## 2026-07-12 19:45:40 +08:00
+
+- 任务：ARC-20260712-03 修复规划任务混用无时区与带时区时间导致失败。
+- 代码提交：`23ed0e9290a22ebe0010946d4b0de677a7b9db67`。
+- 修改内容：
+  - `TimePoint` 在 Pydantic 模型边界使用 `ZoneInfo` 统一规范化时区：naive datetime 按声明时区解释，aware datetime 转换到声明时区，并保留或回填 `source_timezone`。
+  - 时间约束比较和分钟差统一转换到 UTC，避免不同 offset 或 naive/aware 混用触发异常。
+  - 语义校验覆盖时间窗、最早出发、最晚到达、偏好出发时间及硬约束中的全部 `TimePoint`。
+  - 异步后台异常使用 `logger.exception` 记录 job/request/trace/correlation ID 与堆栈，用户响应不再包含 Python 内部异常原文。
+  - Windows 环境增加 `tzdata` 依赖，为标准库 `zoneinfo` 提供 IANA 时区数据库。
+  - 新增模型、LLM 输出、跨 offset 约束计算、异步 API 与日志脱敏回归测试。
+- 验证：
+  - `.\.venv\Scripts\python.exe -m pytest backend/app/tests/test_models.py backend/app/tests/test_constraints.py backend/app/tests/test_api.py backend/app/tests/test_logging.py`：通过，62 passed。
+  - `.\.venv\Scripts\python.exe -m pytest backend/app/tests`：通过，170 passed。
