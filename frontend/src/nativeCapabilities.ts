@@ -111,7 +111,7 @@ export function buildItinerarySummary(plan: TravelPlan) {
     plan.plan_name,
     `${formatMoney(plan.cost_breakdown.total_cost)} · ${minutesToText(plan.total_duration_minutes)}`,
     ...segments,
-    "跳转后以第三方平台展示为准；本 App 不代下单、不支付。"
+    "跳转后以外部官方平台展示为准；本 App 不代下单、不支付。"
   ].join("\n");
 }
 

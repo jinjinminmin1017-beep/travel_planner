@@ -6,7 +6,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-SCHEMA_VERSION = "1.15"
+SCHEMA_VERSION = "1.16"
 
 
 class StrictModel(BaseModel):
@@ -60,6 +60,7 @@ class PlanningStatus(str, Enum):
     RUNNING = "RUNNING"
     PARTIAL = "PARTIAL"
     COMPLETE = "COMPLETE"
+    NO_MATCH = "NO_MATCH"
     FAILED = "FAILED"
 
 
@@ -77,6 +78,37 @@ class RecommendationEligibility(str, Enum):
     ELIGIBLE = "ELIGIBLE"
     NOT_RECOMMENDED = "NOT_RECOMMENDED"
     BLOCKED = "BLOCKED"
+
+
+class ConstraintResultType(str, Enum):
+    RELAXATION_AVAILABLE = "RELAXATION_AVAILABLE"
+    NO_SAFE_ALTERNATIVE = "NO_SAFE_ALTERNATIVE"
+
+
+class CoverageStatus(str, Enum):
+    VERIFIED = "VERIFIED"
+    EMPTY = "EMPTY"
+    UNAVAILABLE = "UNAVAILABLE"
+    FAILED = "FAILED"
+    TIMEOUT = "TIMEOUT"
+
+
+class RelaxationCategory(str, Enum):
+    CLOSEST_TO_TIME = "CLOSEST_TO_TIME"
+    CLOSEST_TO_BUDGET = "CLOSEST_TO_BUDGET"
+    LEAST_BEHAVIOR_CHANGE = "LEAST_BEHAVIOR_CHANGE"
+
+
+class ConstraintType(str, Enum):
+    LATEST_ARRIVAL = "LATEST_ARRIVAL"
+    EARLIEST_DEPARTURE = "EARLIEST_DEPARTURE"
+    ARRIVAL_TIME_WINDOW = "ARRIVAL_TIME_WINDOW"
+    DEPARTURE_TIME_WINDOW = "DEPARTURE_TIME_WINDOW"
+    MAX_TOTAL_COST = "MAX_TOTAL_COST"
+    ALLOWED_TRANSPORT_MODES = "ALLOWED_TRANSPORT_MODES"
+    EXCLUDED_TRANSPORT_MODES = "EXCLUDED_TRANSPORT_MODES"
+    PREFERRED_RAIL_SEAT = "PREFERRED_RAIL_SEAT"
+    PREFERRED_FLIGHT_CABIN = "PREFERRED_FLIGHT_CABIN"
 
 
 class RecommendationType(str, Enum):
@@ -125,7 +157,6 @@ class DataSourceType(str, Enum):
     FLIGHT = "FLIGHT"
     WEATHER = "WEATHER"
     TAXI = "TAXI"
-    OTA = "OTA"
     LLM = "LLM"
     INTERNAL_CALCULATION = "INTERNAL_CALCULATION"
 
@@ -248,7 +279,7 @@ class DataSourceRuntimeStatus(StrictModel):
 
 
 class ErrorResponse(StrictModel):
-    schema_version: Literal["1.15"] = SCHEMA_VERSION
+    schema_version: Literal["1.16"] = SCHEMA_VERSION
     request_id: str
     error_code: str
     message: str
@@ -277,7 +308,7 @@ class TravelSoftPreferences(StrictModel):
 
 
 class TravelRequest(StrictModel):
-    schema_version: Literal["1.15"] = SCHEMA_VERSION
+    schema_version: Literal["1.16"] = SCHEMA_VERSION
     request_id: str
     raw_user_input: str
     origin_text: str
@@ -336,7 +367,7 @@ class AirportCandidate(StrictModel):
 
 class BookingRedirect(StrictModel):
     redirect_id: str
-    redirect_type: Literal["RAIL_12306", "AIRLINE", "OTA", "MAP_NAVIGATION", "RIDE_HAILING"]
+    redirect_type: Literal["RAIL_12306", "AIRLINE", "MAP_NAVIGATION", "RIDE_HAILING"]
     transaction_boundary: Literal["REDIRECT_ONLY"] = "REDIRECT_ONLY"
     url_available: bool
     url: str | None = None
@@ -493,7 +524,7 @@ class DataQuality(StrictModel):
 
 
 class TravelPlan(StrictModel):
-    schema_version: Literal["1.15"] = SCHEMA_VERSION
+    schema_version: Literal["1.16"] = SCHEMA_VERSION
     plan_id: str
     plan_name: str
     plan_type: PlanType
@@ -516,7 +547,7 @@ class TravelPlan(StrictModel):
 
 
 class RecommendationSlot(StrictModel):
-    schema_version: Literal["1.15"] = SCHEMA_VERSION
+    schema_version: Literal["1.16"] = SCHEMA_VERSION
     recommendation_type: RecommendationType
     status: RecommendationSlotStatus
     plan_id: str | None
@@ -534,7 +565,7 @@ class RecommendationSlot(StrictModel):
 
 
 class LLMRecommendationInput(StrictModel):
-    schema_version: Literal["1.15"] = SCHEMA_VERSION
+    schema_version: Literal["1.16"] = SCHEMA_VERSION
     request_id: str
     travel_request: TravelRequest
     candidate_plan_ids: list[str] = Field(min_length=1, max_length=15)
@@ -542,14 +573,14 @@ class LLMRecommendationInput(StrictModel):
 
 
 class LLMRecommendationOutput(StrictModel):
-    schema_version: Literal["1.15"] = SCHEMA_VERSION
+    schema_version: Literal["1.16"] = SCHEMA_VERSION
     selected_recommendations: list[RecommendationSlot] = Field(min_length=3, max_length=3)
     validation_blockers: list[str] = Field(default_factory=list)
     explanation: str
 
 
 class LLMValidationResult(StrictModel):
-    schema_version: Literal["1.15"] = SCHEMA_VERSION
+    schema_version: Literal["1.16"] = SCHEMA_VERSION
     schema_valid: bool
     semantic_valid: bool
     repair_attempted: bool
@@ -563,7 +594,7 @@ class LLMValidationResult(StrictModel):
 
 
 class RecommendationResult(StrictModel):
-    schema_version: Literal["1.15"] = SCHEMA_VERSION
+    schema_version: Literal["1.16"] = SCHEMA_VERSION
     recommendation_id: str
     recommendation_source: RecommendationSource
     recommendations: list[RecommendationSlot] = Field(min_length=3, max_length=3)
@@ -571,7 +602,7 @@ class RecommendationResult(StrictModel):
 
 
 class ParseTravelRequestResponse(StrictModel):
-    schema_version: Literal["1.15"] = SCHEMA_VERSION
+    schema_version: Literal["1.16"] = SCHEMA_VERSION
     request_id: str
     trace_id: str
     correlation_id: str
@@ -587,8 +618,69 @@ class MissingPlanExplanation(StrictModel):
     user_visible_message: str
 
 
+class DurationDeviation(StrictModel):
+    kind: Literal["DURATION"] = "DURATION"
+    value: int = Field(ge=0)
+    unit: Literal["MINUTE"] = "MINUTE"
+    direction: Literal["EARLIER", "LATER"]
+
+
+class MoneyDeviation(StrictModel):
+    kind: Literal["MONEY"] = "MONEY"
+    amount_minor: int = Field(ge=0)
+    currency: str = Field(min_length=3, max_length=3)
+    scale: int = Field(ge=0, le=6)
+
+
+class ModeSetDeviation(StrictModel):
+    kind: Literal["MODE_SET"] = "MODE_SET"
+    added_modes: list[TransportMode] = Field(default_factory=list)
+    removed_modes: list[TransportMode] = Field(default_factory=list)
+
+
+class CategoricalDeviation(StrictModel):
+    kind: Literal["CATEGORICAL"] = "CATEGORICAL"
+    requested: str
+    actual: str
+
+
+ConstraintDeviation = DurationDeviation | MoneyDeviation | ModeSetDeviation | CategoricalDeviation
+
+
+class ConstraintViolation(StrictModel):
+    constraint_type: ConstraintType
+    relaxation_policy: Literal["USER_CONFIRMATION_REQUIRED"] = "USER_CONFIRMATION_REQUIRED"
+    requested_value: dict[str, Any]
+    actual_value: dict[str, Any]
+    deviation: ConstraintDeviation
+    reason_code: str
+    user_visible_message: str
+
+
+class CoverageItem(StrictModel):
+    transport_mode: TransportMode
+    status: CoverageStatus
+    message: str
+
+
+class RelaxationAlternative(StrictModel):
+    alternative_id: str
+    category: RelaxationCategory
+    plan: TravelPlan
+    violations: list[ConstraintViolation] = Field(min_length=1)
+    preserved_constraints: list[ConstraintType] = Field(default_factory=list)
+    user_confirmation_required: Literal[True] = True
+
+
+class ConstraintAnalysis(StrictModel):
+    result_type: ConstraintResultType
+    summary: str
+    coverage: list[CoverageItem]
+    alternatives: list[RelaxationAlternative] = Field(max_length=3)
+
+
 class DestinationPresentation(StrictModel):
-    schema_version: Literal["1.15"] = SCHEMA_VERSION
+    schema_version: Literal["1.16"] = SCHEMA_VERSION
     destination_key: str
     display_name: str
     hero_image_url: str
@@ -608,7 +700,7 @@ class AsyncJob(StrictModel):
 
 
 class TravelPlanResponse(StrictModel):
-    schema_version: Literal["1.15"] = SCHEMA_VERSION
+    schema_version: Literal["1.16"] = SCHEMA_VERSION
     request_id: str
     trace_id: str
     correlation_id: str
@@ -619,6 +711,7 @@ class TravelPlanResponse(StrictModel):
     destination_presentation: DestinationPresentation | None = None
     plans: list[TravelPlan]
     recommendation_result: RecommendationResult | None
+    constraint_analysis: ConstraintAnalysis | None = None
     source_failures: list[SourceFailure]
     missing_components: list[str]
     blocked_plan_types: list[PlanType]
@@ -627,9 +720,16 @@ class TravelPlanResponse(StrictModel):
     async_job: AsyncJob | None = None
     generated_at: TimePoint
 
+    @model_validator(mode="after")
+    def validate_constraint_result(self) -> "TravelPlanResponse":
+        if self.planning_status == PlanningStatus.NO_MATCH:
+            if self.plans or self.recommendation_result is not None or self.constraint_analysis is None:
+                raise ValueError("NO_MATCH requires empty plans, null recommendation_result and constraint_analysis")
+        return self
+
 
 class GetTravelPlanResponse(StrictModel):
-    schema_version: Literal["1.15"] = SCHEMA_VERSION
+    schema_version: Literal["1.16"] = SCHEMA_VERSION
     request_id: str
     trace_id: str
     correlation_id: str
@@ -646,7 +746,7 @@ class SelectedOption(StrictModel):
 
 
 class RecalculateRequest(StrictModel):
-    schema_version: Literal["1.15"] = SCHEMA_VERSION
+    schema_version: Literal["1.16"] = SCHEMA_VERSION
     request_id: str
     idempotency_key: str
     plan_id: str
@@ -676,7 +776,7 @@ class RecalculateChangeSummary(StrictModel):
 
 
 class RecalculateResponse(StrictModel):
-    schema_version: Literal["1.15"] = SCHEMA_VERSION
+    schema_version: Literal["1.16"] = SCHEMA_VERSION
     request_id: str
     trace_id: str
     correlation_id: str
@@ -688,16 +788,16 @@ class RecalculateResponse(StrictModel):
 
 
 class BookingRedirectRequest(StrictModel):
-    schema_version: Literal["1.15"] = SCHEMA_VERSION
+    schema_version: Literal["1.16"] = SCHEMA_VERSION
     request_id: str
     idempotency_key: str
     plan_id: str
     segment_id: str | None = None
-    redirect_type: Literal["RAIL_12306", "AIRLINE", "OTA", "MAP_NAVIGATION", "RIDE_HAILING"]
+    redirect_type: Literal["RAIL_12306", "AIRLINE", "MAP_NAVIGATION", "RIDE_HAILING"]
 
 
 class BookingRedirectResponse(StrictModel):
-    schema_version: Literal["1.15"] = SCHEMA_VERSION
+    schema_version: Literal["1.16"] = SCHEMA_VERSION
     request_id: str
     trace_id: str
     correlation_id: str
@@ -707,7 +807,7 @@ class BookingRedirectResponse(StrictModel):
 
 
 class FeedbackRequest(StrictModel):
-    schema_version: Literal["1.15"] = SCHEMA_VERSION
+    schema_version: Literal["1.16"] = SCHEMA_VERSION
     request_id: str
     trace_id: str
     correlation_id: str
@@ -718,7 +818,7 @@ class FeedbackRequest(StrictModel):
 
 
 class FeedbackResponse(StrictModel):
-    schema_version: Literal["1.15"] = SCHEMA_VERSION
+    schema_version: Literal["1.16"] = SCHEMA_VERSION
     feedback_id: str
     request_id: str
     trace_id: str
@@ -731,11 +831,12 @@ class FeedbackResponse(StrictModel):
 
 
 class AppEventRequest(StrictModel):
-    schema_version: Literal["1.15"] = SCHEMA_VERSION
+    schema_version: Literal["1.16"] = SCHEMA_VERSION
     event_type: Literal[
         "INPUT_SUBMITTED",
         "PLANNING_SUCCESS",
         "PLANNING_PARTIAL",
+        "PLANNING_NO_MATCH",
         "RECOMMENDATION_CLICK",
         "REDIRECT_CLICK",
         "FEEDBACK_SUBMITTED",
@@ -752,7 +853,7 @@ class AppEventRequest(StrictModel):
 
 
 class AppEventResponse(StrictModel):
-    schema_version: Literal["1.15"] = SCHEMA_VERSION
+    schema_version: Literal["1.16"] = SCHEMA_VERSION
     event_id: str
     event_type: str
     accepted: bool
@@ -760,7 +861,7 @@ class AppEventResponse(StrictModel):
 
 
 class HealthResponse(StrictModel):
-    schema_version: Literal["1.15"] = SCHEMA_VERSION
+    schema_version: Literal["1.16"] = SCHEMA_VERSION
     status: Literal["OK", "DEGRADED", "DOWN"]
     service_name: str
     version: str
@@ -768,7 +869,7 @@ class HealthResponse(StrictModel):
 
 
 class DataSourceStatusResponse(StrictModel):
-    schema_version: Literal["1.15"] = SCHEMA_VERSION
+    schema_version: Literal["1.16"] = SCHEMA_VERSION
     request_id: str
     trace_id: str
     correlation_id: str

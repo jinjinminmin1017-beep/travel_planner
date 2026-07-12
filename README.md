@@ -17,7 +17,7 @@ The current implementation is moving from the earlier demo loop to real provider
 - Redirect-only providers for 12306, airline official websites, and AMap navigation are enabled in DEV / TEST and can be live-smoked without storing user credentials or creating orders.
 - OpenSky aircraft states are enabled in DEV / TEST as a no-key read-only flight status provider. They are not fare or ticket inventory data.
 - Open-Meteo forecast is enabled in DEV / TEST as a no-key read-only weather provider for weather risk assistance. It is not a fare, availability, or traffic source.
-- iRail Connections is enabled in DEV / TEST as a no-key read-only railway schedule provider. It proves the real rail schedule Provider path, but it is not a China rail fare, ticketing, or availability source.
+- `rail_12306_public_query` is enabled in DEV / TEST as a low-frequency public anonymous 12306 query provider. It only reads public ticket search results, filters out unavailable or unpriced seats, and does not log in, bypass captcha, place orders, pay, or grab tickets.
 
 When a real provider is enabled but unavailable, unauthorized, missing credentials, or returns no usable result, the backend must surface a degraded status, source failure, business error, or blocked plan type. It must not silently replace the failed provider with simulated transport facts.
 
@@ -35,7 +35,7 @@ $env:TRAVEL_SOURCE_AMAP_ROUTE_LICENSE_STATUS="APPROVED"
 $env:AMAP_WEB_SERVICE_KEY="..."
 ```
 
-For Amadeus, use `AMADEUS_BASE_URL=https://test.api.amadeus.com` with test keys. After Amadeus approves the production application, use `AMADEUS_BASE_URL=https://api.amadeus.com` with the production key pair.
+For flight fares, configure one or more approved official airline public query sources such as `airline_mu_public_query`, `airline_cz_public_query`, or `airline_sc_public_query`. Each enabled source must have an approved license status, a source allowlisted `TRAVEL_SOURCE_*_BASE_URL`, a low QPS limit, and no fallback source. The provider only returns offers with a real price and an available or limited cabin signal.
 
 Run the CI-safe public configuration check before expecting no-key provider behavior:
 
@@ -47,10 +47,9 @@ The public tier checks fixture-safe config, `.env.example` drift, no-key read-on
 
 ```powershell
 .\.venv\Scripts\python scripts\check_real_api_config.py --tier secret --source flight
-.\.venv\Scripts\python scripts\check_real_api_config.py --tier secret --source rail
 ```
 
-Use `--tier full` only for a production-readiness check after commercial flight and rail providers are approved and configured.
+Use `--tier full` only for a production-readiness check after public airline query sources have passed source review and are explicitly configured.
 
 Transport node candidates are loaded from `backend/app/data/transport_nodes.json`. Regenerate that catalog from approved public catalog sources instead of hand-editing city-to-station mappings:
 
@@ -74,10 +73,11 @@ You can test one provider at a time:
 .\.venv\Scripts\python scripts\live_smoke_real_apis.py --provider flight
 .\.venv\Scripts\python scripts\live_smoke_real_apis.py --provider flight-status
 .\.venv\Scripts\python scripts\live_smoke_real_apis.py --provider weather
-.\.venv\Scripts\python scripts\live_smoke_real_apis.py --provider rail-schedule
 .\.venv\Scripts\python scripts\live_smoke_real_apis.py --provider rail
 .\.venv\Scripts\python scripts\live_smoke_real_apis.py --provider redirect
 ```
+
+The public smoke tier does not run real-time 12306 ticket queries by default; use `--provider rail` explicitly for a low-frequency manual check.
 
 ## Run
 

@@ -16,6 +16,8 @@
 
 执行记录：2026-06-23 已新增 `scripts/device-debug.ps1`，一键启动真机调试后端与 Expo LAN 服务，自动设置 `EXPO_PUBLIC_API_BASE_URL`，并生成 `logs/expo-go-qr.png` 扫码图片；README 已同步脚本用法。
 执行记录：2026-06-23 已修复真机调试脚本端口占用处理：当 8000/8081 已被旧后端或旧 Expo 占用时，脚本会自动选择后续空闲端口并用新端口生成 QR 与 API Base URL，避免手机继续连到旧服务。
+执行记录：2026-07-05 已优化 `scripts/device-debug.ps1` 退出清理：Ctrl+C 结束真机调试时会递归停止后端/Expo 父子进程，并按本次实际使用端口清理仍在监听的残留进程，避免 8000/8081 或自动递增端口被本次调试会话继续占用。
+执行记录：2026-07-05 已完成 APP 工程分层文档设计，新增 `docs/PROJECT_INDEX.md`、`docs/ARCHITECTURE.md`、`docs/API_CONTRACT.md`，记录当前前端、后端、配置、测试、脚本、类型合同与已发现 API，降低后续 Codex 任务上下文读取成本；本次未开发业务代码。
 
 任务：
 
@@ -34,7 +36,7 @@
 
 ### P0-02 Schema 合同差异审计与修复
 
-状态：已完成（2026-06-14；`.env.example` 已恢复为无密钥安全模板，真实 `.env` 可按用户自有高德/聚合凭证启用 Provider；配置检查脚本可区分模板安全档与本地有密钥运行档）
+状态：已完成（2026-06-14；`.env.example` 已恢复为无密钥安全模板，真实 `.env` 可按用户自有高德、官方公开航司采集源等合规配置启用 Provider；配置检查脚本可区分模板安全档与本地显式审批运行档）
 
 任务：
 
@@ -84,7 +86,7 @@
 
 - 将 `scripts/check_real_api_config.py` 和可免密 live smoke 拆成 CI 可运行的安全档位。
 - CI 默认只跑无密钥、只读、低频 smoke。
-- 有密钥环境再跑 Amadeus / 授权铁路 Partner smoke。
+- 显式审批环境再跑官方公开航司采集源 / 授权铁路 Partner smoke。
 - 生产环境启动时校验未授权数据源不能启用。
 
 验收：
@@ -123,6 +125,7 @@
 执行记录：2026-06-23 已将真实 LLM HTTP 超时从固定 15 秒调整为 `REAL_LLM_TIMEOUT_SECONDS` 可配置项，本地默认配置为 45 秒，以适配 Ark/Doubao 在较长 Intent Parser Prompt 下的响应耗时。
 执行记录：2026-06-23 已修复日期前缀自然语言输入的规则 fallback，例如 `6.26上午，从上海东方明珠塔到云南洱海`；真实 LLM 输出缺失起终点且 Repair 失败时，规则解析器现在可以正确解析出发地、目的地和日期。
 执行记录：2026-06-28 已验证本地 `.env` 中真实 LLM 配置可用：`REAL_LLM_BASE_URL=https://open.bigmodel.cn/api/paas/v4`、`REAL_LLM_MODEL=glm-5.2` 可通过 OpenAI-compatible `/chat/completions` 返回 JSON 内容；项目 `real_llm` Provider 构建与调用链路同步验证通过。
+执行记录：2026-07-07 架构侧已更新 Intent Parser Prompt 设计口径：`TravelRequest Schema V1.15` 仅作为后端校验契约和版本标识，运行时 Prompt 必须给出最小字段契约与关键枚举；Intent Parser 只做用户输入意图解析，不做路线规划、票价生成、推荐排序或数据源查询。代码侧需同步精简 `backend/app/llm/prompts/intent_parser_prompt_v1_0.txt` 与 `llm_providers.py` 中的 user prompt。
 
 任务：
 
@@ -183,14 +186,11 @@
 
 ### P1-04 Rail Planning Engine
 
-状态：已完成（2026-06-16；`rail_authorized_partner` 已调整为聚合数据 817 火车票查询协议，去除旧 `/rail/offers` + Bearer 调用方式；运行时 Planner 已由动态 Provider 方案替换旧规格方案：按地点解析出的候选站点生成站点对查询，由 Provider 返回真实车次/票价/余票后再组装门到门方案；旧铁路/航班规格引擎仅保留为独立测试与后续迁移参考，不再参与 `build_plans()` 运行时结果；中转、多段、票源增强、航班和航铁混合在动态化前明确以能力缺口阻断，不再用旧模板补造）
+状态：已完成（2026-07-04；铁路事实源已收口为 `rail_12306_public_query`，运行时 Planner 按地点解析出的候选站点生成站点对查询，由 12306 公开匿名查询返回真实车次、时刻、席别和票价后再组装门到门方案；Provider 只返回有可用席别且有票价的铁路 offer，余票字段仅后端内部筛选使用，App 不展示余票状态或数量；旧第三方铁路 API、海外铁路连接和购票平台代理代码、配置、测试与文档均已移除；中转、多段、票源增强、航班和航铁混合在事实缺失时继续以能力缺口阻断，不用旧模板补造。）
 
-执行记录：2026-06-23 已补充聚合铁路 Provider 限额/频率/授权/查询失败的错误分类与用户文案；本地响应日志只能说明后端收到的 Provider 错误或空响应，不能直接等同于聚合后台调用统计结论，排查时需先确认用户复现时间点、输入路线、当前 key、接口产品和后台统计口径。
-
-执行记录：2026-06-23 已在铁路 Provider 层增加跨站点对查询的 QPS 限速，默认按 `rail_authorized_partner` 每 1 秒最多 1 次请求串行调用，避免同一次动态规划连续查询多个站点对时触发“每1秒限制1次”的上游频率限制；`.env.example` 和本地 `.env` 已补充 `TRAVEL_SOURCE_RAIL_AUTHORIZED_PARTNER_MIN_INTERVAL_SECONDS`。
-执行记录：2026-06-24 已将 `rail_authorized_partner` 实际调用间隔增加到不少于 1.25 秒并在遇到上游频率/配额限制时停止继续尝试后续站点对；同时把全站点对 `empty response` 正确归类为“暂未返回可验证直达车次”，避免误报为查询失败。
 执行记录：2026-06-24 已接入动态铁路中转 Planner：当直达铁路 Provider 未返回可验证车次时，Planner 会从交通节点目录按城市/地理绕行成本生成中转站候选，分别查询两段铁路 Provider offer，并仅在两段真实车次满足最小换乘时间时生成 `TRANSFER_RAIL`，不再使用旧中转模板补造方案。
-执行记录：2026-06-25 已修复聚合铁路站点对查询参数：无明确车次号时不再发送非文档枚举值 `filter=all`，改为空筛选以允许 Provider 返回全类型车次；补充回归测试覆盖无车次号站点对查询，避免真实可用路线被误判为空响应。
+执行记录：2026-07-01 已收敛铁路 Provider 限流后的本轮规划控制流：当直达铁路查询返回 `RAIL_PROVIDER_RATE_LIMITED` 后，Planner 会阻断后续铁路中转与航铁混合中的铁路查询，不再在同一次规划里继续调用铁路事实源；补充回归测试断言限流场景整轮只调用一次铁路搜索，且不新增运行时 fallback 或旧模板补造。
+执行记录：2026-07-04 已将铁路 Provider 替换为 `Official12306RailProvider` / `rail_12306_public_query`：通过站点电报码查询 12306 公开匿名票务结果，解析车次、时刻、席别与票价；缺站点码、无票、缺价、限流或页面结构变化时写入 `SourceFailure` / `MissingPlanExplanation` 并阻断对应铁路方案；同步删除旧第三方铁路 API、海外铁路连接、购票平台代理 Provider、配置、live smoke、测试、schema 枚举和前端余票展示文案。
 
 任务：
 
@@ -198,30 +198,33 @@
 - 支持直达、中转、多段中转和票源增强候选。
 - 中转站动态生成，不写死城市。
 - 票源增强严格执行 S / A / NOT_RECOMMENDED / BLOCKED 规则。
-- 未取得中国铁路票价/余票授权前，铁路票价/余票能力必须保持阻断或只读说明。
+- 铁路事实源必须限定为 12306 公开匿名查询能力；缺站点码、无票、缺价、限流或页面结构变化时必须阻断对应铁路方案。
 
 验收：
 
 - 至少覆盖直达、中转、票源增强 S/A/买短补长风险测试。
 - 站序、安全关键数据缺失时阻断推荐。
-- 不调用逆向接口，不自动登录、不抢票、不下单。
+- 不调用逆向接口，不自动登录、不绕验证码、不抢票、不下单、不支付；App 不展示余票状态或数量。
 
 ### P1-05 Flight Planning Engine
 
-状态：已完成（2026-06-12；规划引擎和 Amadeus Offers/Price 链路验收通过，真实报价仍受用户自有凭证和授权阻塞）
+状态：已完成（2026-07-04；规划引擎已改为消费自采官方公开航司 Provider，真实航班报价必须来自已审批源站的真实价格、真实舱位和可售信号）
 执行记录：2026-06-24 已将运行时 Planner 从“能力缺口阻断”升级为动态航班/航铁混合接入：机场候选通过交通节点目录解析 IATA 后查询 Flight Offers，直飞和航班中转 offer 可生成 `DIRECT_FLIGHT` / `TRANSFER_FLIGHT`；当直达铁路和直达航班均不可用时，Planner 会尝试航班+铁路或铁路+航班的 Provider 事实组合，并仅在连接时间满足约束时生成 `FLIGHT_RAIL_MIXED`。
-执行记录：2026-06-25 已修正航班 Provider 未启用时的失败语义：当 Amadeus Flight Offers 未启用或缺少凭证时返回 `no enabled flight offer provider` 并归类为 `FLIGHT_PROVIDER_DISABLED`，不再误报为“无航班报价返回”。
+执行记录：2026-06-25 已修正航班 Provider 未启用时的失败语义：当航班报价 Provider 未启用或缺少配置时返回 `no enabled flight offer provider` 并归类为 `FLIGHT_PROVIDER_DISABLED`，不再误报为“无航班报价返回”。
+执行记录：2026-07-04 已将航班 Provider 从旧航班报价校验链路迁移为 `airline_mu_public_query`、`airline_cz_public_query`、`airline_sc_public_query` 官方公开前端采集源：Provider 使用 `httpx`、源站 allowlist、每源限流、TTL 缓存、SQLite 原始快照和 canonical offer 索引；Planner 取消报价二次确认和按固定价差生成额外舱位的逻辑，只消费 Provider 返回的真实价格、真实舱位、可售状态和 evidence id；无可售、缺价、解析失败、源站不可用或未启用时写入 `SourceFailure` 并阻断航班方案，不做 fallback。
+执行记录：2026-07-05 已完成国内客运航司官网技术确认台账 `docs/AIRLINE_OFFICIAL_SITE_TECH_CHECK_20260705.xlsx`：按航司逐行记录官网入口、匿名可达、robots、订票/航班查询入口、前端资源/API 线索、票价/航班时间/余票舱位字段线索、验证码/风控信号、是否可继续真实查询取样、Provider 建议和优先级；本次仅做入口层与前端资源层低频确认，不提交真实乘机人信息、不登录、不下单、不支付、不绕验证码。
+执行记录：2026-07-05 已重新生成 `docs/AIRLINE_OFFICIAL_SITE_TECH_CHECK_20260705.xlsx`，修复 Windows Excel 2024 打开时中文显示为 `??` 的编码问题；当前 xlsx 内部 XML 已验证包含中文表头和航司名，且不含 `??` 残留。
 
 任务：
 
-- 使用 Amadeus Flight Offers / Price 形成真实航班报价链路。
+- 使用官方公开航司采集 Provider 形成真实航班报价链路。
 - 支持直飞、中转、多机场组合。
 - 接入航班状态、天气、机场复杂度作为风险辅助。
 - 跨航司、跨航站楼、重新安检、托运行李等风险结构化。
 
 验收：
 
-- 有 Amadeus test 环境 smoke 和 fixture 测试。
+- 有自采 Provider 解析、缺价/无可售阻断、allowlist、Planner 阻断语义和 fixture 回归测试。
 - 报价与可售状态标注数据来源、更新时间和最终平台确认提示。
 - 航班核心事实缺失时不生成对应航班方案。
 
@@ -267,6 +270,7 @@
 执行记录：2026-06-29 已排查 Recommendation 合规性规则：当前 LLM Input 已传入 `candidate_plan_ids` 与 `candidate_plans`，Prompt/Repair Prompt 已约束只选候选池内方案；不合规仍可能来自模型输出 schema 漂移、照抄 JSON 模板占位符、选择候选池外 `plan_id`、选择不可推荐/阻断/过期方案或后端进程未重启导致读取旧 LLM 配置。后续如调整 Prompt，应避免把 `plan_id` 占位符写成可被模型原样复制的字符串，并补充失败审计展示。
 执行记录：2026-06-29 已优化 Recommendation Prompt 与 Provider 用户消息：移除可被模型照抄的 `plan_id` 占位符 JSON 模板，在每次推荐/repair 请求中单独列出合法 `plan_id` 清单并要求逐字复制；同步更新 `LLM_PROMPT_DESIGN.md`，新增回归测试覆盖 Prompt 中真实 ID 列表与占位符移除，避免模型把说明文字当作 `plan_id` 输出。
 执行记录：2026-06-29 已复盘真机异步任务 `job_e3d358d69688` 的 Recommendation 失败原因：`real_llm` 数据源配置为 OK，但完整 `candidate_plans` JSON 过大导致推荐调用 ReadTimeout。现已将发送给 LLM 的推荐输入改为 `LLMRecommendationSelectionInput` 摘要，仅包含 plan_id、成本、耗时、舒适度、风险、数据质量和主段信息；后端仍使用完整 TravelPlan 做输出校验。真实 LLM probe 验证 compact prompt 约 4.5k 字符、11.2 秒返回，schema/semantic 校验均通过。
+执行记录：2026-07-07 架构侧已更新 Recommendation Prompt 设计口径：`LLMRecommendationOutput Schema V1.15` 仅作为后端校验契约，运行时 Prompt 应只提供最小输出字段契约、合法 `plan_id` 清单、候选摘要和自检规则；不得把完整 `TravelPlan`、完整 Schema 或可被照抄的 `plan_id` 占位符放入 LLM input。代码侧需同步 `recommendation_prompt_v1_0.txt`、Recommendation user prompt 和 repair prompt。
 
 任务：
 
@@ -300,11 +304,11 @@
 
 ### P1-10 Redirect-only Booking Handoff
 
-状态：已完成（2026-06-12；OTA/打车仍受合作方或外部平台授权边界限制）
+状态：已完成（2026-07-04；12306、航司官网、地图和打车导航入口均保持 redirect-only，购票平台代理入口已移除）
 
 任务：
 
-- 完成 12306、航司官网、OTA、地图、打车跳转能力。
+- 完成 12306、航司官网、地图、打车跳转能力。
 - 跳转请求不得携带登录、下单、支付、抢票参数。
 - 每个 redirect 带 generated_at、expires_at、transaction_boundary、data_source。
 - URL 不可用时返回 fallback_instruction。
@@ -312,7 +316,7 @@
 验收：
 
 - 覆盖 BR-001 至 BR-005、BRQ-001 至 BRQ-003。
-- App 明确展示“跳转后以第三方平台为准”。
+- App 明确展示“跳转后以外部官方平台为准”。
 - 不保存第三方账号、密码、cookie、token。
 
 ---
@@ -342,6 +346,15 @@
 执行记录：2026-06-27 已调整 App 规划中阶段进度展示：解析、地点、接驳、铁路、航班、评分、推荐改为指示灯样式；由于当前后端仅返回粗粒度 `progress` 与 `AsyncJob.job_status`，未提供逐阶段实时状态，前端只标记可确定完成的解析阶段，最终完成态才全量点亮，避免把 55% 等中间进度误展示为多个真实阶段已完成。
 执行记录：2026-06-29 已替换 App 规划中页的环节指示灯：移除“解析、地点、接驳、铁路、航班、评分、推荐”文字阶段展示，改为抽象世界地图等待态；规划中固定全球国家/地区光点依次亮起，`progress >= 100` 时全部亮起，该动效不绑定用户起终点，也不伪装为后端逐阶段任务状态。
 执行记录：2026-07-01 已修正规划中世界地图等待态的显示条件：结果页只要处于 `loading` 就展示地图，不再要求当前没有已有方案，避免在已有结果上重新规划、重试来源或调整时间时继续显示旧结果而看不到地图；同时为地图区域增加最小高度并提高陆地对比度。
+执行记录：2026-07-01 已将规划中页地图底图从前端 View 拼接的抽象大陆块替换为项目内 PNG 世界地图资产 `frontend/assets/maps/world-map.png`，保留固定全球国家/地区光点依次亮起的等待动效，提升用户对“世界地图”的识别度。
+执行记录：2026-07-01 已根据体验反馈改用搜索引擎获取的真实地图素材：`world-map.png` 替换为 Ultimaps 免费世界地图 PNG，并新增 `frontend/assets/maps/ATTRIBUTION.md` 记录来源、授权说明和本地裁剪处理；前端不再使用手工生成或拼接的地图底图。
+执行记录：2026-07-01 已按地图原有边界线调整规划中高亮效果：移除圆圈点位高亮，新增 `frontend/assets/maps/highlights/*.png` 区域蒙版，规划中按北美洲、南美洲、欧洲、非洲、亚洲、大洋洲依次对地图陆地区域染色，完成态展示全部区域高亮。
+执行记录：2026-07-01 已在开发模式下为规划中世界地图加入临时高亮诊断区：单独渲染当前区域透明蒙版并监听 `onLoad/onError`，同时用显式 `zIndex` 渲染底图 + 蒙版叠层，用于区分 Expo Go 资产缓存问题与透明 PNG 叠层渲染问题。
+执行记录：2026-07-01 已根据真机诊断结果修正规划中主地图图层：左右诊断图均可显示，确认 Expo Go 已加载 `highlights/*.png` 且透明 PNG 蒙版可渲染，问题定位为主地图 `ImageBackground` 子层未在当前渲染链路显示；主地图已改为显式 `View + Image` 分层，底图 `zIndex: 0`、区域蒙版 `zIndex: 1`，不采用整图切换方案。
+执行记录：2026-07-02 已调整规划中世界地图视觉与资产：主地图海洋底色改为与诊断预览一致的深色；底图和全部区域蒙版统一裁掉底部透明留白与水印区域，保留地图来源说明到 `frontend/assets/maps/ATTRIBUTION.md`；亚洲蒙版移除东南角像素，避免与大洋洲阶段产生重复观感，并删除未使用的 `states/` 整图帧资产以保持不采用图片切换方案。
+执行记录：2026-07-02 已优化规划中世界地图等待态：移除开发诊断区和顶部文字进度；高亮从区域轮播改为左到右逐步覆盖的水流式体验进度，0%-30% 快速推进、30%-80% 慢速推进、80%-95% 更慢并封顶等待，请求完成后直接跳到 100%；高亮蒙版改为青绿色并去除黄色观感，该进度仅用于等待体验，不展示为后端真实阶段。
+执行记录：2026-07-02 已修正水流式高亮实现：移除可见的矩形扫光边和分区蒙版叠加，新增 `frontend/assets/maps/world-map-flow.png` 单张全陆地透明蒙版，非陆地像素保持透明，左到右裁剪时只会让世界地图空白陆地区域逐步变色，覆盖像素与底图陆地像素一致且不显示矩形块。
+执行记录：2026-07-02 已回收水流式高亮的过度装饰：移除 30 条水平切片、水波圈和由切片造成的扫描条纹，恢复为单张全陆地透明蒙版左到右覆盖；仅保留同一蒙版的极低透明光晕层，避免出现矩形块、横向条带和噪声装饰。
 
 任务：
 
@@ -404,7 +417,7 @@
 任务：
 
 - 支持系统定位权限请求和定位失败降级。
-- 支持打开地图、航司、12306、OTA、打车平台的外部 App 或系统外部跳转入口。
+- 支持打开地图、航司、12306、打车平台的外部 App 或系统外部跳转入口。
 - 支持分享方案、复制行程摘要、保存最近一次规划。
 - 支持 App 后台恢复后刷新过期方案状态。
 
@@ -468,6 +481,10 @@
 ### P3-03 可观测性
 
 状态：已完成（2026-06-12：已新增 `backend/app/services/observability.py`，按 TravelPlanResponse 聚合请求量、COMPLETE/PARTIAL/FAILED 状态、Provider 失败、LLM repair 指标；新增只读 `/api/observability/metrics` 端点，输出 request/trace/correlation 可串联的统计快照，且不记录第三方账号、token、支付或实名信息。）
+
+执行记录：2026-07-04 已新增统一后端文件日志配置 `backend/app/core/logging.py`：启动时按时间生成 `logs/backend-YYYYMMDD-HHMMSS.log`，默认单文件上限 100MB，写满后自动创建新的时间命名日志文件；HTTP middleware 记录 method、path、status、duration、request_id、trace_id、correlation_id、device_id，不写入请求体、第三方账号、token、支付或实名信息；`.env.example` 已补充日志开关、目录、前缀、级别和大小配置。
+
+执行记录：2026-07-04 已补齐高铁数据流转关键节点日志：Planner 记录铁路规划开始、站点候选、站点对、直达/中转/航铁混合查询、空结果/限流、方案创建和阻断原因；`rail_12306_public_query` Provider 记录配置启用、站名电报码解析、TTL cache 命中/未命中、12306 init/queryG 请求响应、结果行数、席别票价过滤、offer 生成和 Provider 失败，便于按 request_id/source_id 串联调试。
 
 任务：
 

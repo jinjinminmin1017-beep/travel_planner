@@ -1,7 +1,7 @@
-# AI 出行规划应用 LLM Prompt 设计 V1
+# AI 出行规划应用 LLM Prompt 设计 V1.2
 
-版本：V1  
-日期：2026-05-26  
+版本：V1.2  
+日期：2026-07-07  
 对齐文档：
 
 - PRD：AI Travel Planner PRD V2.1
@@ -16,6 +16,8 @@
 | 日期 | 版本 | 更改点 |
 |---|---|---|
 | 2026-05-26 | V1 | 创建 LLM Prompt 设计初版，定义 LLM 使用边界、调用链路、Prompt 版本管理、Intent Parser Prompt、Recommendation Prompt、Repair Prompt、Semantic Validator、日志与 Codex 实现要求。 |
+| 2026-07-07 | V1.1 | 简化 Intent Parser Prompt：明确 `TravelRequest Schema V1.15` 只是校验契约标识，不假设 LLM 理解完整 Schema；Prompt 只保留意图解析所需字段、映射规则和禁止项。 |
+| 2026-07-07 | V1.2 | 统一 Intent Parser 与 Recommendation Prompt 的运行时边界：设计文档不直接进入 LLM input；运行时只发送 prompt 模板文件和 Provider 拼接的动态 user message；Recommendation Prompt 改为最小选择契约和候选摘要输入。 |
 
 ---
 
@@ -94,6 +96,24 @@ LLM 禁止：
 | Repair Prompt | 修复非法 LLM 输出 | 与原调用输出 Schema 相同 |
 
 暂不单独拆出 Explanation Generator。推荐解释、风险摘要和取舍说明由 Recommendation Prompt 生成，后续如复杂度上升再拆为独立调用。
+
+### 3.1 运行时 Prompt 输入边界
+
+`LLM_PROMPT_DESIGN.md` 是设计文档，不应作为整体 prompt 发送给 LLM。
+
+运行时只允许发送以下内容：
+
+1. `backend/app/llm/prompts/{prompt_name}.txt` 中对应调用的 system prompt。
+2. `backend/app/data_sources/llm_providers.py` 按当前请求动态拼接的 user prompt。
+3. 当前调用必须的数据摘要，例如用户原始输入、当前日期、合法 `plan_id` 列表和候选方案摘要。
+
+运行时不得把以下内容整体发送给 LLM：
+
+1. 本设计文档全文。
+2. 完整 JSON Schema 文档。
+3. 完整 `TravelPlan` 对象。
+4. API key、第三方 token、内部成本、实名乘客信息或支付信息。
+5. 与当前调用无关的历史章节、测试计划、验收标准和开发任务。
 
 ---
 
@@ -203,25 +223,58 @@ Semantic Validator
 
 ### 6.1 调用目标
 
-将用户自然语言解析为 `TravelRequest Schema V1.15`。
+将用户自然语言解析为结构化 `TravelRequest JSON`。
+
+`TravelRequest Schema V1.15` 是后端校验器使用的契约名称，不应当被当成给 LLM 的唯一说明。LLM 不会天然知道项目内 `TravelRequest Schema V1.15` 的字段、枚举和嵌套结构；如果 Prompt 只写“必须符合 TravelRequest Schema V1.15”，模型只能把它理解为一个抽象要求，无法稳定生成合法 JSON。
+
+因此 Intent Parser Prompt 的设计原则是：
+
+1. Prompt 中保留 `schema_version = "1.15"`，用于版本追踪和后端校验。
+2. Prompt 中提供最小字段契约和少量关键枚举，避免复制完整 JSON Schema。
+3. 完整合法性由 JSON Schema Validator 和 Intent Parser Semantic Validator 保证。
+4. Intent Parser 只做用户输入意图解析，不做路线规划、票价生成、推荐排序或数据源查询。
 
 ### 6.2 输入
 
 Intent Parser 输入包括：
 
 1. `schema_version = 1.15`
-2. 用户原始自然语言。
-3. 当前日期。
-4. 默认时区。
-5. 默认系统策略。
-6. 可选上下文，例如用户已选择“Web App first”。
+2. `request_id`
+3. 用户原始自然语言。
+4. 当前日期，用于解析“今天、明天、周五”等相对日期。
+5. 默认时区，当前默认 `Asia/Shanghai`。
 
 ### 6.3 输出
 
-输出必须符合：
+输出必须是单个 JSON 对象。信息完整时，目标输出应能通过：
 
 ```text
 TravelRequest Schema V1.15
+```
+
+如果用户缺少出发地、目的地或日期等必填信息，Intent Parser 仍只输出 JSON，不主动追问；缺失字段使用空字符串或 null，由后端 Schema Validator / Semantic Validator 拒绝后返回补充信息提示。
+
+Prompt 不需要展开完整 Schema，但必须给出 LLM 生成 JSON 所需的字段清单：
+
+```text
+schema_version
+request_id
+raw_user_input
+origin_text
+destination_text
+travel_date
+time_anchor_type
+time_window_start
+time_window_end
+earliest_departure_time
+latest_arrival_time
+preferred_departure_time
+preferences
+preference_source
+hard_constraints
+soft_preferences
+preferred_rail_seat
+preferred_flight_cabin
 ```
 
 ### 6.4 Intent Parser System Prompt
@@ -229,26 +282,55 @@ TravelRequest Schema V1.15
 ```text
 你是 AI 出行规划应用的自然语言解析器。
 
-你的任务是把用户输入的出行需求解析为 TravelRequest JSON。
+你的唯一任务：把用户原始出行需求解析为 TravelRequest JSON。
 
 必须遵守以下规则：
 
-1. 只输出 JSON，不输出解释性文字。
-2. 输出必须符合 TravelRequest Schema V1.15。
-3. schema_version 固定为 "1.15"。
-4. 不得生成任何高铁车次、航班号、票价、余票、路线方案或推荐方案。
-5. 只能解析用户输入中的出发地、目的地、日期、时间、偏好、交通方式限制和乘客偏好。
-6. 如果用户未明确指定推荐偏好，则 preferences 必须包含 CHEAPEST、MOST_COMFORTABLE、BALANCED，preference_source = SYSTEM_DEFAULT。
-7. 如果用户明确说“只要最便宜”，则 preferences 只包含 CHEAPEST，preference_source = USER_EXPLICIT。
-8. 如果用户明确说“只要最舒服”，则 preferences 只包含 MOST_COMFORTABLE，preference_source = USER_EXPLICIT。
-9. 如果用户提到“不坐飞机”，必须把 FLIGHT 加入 excluded_transport_modes。
-10. 如果用户提到“不坐高铁”，必须把 RAIL 加入 excluded_transport_modes。
-11. 如果用户提到“不要机场大巴”或“不要接送机”，必须把 AIRPORT_TRANSFER 加入 excluded_transport_modes。
-12. 如果用户提到“不要接送站”，必须把 RAIL_STATION_TRANSFER 加入 excluded_transport_modes。
-13. 硬约束写入 hard_constraints。
-14. 软偏好写入 soft_preferences。
-15. 不确定的字段使用 null 或默认值，不得猜测。
-16. 不得生成候选站、候选机场或候选方案。
+1. 只输出 JSON，不输出 Markdown，不输出解释。
+2. schema_version 固定为 "1.15"。
+3. request_id 必须逐字复制用户 Prompt 中的 request_id。
+4. raw_user_input 必须逐字复制用户原文。
+5. 只解析用户输入中明确出现或可由当前日期确定的信息：出发地、目的地、日期、时间、偏好、交通方式限制、预算和乘客备注。
+6. 不确定的信息使用 null、空数组或字段默认值，不得猜测。
+7. 不得生成车次、航班号、票价、余票、候选站、候选机场、路线方案、接驳方案或推荐方案。
+8. 不得查询或假装查询任何外部数据源。
+
+输出字段要求：
+
+- origin_text：出发地原文；缺失时用空字符串。
+- destination_text：目的地原文；缺失时用空字符串。
+- travel_date：YYYY-MM-DD；相对日期按 current_date 解析；无法确定时用 null。
+- time_anchor_type：用户强调出发/走/启程时为 DEPARTURE；强调到达/抵达/落地/几点前到时为 ARRIVAL；无法判断为 AMBIGUOUS。
+- time_window_start / time_window_end：用户说早上、上午、中午、下午、晚上等时间段时填写 TimePoint；否则为 null。
+- earliest_departure_time：用户说“X 点后出发/最早 X 点”时填写；否则为 null。
+- latest_arrival_time：用户说“X 点前到/最晚 X 点到”时填写；否则为 null。
+- preferred_departure_time：用户给出偏好的出发时间但不是硬约束时填写；否则为 null。
+- preferences：只能使用 CHEAPEST、MOST_COMFORTABLE、BALANCED。
+- preference_source：用户明确偏好时为 USER_EXPLICIT；否则为 SYSTEM_DEFAULT。
+- hard_constraints：填写硬约束，至少包含 latest_arrival_time、earliest_departure_time、max_total_cost、allowed_transport_modes、excluded_transport_modes。
+- soft_preferences：填写软偏好，至少包含 prefer_low_cost、prefer_comfort、accept_rail_transfer、accept_flight_transfer、accept_mixed_transport、accept_ticket_enhancement、passenger_notes。
+
+偏好规则：
+
+- 用户未明确偏好时，preferences = ["CHEAPEST", "MOST_COMFORTABLE", "BALANCED"]，preference_source = "SYSTEM_DEFAULT"。
+- 用户明确“只要最便宜/越便宜越好”时，preferences = ["CHEAPEST"]，preference_source = "USER_EXPLICIT"，soft_preferences.prefer_low_cost = true。
+- 用户明确“只要最舒服/舒适优先”时，preferences = ["MOST_COMFORTABLE"]，preference_source = "USER_EXPLICIT"，soft_preferences.prefer_comfort = true。
+- 用户明确“综合/平衡/折中”时，preferences = ["BALANCED"]，preference_source = "USER_EXPLICIT"。
+
+交通方式规则：
+
+- “不坐飞机/不要航班” => hard_constraints.excluded_transport_modes 包含 FLIGHT。
+- “不坐高铁/不坐火车” => hard_constraints.excluded_transport_modes 包含 RAIL。
+- “不要接送机/不要机场大巴” => hard_constraints.excluded_transport_modes 包含 AIRPORT_TRANSFER。
+- “不要接送站” => hard_constraints.excluded_transport_modes 包含 RAIL_STATION_TRANSFER。
+
+TimePoint 格式：
+
+{
+  "datetime": "YYYY-MM-DDTHH:mm:ss+08:00",
+  "timezone": "Asia/Shanghai",
+  "source_timezone": "Asia/Shanghai"
+}
 ```
 
 ### 6.5 Intent Parser User Prompt Template
@@ -257,6 +339,7 @@ TravelRequest Schema V1.15
 请将以下用户出行需求解析为 TravelRequest JSON。
 
 schema_version: 1.15
+request_id: {{request_id}}
 default_timezone: Asia/Shanghai
 current_date: {{current_date}}
 
@@ -268,7 +351,8 @@ current_date: {{current_date}}
 - 不要 Markdown
 - 不要解释
 - 不要生成车次、航班、价格、余票或路线方案
-- 必须符合 TravelRequest Schema V1.15
+- 输出字段必须使用 System Prompt 中列出的 TravelRequest JSON 字段名
+- JSON 最终会由 TravelRequest Schema V1.15 校验
 ```
 
 ### 6.6 Intent Parser 示例
@@ -286,16 +370,45 @@ current_date: {{current_date}}
 ```json
 {
   "schema_version": "1.15",
+  "request_id": "req_001",
+  "raw_user_input": "我 2026 年 5 月 21 日上午 9 点后，从上海嘉定南翔格林公馆到青岛金水假日酒店。",
   "origin_text": "上海嘉定南翔格林公馆",
   "destination_text": "青岛金水假日酒店",
   "travel_date": "2026-05-21",
+  "time_anchor_type": "DEPARTURE",
+  "time_window_start": null,
+  "time_window_end": null,
   "earliest_departure_time": {
     "datetime": "2026-05-21T09:00:00+08:00",
     "timezone": "Asia/Shanghai",
     "source_timezone": "Asia/Shanghai"
   },
+  "latest_arrival_time": null,
+  "preferred_departure_time": null,
   "preferences": ["CHEAPEST", "MOST_COMFORTABLE", "BALANCED"],
-  "preference_source": "SYSTEM_DEFAULT"
+  "preference_source": "SYSTEM_DEFAULT",
+  "hard_constraints": {
+    "latest_arrival_time": null,
+    "earliest_departure_time": {
+      "datetime": "2026-05-21T09:00:00+08:00",
+      "timezone": "Asia/Shanghai",
+      "source_timezone": "Asia/Shanghai"
+    },
+    "max_total_cost": null,
+    "allowed_transport_modes": [],
+    "excluded_transport_modes": []
+  },
+  "soft_preferences": {
+    "prefer_low_cost": false,
+    "prefer_comfort": false,
+    "accept_rail_transfer": true,
+    "accept_flight_transfer": true,
+    "accept_mixed_transport": true,
+    "accept_ticket_enhancement": true,
+    "passenger_notes": []
+  },
+  "preferred_rail_seat": null,
+  "preferred_flight_cabin": null
 }
 ```
 
@@ -313,7 +426,9 @@ current_date: {{current_date}}
 {
   "preferences": ["CHEAPEST"],
   "preference_source": "USER_EXPLICIT",
-  "excluded_transport_modes": ["FLIGHT"],
+  "hard_constraints": {
+    "excluded_transport_modes": ["FLIGHT"]
+  },
   "soft_preferences": {
     "prefer_low_cost": true
   }
@@ -345,7 +460,8 @@ current_date: {{current_date}}
       "timezone": "Asia/Shanghai",
       "source_timezone": "Asia/Shanghai"
     }
-  }
+  },
+  "time_anchor_type": "ARRIVAL"
 }
 ```
 
@@ -355,13 +471,17 @@ current_date: {{current_date}}
 
 ### 7.1 调用目标
 
-从确定性候选方案池中选择三张推荐卡：
+从后端确定性候选池的摘要中选择三张推荐卡：
 
 1. CHEAPEST
 2. MOST_COMFORTABLE
 3. BALANCED
 
-输出必须符合：
+Recommendation LLM 只负责“选择”和“解释选择理由”，不得生成、补全或修改任何事实字段。候选方案的构建、票价、时刻、风险、舒适度、数据质量和可选性均由后端和数据源决定。
+
+`LLMRecommendationOutput Schema V1.15` 是后端校验器使用的契约名称，不应当被当成给 LLM 的唯一说明。Prompt 必须提供最小输出字段契约、合法 `plan_id` 清单和选择规则；完整合法性仍由 Schema Validator 与 Semantic Validator 保证。
+
+信息完整且候选池可用时，输出目标应能通过：
 
 ```text
 LLMRecommendationOutput Schema V1.15
@@ -369,23 +489,60 @@ LLMRecommendationOutput Schema V1.15
 
 ### 7.2 输入
 
-输入必须符合：
+运行时 Recommendation user prompt 只传推荐选择需要的摘要，不传完整 `TravelPlan`。
 
-```text
-LLMRecommendationInput Schema V1.15
-```
+输入包括：
 
-关键输入字段：
+1. 合法 `plan_id` 列表，每行一个真实 ID。
+2. `LLMRecommendationSelectionInput JSON` 摘要。
+3. 输出前自检规则。
+
+`LLMRecommendationSelectionInput JSON` 只包含以下关键字段：
 
 1. `request_id`
-2. `travel_request`
-3. `candidate_plan_ids`
-4. `candidate_plans`
-5. `selection_constraints`
+2. `travel_request.origin_text`
+3. `travel_request.destination_text`
+4. `travel_request.travel_date`
+5. `travel_request.time_anchor_type`
+6. `travel_request.preferences`
+7. `travel_request.preference_source`
+8. `travel_request.soft_preferences`
+9. `candidate_plan_ids`
+10. `candidate_plans` 摘要
+
+`candidate_plans` 摘要允许包含选择所需字段，例如：
+
+1. `plan_id`
+2. `plan_name`
+3. `plan_type`
+4. `plan_lifecycle_status`
+5. `recommendation_eligibility`
+6. `can_be_selected_by_llm`
+7. `block_reason_code`
+8. 总成本、总耗时、舒适度、风险、数据质量
+9. 主段摘要和必要的中转/接驳摘要
 
 ### 7.3 输出
 
-输出必须包含三个 RecommendationSlot：
+输出必须是单个 JSON 对象，且顶层字段只能包含：
+
+```text
+schema_version
+selected_recommendations
+validation_blockers
+explanation
+```
+
+禁止输出以下顶层字段：
+
+```text
+request_id
+recommendations
+candidate_plan_ids
+candidate_plans
+```
+
+`selected_recommendations` 必须正好包含三个 RecommendationSlot：
 
 1. CHEAPEST
 2. MOST_COMFORTABLE
@@ -397,61 +554,63 @@ LLMRecommendationInput Schema V1.15
 2. 如果 status = NOT_AVAILABLE 或 BLOCKED，则 plan_id 必须为 null。
 3. reason 必须非空。
 4. 不得省略任何卡位。
+5. `plan_id` 只能逐字复制合法 `plan_id` 列表中的某一行，不得输出说明文字、字段名、模板文本或占位符。
+6. 每个 slot 只包含 `schema_version`、`recommendation_type`、`status`、`plan_id`、`reason`。
 
 ### 7.4 Recommendation System Prompt
 
 ```text
 你是 AI 出行规划应用的推荐选择器。
 
-你的任务是从系统提供的 candidate_plans 中选择三张推荐卡：
-1. CHEAPEST
-2. MOST_COMFORTABLE
-3. BALANCED
+你的唯一任务：从用户消息提供的候选方案摘要中选择三张推荐卡：CHEAPEST、MOST_COMFORTABLE、BALANCED。
 
-必须遵守以下规则：
+必须遵守：
 
 1. 只输出 JSON，不输出 Markdown，不输出解释性正文。
-2. 输出必须符合 LLMRecommendationOutput Schema V1.15。
-3. selected_recommendations 必须正好包含 3 个 slot。
-4. 三个 slot 必须分别是 CHEAPEST、MOST_COMFORTABLE、BALANCED。
-5. 只能选择用户消息中“合法 plan_id 列表”存在的 plan_id，并逐字复制完整 ID。
-6. 不得选择 can_be_selected_by_llm = false 的方案。
-7. 不得选择 recommendation_eligibility = BLOCKED 的方案。
-8. 不得选择 plan_lifecycle_status = EXPIRED / INVALIDATED 的方案。
-9. 不得修改任何 candidate_plans 中的事实字段。
-10. 不得新增车次、航班、票价、余票、时间、路线、跳转链接。
-11. 不得声称保证有票。
-12. 不得声称补票一定成功。
-13. 不得声称航班中转一定不会误机。
-14. 如果某类推荐没有可用方案，必须输出该 slot，status = NOT_AVAILABLE 或 BLOCKED，plan_id = null，并说明原因。
-15. reason 必须基于 candidate_plans 中已有字段，例如 total_cost、duration、comfort_score、risk_assessment、data_quality。
-16. 不得使用候选方案之外的信息。
-17. 不得把说明文字、字段名、模板文本或占位符写入 plan_id。
+2. schema_version 固定为 "1.15"。
+3. 顶层字段只能是 schema_version、selected_recommendations、validation_blockers、explanation。
+4. selected_recommendations 必须正好包含 3 个 slot，类型分别为 CHEAPEST、MOST_COMFORTABLE、BALANCED。
+5. 如果 status = AVAILABLE，plan_id 必须逐字复制用户消息中“合法 plan_id 列表”的某一行。
+6. 如果某类推荐没有可用候选，仍必须输出该 slot，status = NOT_AVAILABLE 或 BLOCKED，plan_id = null，reason 说明原因。
+7. 不得选择 can_be_selected_by_llm = false 的方案。
+8. 不得选择 recommendation_eligibility = BLOCKED 的方案。
+9. 不得选择 plan_lifecycle_status = EXPIRED 或 INVALIDATED 的方案。
+10. 不得修改 candidate_plans 中的任何事实字段。
+11. 不得新增车次、航班、票价、余票、时间、路线或跳转链接。
+12. 不得声称保证有票、补票一定成功或航班中转一定不会误机。
+13. reason 必须基于 candidate_plans 摘要中已有字段，例如 total_cost、duration、comfort_score、risk_assessment、data_quality。
+14. 不得使用候选方案之外的信息。
+15. 不得把说明文字、字段名、模板文本或占位符写入 plan_id。
 ```
 
 ### 7.5 Recommendation User Prompt Template
 
 ```text
-请基于以下 LLMRecommendationSelectionInput，从 candidate_plans 摘要中选择三张推荐卡。
-
-schema_version: 1.15
-
-合法 plan_id 列表：
+合法 plan_id 列表（AVAILABLE.plan_id 只能逐字复制下面某一行的 ID）：
 {{candidate_plan_ids_as_bullets}}
 
-输入：
-{{llm_recommendation_selection_input_json}}
+输出前自检：
+- 顶层字段只能是 schema_version, selected_recommendations, validation_blockers, explanation。
+- selected_recommendations 必须正好包含 CHEAPEST、MOST_COMFORTABLE、BALANCED 三个 slot。
+- 任一 AVAILABLE.plan_id 必须逐字等于合法 plan_id 列表中的一个 ID。
+- 不要输出 plan_id 说明文字、模板文字、字段名或占位符。
+- 不要修改 candidate_plans 中的任何事实字段。
 
-输出要求：
-- 只输出 JSON
-- 不要 Markdown
-- 不要解释性正文
-- 必须符合 LLMRecommendationOutput Schema V1.15
-- AVAILABLE.plan_id 只能逐字复制合法 plan_id 列表中的一个 ID
-- 不得输出 plan_id 说明文字、模板文字、字段名或占位符
-- 不得修改价格、时间、车次、航班、余票和数据源
-- 输入只包含推荐选择所需摘要；完整 TravelPlan 仍由后端保存并用于最终校验。
+LLMRecommendationSelectionInput JSON（仅含选择推荐所需摘要；完整方案由后端校验）：
+{{llm_recommendation_selection_input_json}}
 ```
+
+### 7.6 Recommendation Prompt 反例
+
+不得在 Prompt 中放入可被模型照抄的 plan_id 占位符模板，例如：
+
+```json
+{
+  "plan_id": "从合法 plan_id 中选择"
+}
+```
+
+原因：模型可能把说明文字或占位符原样输出为 `plan_id`。合法 `plan_id` 必须只在动态 user prompt 的独立清单中出现。
 
 ---
 
@@ -888,10 +1047,13 @@ backend/
 ### 18.1 Prompt 验收
 
 1. 每个 Prompt 有版本。
-2. 每个 Prompt 引用 Schema V1.15。
-3. Prompt 不重复定义 Schema。
+2. 每个 Prompt 保留 `schema_version = "1.15"`，并说明 Schema 名称只是后端校验契约。
+3. Prompt 不重复定义完整 JSON Schema，只提供当前调用所需的最小字段契约。
 4. Prompt 明确禁止编造事实。
 5. Prompt 明确只输出 JSON。
+6. 运行时不得把 `LLM_PROMPT_DESIGN.md` 全文发送给 LLM。
+7. Recommendation Prompt 不得包含可被照抄为真实 `plan_id` 的占位符。
+8. Recommendation user prompt 必须单独列出合法 `plan_id` 清单，并要求逐字复制。
 
 ### 18.2 校验验收
 

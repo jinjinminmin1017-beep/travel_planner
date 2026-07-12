@@ -1,4 +1,4 @@
-import type { Money, RecommendationSlot, Segment, TimePoint, TravelPlan, TravelRequest } from "../types";
+import type { Money, RecommendationSlot, RelaxationAlternative, Segment, TimePoint, TravelPlan, TravelRequest } from "../types";
 
 export type TimelinePoint = {
   segment: Segment;
@@ -107,4 +107,61 @@ export function moneyDelta(base: Money, amountMinor: number): Money {
     scale: base.scale,
     display_text: base.currency === "CNY" ? `¥${numericText}` : null
   };
+}
+
+function asTimePoint(value: Record<string, unknown>): TimePoint | null {
+  return typeof value.datetime === "string" && typeof value.timezone === "string"
+    ? { datetime: value.datetime, timezone: value.timezone, source_timezone: typeof value.source_timezone === "string" ? value.source_timezone : value.timezone }
+    : null;
+}
+
+function asMoney(value: Record<string, unknown>): Money | null {
+  return typeof value.amount_minor === "number" && typeof value.currency === "string" && typeof value.scale === "number"
+    ? { amount_minor: value.amount_minor, currency: value.currency, scale: value.scale, display_text: typeof value.display_text === "string" ? value.display_text : null }
+    : null;
+}
+
+export function applyRelaxationToRequest(request: TravelRequest, alternative: RelaxationAlternative): TravelRequest {
+  const next: TravelRequest = {
+    ...request,
+    schema_version: "1.16",
+    request_id: `req_relax_${Date.now()}`,
+    raw_user_input: `${request.raw_user_input}；已确认放宽：${alternative.violations.map((item) => item.user_visible_message).join("；")}`,
+    hard_constraints: { ...request.hard_constraints }
+  };
+  for (const violation of alternative.violations) {
+    const actualTime = asTimePoint(violation.actual_value);
+    if (violation.constraint_type === "LATEST_ARRIVAL" && actualTime) {
+      next.latest_arrival_time = actualTime;
+      next.time_window_end = actualTime;
+      next.hard_constraints.latest_arrival_time = actualTime;
+    } else if (violation.constraint_type === "EARLIEST_DEPARTURE" && actualTime) {
+      next.earliest_departure_time = actualTime;
+      next.time_window_start = actualTime;
+      next.hard_constraints.earliest_departure_time = actualTime;
+    } else if (violation.constraint_type === "ARRIVAL_TIME_WINDOW" && actualTime) {
+      next.time_window_start = null;
+      next.time_window_end = actualTime;
+      next.latest_arrival_time = actualTime;
+      next.hard_constraints.latest_arrival_time = actualTime;
+    } else if (violation.constraint_type === "DEPARTURE_TIME_WINDOW" && actualTime) {
+      next.time_window_start = actualTime;
+      next.time_window_end = null;
+      next.earliest_departure_time = actualTime;
+      next.hard_constraints.earliest_departure_time = actualTime;
+    } else if (violation.constraint_type === "MAX_TOTAL_COST") {
+      const actualMoney = asMoney(violation.actual_value);
+      if (actualMoney) next.hard_constraints.max_total_cost = actualMoney;
+    } else if (violation.constraint_type === "ALLOWED_TRANSPORT_MODES" && Array.isArray(violation.actual_value.modes)) {
+      next.hard_constraints.allowed_transport_modes = violation.actual_value.modes.filter((item): item is string => typeof item === "string");
+    } else if (violation.constraint_type === "EXCLUDED_TRANSPORT_MODES" && Array.isArray(violation.actual_value.modes)) {
+      const actualModes = new Set(violation.actual_value.modes.filter((item): item is string => typeof item === "string"));
+      next.hard_constraints.excluded_transport_modes = next.hard_constraints.excluded_transport_modes.filter((mode) => !actualModes.has(mode));
+    } else if (violation.constraint_type === "PREFERRED_RAIL_SEAT" && typeof violation.actual_value.value === "string") {
+      next.preferred_rail_seat = violation.actual_value.value;
+    } else if (violation.constraint_type === "PREFERRED_FLIGHT_CABIN" && typeof violation.actual_value.value === "string") {
+      next.preferred_flight_cabin = violation.actual_value.value;
+    }
+  }
+  return next;
 }

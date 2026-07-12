@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+from urllib.parse import urlparse
 
 from app.models.schemas import DataSourceConfig, DataSourceRuntimeStatus, now_timepoint
 
@@ -17,17 +18,26 @@ REQUIRED_SECRET_ENVS = {
     "nominatim_geocode": (),
     "amap_uri_redirect": (),
     "baidu_uri_redirect": (),
-    "amadeus_flight_offers": ("AMADEUS_CLIENT_ID", "AMADEUS_API_KEY"),
-    "amadeus_flight_price": ("AMADEUS_CLIENT_ID", "AMADEUS_API_KEY"),
+    "airline_mu_public_query": (),
+    "airline_cz_public_query": (),
+    "airline_sc_public_query": (),
     "opensky_states": (),
     "variflight_status": ("VARIFLIGHT_API_KEY",),
-    "irail_connections": (),
+    "rail_12306_public_query": (),
     "open_meteo_forecast": (),
     "airline_official_redirect": (),
     "rail_12306_redirect": (),
-    "rail_authorized_partner": ("RAIL_PARTNER_API_KEY",),
-    "ota_partner_redirect": ("OTA_PARTNER_ID",),
     "real_llm": ("OPENAI_API_KEY", "LLM_API_KEY"),
+}
+PUBLIC_AIRLINE_QUERY_SOURCE_IDS = {
+    "airline_mu_public_query",
+    "airline_cz_public_query",
+    "airline_sc_public_query",
+}
+PUBLIC_AIRLINE_ALLOWED_HOSTS = {
+    "airline_mu_public_query": ("ceair.com",),
+    "airline_cz_public_query": ("csair.com",),
+    "airline_sc_public_query": ("sda.cn",),
 }
 
 
@@ -91,6 +101,28 @@ def required_secret_envs(source_id: str) -> tuple[str, ...]:
     return REQUIRED_SECRET_ENVS.get(source_id, ())
 
 
+def public_airline_allowed_hosts(source_id: str) -> tuple[str, ...]:
+    return PUBLIC_AIRLINE_ALLOWED_HOSTS.get(source_id, ())
+
+
+def public_airline_base_url_allowed(source_id: str, base_url: str | None) -> bool:
+    if not base_url:
+        return False
+    parsed = urlparse(base_url)
+    if parsed.scheme.lower() != "https":
+        return False
+    hostname = (parsed.hostname or "").lower().strip(".")
+    return _host_matches_allowed_hosts(hostname, public_airline_allowed_hosts(source_id))
+
+
+def _host_matches_allowed_hosts(hostname: str, allowed_hosts: tuple[str, ...]) -> bool:
+    for allowed_host in allowed_hosts:
+        normalized = allowed_host.lower().strip(".")
+        if hostname == normalized or hostname.endswith(f".{normalized}"):
+            return True
+    return False
+
+
 def has_required_secret(source_id: str) -> bool:
     load_project_env()
     secrets = required_secret_envs(source_id)
@@ -124,13 +156,17 @@ def runtime_statuses(environment: str | None = None) -> list[DataSourceRuntimeSt
     statuses: list[DataSourceRuntimeStatus] = []
     for config in load_data_source_configs(environment):
         missing_secret = config.enabled and not has_required_secret(config.source_id)
-        if config.enabled and config.source_id in {"amadeus_flight_offers", "amadeus_flight_price"}:
-            has_client_secret = any(os.getenv(name) for name in ("AMADEUS_CLIENT_SECRET", "AMADEUS_API_SECRET"))
-            missing_secret = missing_secret or not has_client_secret
+        public_airline_base_url = os.getenv(_source_env_name(config.source_id, "BASE_URL"))
+        missing_public_airline_base_url = config.enabled and config.source_id in PUBLIC_AIRLINE_QUERY_SOURCE_IDS and not public_airline_base_url
+        invalid_public_airline_base_url = config.enabled and config.source_id in PUBLIC_AIRLINE_QUERY_SOURCE_IDS and bool(public_airline_base_url) and not public_airline_base_url_allowed(config.source_id, public_airline_base_url)
         pending_license = config.enabled and config.license_status != "APPROVED"
-        degraded = missing_secret or pending_license
+        degraded = missing_secret or missing_public_airline_base_url or invalid_public_airline_base_url or pending_license
         if missing_secret:
             degraded_reason = "required API credential environment variable is missing"
+        elif missing_public_airline_base_url:
+            degraded_reason = "official airline public query base URL is missing"
+        elif invalid_public_airline_base_url:
+            degraded_reason = "official airline public query base URL is outside the source allowlist"
         elif pending_license:
             degraded_reason = "data source license is not approved"
         else:

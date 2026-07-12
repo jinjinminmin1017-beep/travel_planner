@@ -1,13 +1,22 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from app.data_sources.flight_providers import FlightOffer, FlightOfferSegment, FlightPriceResult, FlightProviderSearchResult, flight_data_source_metadata
+from app.data_sources.flight_providers import FlightOffer, FlightOfferCabinOption, FlightOfferSegment, FlightProviderSearchResult, flight_data_source_metadata
 from app.data_sources.map_providers import MapRouteEstimate, MapRouteProviderResult, data_source_metadata
 from app.data_sources.rail_providers import RailOffer, RailProviderSearchResult, rail_data_source_metadata
 from app.models.schemas import SeatOption, money
+
+SHANGHAI_TZ = timezone(timedelta(hours=8))
+
+
+@pytest.fixture(autouse=True)
+def disable_external_llm_for_deterministic_tests(monkeypatch):
+    monkeypatch.setenv("TRAVEL_SOURCE_REAL_LLM_ENABLED", "false")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("LLM_API_KEY", raising=False)
 
 
 @pytest.fixture(autouse=True)
@@ -15,6 +24,8 @@ def fake_real_flight_provider_for_planner(monkeypatch):
     def fake_search(request, environment=None):
         carrier = "CZ" if request.origin_iata == "PEK" else "MU"
         number = "3102" if carrier == "CZ" else "5511"
+        source_id = "airline_cz_public_query" if carrier == "CZ" else "airline_mu_public_query"
+        source_name = "China Southern Official Public Flight Query" if carrier == "CZ" else "China Eastern Official Public Flight Query"
         return FlightProviderSearchResult(
             offers=[
                 FlightOffer(
@@ -28,37 +39,31 @@ def fake_real_flight_provider_for_planner(monkeypatch):
                             flight_number=number,
                             origin_iata=request.origin_iata,
                             destination_iata=request.destination_iata,
-                            departure_at=datetime.combine(request.departure_date, datetime.min.time()).replace(hour=11, minute=20),
-                            arrival_at=datetime.combine(request.departure_date, datetime.min.time()).replace(hour=13, minute=0),
+                            departure_at=datetime.combine(request.departure_date, datetime.min.time(), tzinfo=SHANGHAI_TZ).replace(hour=11, minute=20),
+                            arrival_at=datetime.combine(request.departure_date, datetime.min.time(), tzinfo=SHANGHAI_TZ).replace(hour=13, minute=0),
                             duration="PT1H40M",
                         )
                     ],
                     validating_airline_codes=[carrier],
-                    raw_offer={"id": f"test_real_{carrier.lower()}"},
-                    data_source=flight_data_source_metadata("amadeus_flight_offers", "Amadeus Flight Offers Search API"),
+                    raw_offer={"id": f"test_real_{carrier.lower()}", "available": True},
+                    data_source=flight_data_source_metadata(source_id, source_name, evidence_id=f"fixture_{carrier.lower()}"),
+                    cabin_options=[
+                        FlightOfferCabinOption(
+                            option_id="cabin_economy",
+                            cabin_type="ECONOMY",
+                            price=money(88800 if carrier == "MU" else 108800),
+                            availability="AVAILABLE",
+                            source_option_version=f"fixture_{carrier.lower()}_economy",
+                            inventory_evidence="fixture_available",
+                        )
+                    ],
+                    evidence_id=f"fixture_{carrier.lower()}",
                 )
             ],
-            attempted_source_ids=["amadeus_flight_offers"],
-        )
-
-    def fake_price(offer, environment=None):
-        priced_source = flight_data_source_metadata("amadeus_flight_price", "Amadeus Flight Offers Price API")
-        return FlightPriceResult(
-            offer=FlightOffer(
-                offer_id=f"{offer.offer_id}_priced",
-                source=offer.source,
-                total_price=offer.total_price,
-                currency=offer.currency,
-                segments=offer.segments,
-                validating_airline_codes=offer.validating_airline_codes,
-                raw_offer=offer.raw_offer,
-                data_source=priced_source,
-            ),
-            attempted_source_ids=["amadeus_flight_price"],
+            attempted_source_ids=[source_id],
         )
 
     monkeypatch.setattr("app.services.planner.search_flight_offers_with_enabled_provider_result", fake_search)
-    monkeypatch.setattr("app.services.planner.price_flight_offer_with_enabled_provider_result", fake_price)
 
 
 @pytest.fixture(autouse=True)
@@ -92,9 +97,9 @@ def fake_real_map_provider_for_planner(monkeypatch):
 @pytest.fixture(autouse=True)
 def fake_real_rail_provider_for_planner(monkeypatch):
     def fake_search(request, environment=None):
-        source = rail_data_source_metadata("rail_authorized_partner", "Juhe Train Query API")
-        departure = datetime.combine(request.departure_date, datetime.min.time()).replace(hour=9, minute=48)
-        arrival = datetime.combine(request.departure_date, datetime.min.time()).replace(hour=15, minute=38)
+        source = rail_data_source_metadata("rail_12306_public_query", "12306 Public Ticket Query")
+        departure = datetime.combine(request.departure_date, datetime.min.time(), tzinfo=SHANGHAI_TZ).replace(hour=9, minute=48)
+        arrival = datetime.combine(request.departure_date, datetime.min.time(), tzinfo=SHANGHAI_TZ).replace(hour=15, minute=38)
         train_number = request.train_number or "G900"
         base_minor = 52600 if train_number.startswith("G") else 30000
         return RailProviderSearchResult(
@@ -108,14 +113,14 @@ def fake_real_rail_provider_for_planner(monkeypatch):
                     duration_minutes=int((arrival - departure).total_seconds() // 60),
                     stop_sequence=[request.origin_station, request.destination_station],
                     seat_options=[
-                        SeatOption(option_id="seat_second", seat_type="二等座", price=money(base_minor), availability="AVAILABLE", source_option_version="rail_partner_test", data_source=source),
-                        SeatOption(option_id="seat_first", seat_type="一等座", price=money(base_minor + 22000), availability="AVAILABLE", source_option_version="rail_partner_test", data_source=source),
-                        SeatOption(option_id="seat_business", seat_type="商务座", price=money(base_minor + 62000), availability="LIMITED", source_option_version="rail_partner_test", data_source=source),
+                        SeatOption(option_id="seat_second", seat_type="二等座", price=money(base_minor), availability="AVAILABLE", source_option_version="rail_12306_test", data_source=source),
+                        SeatOption(option_id="seat_first", seat_type="一等座", price=money(base_minor + 22000), availability="AVAILABLE", source_option_version="rail_12306_test", data_source=source),
+                        SeatOption(option_id="seat_business", seat_type="商务座", price=money(base_minor + 62000), availability="LIMITED", source_option_version="rail_12306_test", data_source=source),
                     ],
                     data_source=source,
                 )
             ],
-            attempted_source_ids=["rail_authorized_partner"],
+            attempted_source_ids=["rail_12306_public_query"],
         )
 
     monkeypatch.setattr("app.services.planner.search_rail_offers_with_enabled_provider_result", fake_search)

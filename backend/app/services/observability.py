@@ -18,6 +18,15 @@ def record_travel_response(response: TravelPlanResponse) -> None:
         _COUNTERS["planning_success"] += 1
     if response.planning_status == "PARTIAL":
         _COUNTERS["planning_partial"] += 1
+    if response.planning_status == "NO_MATCH":
+        _COUNTERS["planning_no_match"] += 1
+        analysis = response.constraint_analysis
+        _COUNTERS["constraint_alternatives"] += len(analysis.alternatives) if analysis else 0
+        for alternative in analysis.alternatives if analysis else []:
+            for violation in alternative.violations:
+                _COUNTERS[f"constraint_violation.{violation.constraint_type}"] += 1
+        for coverage in analysis.coverage if analysis else []:
+            _COUNTERS[f"constraint_coverage.{coverage.transport_mode}.{coverage.status}"] += 1
     for failure in response.source_failures:
         _COUNTERS["provider_failures"] += 1
         _PROVIDER_FAILURES[failure.source_id] += 1

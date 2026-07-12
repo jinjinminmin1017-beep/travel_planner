@@ -61,7 +61,7 @@ def _direct(profile: dict) -> FlightPlanSpec:
         comfort_score=8.8,
         risk_level=RiskLevel.LOW,
         risk_title="直飞舒适",
-        risk_message="直飞减少铁路长途乘坐时间，但仍需预留值机安检时间；价格以 Amadeus Price 确认为准。",
+        risk_message="直飞减少铁路长途乘坐时间，但仍需预留值机安检时间；价格和可售状态以自采官方公开航班 Provider 与最终航司平台确认为准。",
     )
 
 

@@ -98,8 +98,8 @@
     "last_checked_at": null
   },
   {
-    "source_id": "amadeus_flight_offers",
-    "source_name": "Amadeus Flight Offers Search API",
+    "source_id": "airline_mu_public_query",
+    "source_name": "China Eastern Official Public Flight Query",
     "source_type": "FLIGHT",
     "authority_level": "A",
     "environment": "DEV",
@@ -112,8 +112,8 @@
     "last_checked_at": null
   },
   {
-    "source_id": "amadeus_flight_price",
-    "source_name": "Amadeus Flight Offers Price API",
+    "source_id": "airline_cz_public_query",
+    "source_name": "China Southern Official Public Flight Query",
     "source_type": "FLIGHT",
     "authority_level": "A",
     "environment": "DEV",
@@ -122,7 +122,21 @@
     "enabled": false,
     "qps_limit": 0,
     "sla_level": "PENDING_REVIEW",
-    "fallback_source_id": "amadeus_flight_offers",
+    "fallback_source_id": null,
+    "last_checked_at": null
+  },
+  {
+    "source_id": "airline_sc_public_query",
+    "source_name": "Shandong Airlines Official Public Flight Query",
+    "source_type": "FLIGHT",
+    "authority_level": "A",
+    "environment": "DEV",
+    "license_status": "PENDING_REVIEW",
+    "commercial_allowed": false,
+    "enabled": false,
+    "qps_limit": 0,
+    "sla_level": "PENDING_REVIEW",
+    "fallback_source_id": null,
     "last_checked_at": null
   },
   {
@@ -196,44 +210,16 @@
     "last_checked_at": null
   },
   {
-    "source_id": "irail_connections",
-    "source_name": "iRail Connections API",
+    "source_id": "rail_12306_public_query",
+    "source_name": "12306 Public Ticket Query",
     "source_type": "RAIL",
-    "authority_level": "B",
+    "authority_level": "S",
     "environment": "DEV",
     "license_status": "APPROVED",
     "commercial_allowed": false,
     "enabled": true,
     "qps_limit": 1,
-    "sla_level": "PUBLIC_READ_ONLY_RATE_LIMITED",
-    "fallback_source_id": null,
-    "last_checked_at": null
-  },
-  {
-    "source_id": "rail_authorized_partner",
-    "source_name": "Juhe Train Query API",
-    "source_type": "RAIL",
-    "authority_level": "A",
-    "environment": "DEV",
-    "license_status": "PENDING_REVIEW",
-    "commercial_allowed": false,
-    "enabled": false,
-    "qps_limit": 0,
-    "sla_level": "BLOCKED_UNTIL_AUTHORIZED",
-    "fallback_source_id": "rail_12306_redirect",
-    "last_checked_at": null
-  },
-  {
-    "source_id": "ota_partner_redirect",
-    "source_name": "OTA Partner Redirect",
-    "source_type": "OTA",
-    "authority_level": "A",
-    "environment": "DEV",
-    "license_status": "PENDING_REVIEW",
-    "commercial_allowed": false,
-    "enabled": false,
-    "qps_limit": 0,
-    "sla_level": "BLOCKED_UNTIL_PARTNER_APPROVAL",
+    "sla_level": "PUBLIC_ANONYMOUS_QUERY",
     "fallback_source_id": null,
     "last_checked_at": null
   },

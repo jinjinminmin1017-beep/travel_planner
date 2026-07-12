@@ -61,3 +61,19 @@
 - 验证：
   - `.\.venv\Scripts\python -m pytest backend\app\tests\test_recommendation_engine.py -q`：通过，11 passed。
   - `.\.venv\Scripts\python -m pytest backend\app\tests\test_api.py -q`：通过，40 passed。
+## 2026-07-12 08:41:29 +08:00
+
+- 任务：ARC-20260712-01 实现约束无匹配分析与最近备选。
+- 代码提交：未创建；工作区在任务开始前已有大量用户未提交改动，无法在不混入用户内容的情况下安全提交和推送。
+- 修改内容：
+  - API 与前后端合同升级到 V1.16，新增 `NO_MATCH`、结构化约束分析、覆盖状态、最近备选和 `PLANNING_NO_MATCH` 事件。
+  - 新增时间、预算、交通方式、席位/舱位计算器，安全门禁、Pareto 筛选和三赛道确定性选择。
+  - 规划器保留过滤前 Provider 候选；无匹配时返回 HTTP 200 + `NO_MATCH`，异步任务映射为 `COMPLETE`。
+  - 备选强制不可推荐、不可由 LLM 选择并移除购票跳转；功能开关关闭时回到旧版 `FAILED` 行为。
+  - 前端新增独立约束无匹配页面，展示 coverage 与偏差，只有用户确认放宽后才构造新请求重新规划。
+  - 增加约束、安全门禁、异步状态、回滚开关和前端请求变换回归测试，重新导出 JSON Schema。
+- 验证：
+  - `python -m pytest backend/app/tests`：通过。
+  - `npm run typecheck`：通过。
+  - `npm run test:helpers`：通过，9 passed。
+  - `npm run build`：通过，Expo iOS / Android / Web 导出成功。

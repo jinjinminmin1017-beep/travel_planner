@@ -1,0 +1,923 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>路明 · 路径规划 UI 优化设计稿</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --ink: #15282b;
+        --muted: #5d7073;
+        --soft: #eff4f3;
+        --line: #d9e3e1;
+        --surface: #ffffff;
+        --teal: #126b75;
+        --teal-deep: #0b5159;
+        --teal-soft: #e4f1ef;
+        --mint: #bfe4dc;
+        --warning: #8a5a18;
+        --warning-soft: #fff4de;
+        --danger: #9b4334;
+        --success: #26705a;
+      }
+
+      * { box-sizing: border-box; }
+
+      body {
+        margin: 0;
+        min-width: 320px;
+        background: #dfe9e7;
+        color: var(--ink);
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      }
+
+      button { font: inherit; }
+
+      .board {
+        max-width: 1380px;
+        margin: 0 auto;
+        padding: 30px 24px 44px;
+      }
+
+      .board-head {
+        max-width: 760px;
+        margin: 0 0 24px;
+      }
+
+      .board-head h1 {
+        margin: 0;
+        font-size: 30px;
+        line-height: 1.2;
+        letter-spacing: -0.02em;
+      }
+
+      .board-head p {
+        margin: 8px 0 0;
+        color: #415659;
+        font-size: 15px;
+        line-height: 1.65;
+      }
+
+      .phones {
+        display: grid;
+        grid-template-columns: repeat(3, 390px);
+        gap: 28px;
+        align-items: start;
+      }
+
+      .concept { display: grid; gap: 10px; }
+
+      .concept-caption {
+        margin: 0;
+        color: #31494c;
+        font-size: 13px;
+        line-height: 1.5;
+        text-align: center;
+      }
+
+      .concept-caption strong {
+        display: block;
+        color: var(--ink);
+        font-size: 15px;
+      }
+
+      .phone {
+        width: 390px;
+        height: 844px;
+        overflow: hidden;
+        border: 9px solid #102327;
+        border-radius: 38px;
+        background: var(--soft);
+        box-shadow: 0 26px 54px rgba(31, 61, 64, 0.24);
+      }
+
+      .screen {
+        position: relative;
+        height: 100%;
+        overflow: hidden;
+        border-radius: 28px;
+        background: var(--soft);
+      }
+
+      .statusbar {
+        height: 34px;
+        display: flex;
+        align-items: flex-end;
+        justify-content: space-between;
+        padding: 0 20px 6px;
+        color: #173033;
+        font-size: 12px;
+        font-weight: 750;
+      }
+
+      .status-icons { letter-spacing: 0.12em; }
+
+      .appbar {
+        height: 54px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0 18px;
+      }
+
+      .appbar-copy { min-width: 0; }
+
+      .appbar-title {
+        margin: 0;
+        font-size: 20px;
+        line-height: 1.2;
+        letter-spacing: -0.01em;
+      }
+
+      .appbar-subtitle {
+        margin: 3px 0 0;
+        color: var(--muted);
+        font-size: 11px;
+      }
+
+      .icon-button {
+        width: 44px;
+        height: 44px;
+        flex: 0 0 auto;
+        border: 0;
+        border-radius: 12px;
+        background: var(--surface);
+        color: var(--teal-deep);
+        font-size: 18px;
+        font-weight: 700;
+      }
+
+      .scroll {
+        height: calc(100% - 154px);
+        overflow: hidden;
+        padding: 8px 16px 18px;
+      }
+
+      .scroll.detail-scroll { height: calc(100% - 104px); }
+
+      .route-summary {
+        overflow: hidden;
+        border-radius: 16px;
+        background: var(--teal-deep);
+        color: #f3fbf9;
+      }
+
+      .route-image {
+        position: relative;
+        height: 112px;
+        background:
+          linear-gradient(90deg, rgba(5, 39, 44, 0.2), rgba(5, 39, 44, 0.55)),
+          url("../../frontend/assets/destination-scenes/qingdao-pier.jpg") center 42% / cover;
+      }
+
+      .route-image::after {
+        content: "";
+        position: absolute;
+        inset: auto 0 0;
+        height: 52px;
+        background: linear-gradient(transparent, var(--teal-deep));
+      }
+
+      .route-heading {
+        position: absolute;
+        z-index: 1;
+        left: 16px;
+        bottom: 4px;
+      }
+
+      .route-heading small {
+        display: block;
+        margin-bottom: 3px;
+        color: #cbe7e2;
+        font-size: 11px;
+        font-weight: 700;
+      }
+
+      .route-heading h2 {
+        margin: 0;
+        font-size: 25px;
+        line-height: 1.15;
+        letter-spacing: -0.02em;
+      }
+
+      .route-heading h2 span { color: #9fd9cf; }
+
+      .summary-metrics {
+        display: grid;
+        grid-template-columns: 1fr 1fr 1fr;
+        gap: 1px;
+        background: rgba(255, 255, 255, 0.13);
+      }
+
+      .summary-metric {
+        min-height: 63px;
+        padding: 12px 12px 10px;
+        background: var(--teal-deep);
+      }
+
+      .summary-metric small {
+        display: block;
+        color: #bcd8d4;
+        font-size: 10px;
+      }
+
+      .summary-metric strong {
+        display: block;
+        margin-top: 4px;
+        font-size: 17px;
+        line-height: 1;
+      }
+
+      .section-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin: 16px 2px 9px;
+      }
+
+      .section-head h3 {
+        margin: 0;
+        font-size: 16px;
+        line-height: 1.25;
+      }
+
+      .section-link {
+        border: 0;
+        background: transparent;
+        color: var(--teal);
+        font-size: 12px;
+        font-weight: 750;
+      }
+
+      .plan-selector {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 6px;
+        padding: 4px;
+        border-radius: 14px;
+        background: #dfe8e6;
+      }
+
+      .plan-button {
+        min-height: 45px;
+        padding: 6px 4px;
+        border: 0;
+        border-radius: 11px;
+        background: transparent;
+        color: #526568;
+        font-size: 11px;
+        font-weight: 750;
+        transition: background 180ms ease, color 180ms ease, transform 180ms ease;
+      }
+
+      .plan-button span {
+        display: block;
+        margin-top: 2px;
+        font-size: 10px;
+        font-weight: 600;
+      }
+
+      .plan-button.active {
+        background: var(--surface);
+        color: var(--teal-deep);
+        box-shadow: 0 2px 7px rgba(21, 61, 65, 0.12);
+      }
+
+      .plan-button:active,
+      .primary-button:active,
+      .secondary-button:active { transform: scale(0.98); }
+
+      .insight {
+        display: flex;
+        align-items: flex-start;
+        gap: 10px;
+        margin-top: 10px;
+        padding: 11px 12px;
+        border-radius: 14px;
+        background: var(--teal-soft);
+      }
+
+      .insight-mark {
+        display: grid;
+        place-items: center;
+        width: 26px;
+        height: 26px;
+        flex: 0 0 auto;
+        border-radius: 9px;
+        background: var(--teal);
+        color: white;
+        font-size: 12px;
+        font-weight: 800;
+      }
+
+      .insight p {
+        margin: 0;
+        color: #31565a;
+        font-size: 12px;
+        line-height: 1.5;
+      }
+
+      .insight strong { color: var(--teal-deep); }
+
+      .timeline {
+        padding: 14px;
+        border-radius: 16px;
+        background: var(--surface);
+      }
+
+      .timeline-row {
+        display: grid;
+        grid-template-columns: 48px 20px 1fr;
+        min-height: 58px;
+      }
+
+      .timeline-row:last-child { min-height: 32px; }
+
+      .time {
+        padding-top: 1px;
+        color: #294346;
+        font-size: 12px;
+        font-weight: 750;
+      }
+
+      .rail {
+        position: relative;
+        display: flex;
+        justify-content: center;
+      }
+
+      .rail::after {
+        content: "";
+        position: absolute;
+        top: 13px;
+        bottom: -1px;
+        width: 2px;
+        background: var(--mint);
+      }
+
+      .timeline-row:last-child .rail::after { display: none; }
+
+      .node {
+        position: relative;
+        z-index: 1;
+        width: 12px;
+        height: 12px;
+        margin-top: 3px;
+        border: 3px solid var(--teal);
+        border-radius: 50%;
+        background: white;
+      }
+
+      .timeline-copy { padding: 0 0 15px 9px; }
+
+      .timeline-title {
+        margin: 0;
+        font-size: 13px;
+        line-height: 1.35;
+      }
+
+      .timeline-meta {
+        margin: 4px 0 0;
+        color: var(--muted);
+        font-size: 11px;
+        line-height: 1.4;
+      }
+
+      .transfer {
+        display: inline-block;
+        margin-top: 6px;
+        padding: 4px 7px;
+        border-radius: 999px;
+        background: var(--warning-soft);
+        color: var(--warning);
+        font-size: 10px;
+        font-weight: 750;
+      }
+
+      .bottom-action {
+        position: absolute;
+        right: 0;
+        bottom: 0;
+        left: 0;
+        height: 66px;
+        display: grid;
+        grid-template-columns: 92px 1fr;
+        gap: 10px;
+        align-items: start;
+        padding: 8px 16px 12px;
+        background: rgba(255, 255, 255, 0.94);
+        border-top: 1px solid var(--line);
+      }
+
+      .primary-button,
+      .secondary-button {
+        height: 46px;
+        border-radius: 12px;
+        font-size: 14px;
+        font-weight: 780;
+        transition: transform 160ms ease;
+      }
+
+      .primary-button {
+        border: 0;
+        background: var(--teal);
+        color: white;
+      }
+
+      .secondary-button {
+        border: 1px solid #bfd0ce;
+        background: white;
+        color: var(--teal-deep);
+      }
+
+      .detail-hero {
+        padding: 17px;
+        border-radius: 16px;
+        background: var(--surface);
+      }
+
+      .route-code {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .route-code strong { font-size: 20px; }
+
+      .route-line {
+        position: relative;
+        flex: 1;
+        height: 2px;
+        background: var(--teal);
+      }
+
+      .route-line::before,
+      .route-line::after {
+        content: "";
+        position: absolute;
+        top: -4px;
+        width: 10px;
+        height: 10px;
+        border: 2px solid var(--teal);
+        border-radius: 50%;
+        background: white;
+      }
+
+      .route-line::before { left: 0; }
+      .route-line::after { right: 0; }
+
+      .detail-metrics {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 10px;
+        margin-top: 16px;
+      }
+
+      .detail-metric small {
+        display: block;
+        color: var(--muted);
+        font-size: 10px;
+      }
+
+      .detail-metric strong {
+        display: block;
+        margin-top: 4px;
+        font-size: 15px;
+      }
+
+      .journey-leg {
+        margin-top: 10px;
+        padding: 14px;
+        border-radius: 16px;
+        background: var(--surface);
+      }
+
+      .journey-leg-head {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 14px;
+      }
+
+      .mode {
+        display: inline-flex;
+        align-items: center;
+        min-height: 24px;
+        padding: 3px 8px;
+        border-radius: 999px;
+        background: var(--teal-soft);
+        color: var(--teal-deep);
+        font-size: 10px;
+        font-weight: 780;
+      }
+
+      .leg-title {
+        margin: 7px 0 0;
+        font-size: 14px;
+      }
+
+      .leg-time {
+        color: var(--teal-deep);
+        font-size: 13px;
+        font-weight: 800;
+        white-space: nowrap;
+      }
+
+      .leg-meta {
+        margin: 8px 0 0;
+        color: var(--muted);
+        font-size: 11px;
+        line-height: 1.55;
+      }
+
+      .leg-note {
+        margin-top: 10px;
+        padding-top: 9px;
+        border-top: 1px solid var(--line);
+        color: #3f5659;
+        font-size: 11px;
+        line-height: 1.5;
+      }
+
+      .risk-note {
+        margin-top: 10px;
+        padding: 11px 12px;
+        border-radius: 14px;
+        background: var(--warning-soft);
+        color: #644719;
+        font-size: 11px;
+        line-height: 1.55;
+      }
+
+      .planning-screen {
+        background:
+          radial-gradient(circle at 76% 18%, rgba(112, 198, 181, 0.22), transparent 28%),
+          linear-gradient(180deg, #edf5f3 0%, #f7faf9 100%);
+      }
+
+      .planning-body {
+        height: calc(100% - 34px);
+        display: flex;
+        flex-direction: column;
+        padding: 10px 18px 24px;
+      }
+
+      .planning-top {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+
+      .planning-brand {
+        color: var(--teal-deep);
+        font-size: 15px;
+        font-weight: 800;
+      }
+
+      .cancel {
+        min-height: 40px;
+        padding: 0 12px;
+        border: 0;
+        border-radius: 11px;
+        background: rgba(255, 255, 255, 0.72);
+        color: #42595c;
+        font-size: 12px;
+        font-weight: 700;
+      }
+
+      .planning-main {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+      }
+
+      .planning-main h2 {
+        margin: 0;
+        max-width: 300px;
+        font-size: 31px;
+        line-height: 1.2;
+        letter-spacing: -0.025em;
+      }
+
+      .planning-main > p {
+        margin: 10px 0 0;
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.6;
+      }
+
+      .map-card {
+        position: relative;
+        height: 214px;
+        margin-top: 24px;
+        overflow: hidden;
+        border-radius: 16px;
+        background: #183c42;
+      }
+
+      .map-card img {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
+      }
+
+      .map-base { opacity: 0.94; }
+
+      .map-flow {
+        clip-path: inset(0 31% 0 0);
+        animation: revealMap 5s cubic-bezier(0.2, 0.8, 0.2, 1) infinite alternate;
+      }
+
+      .map-card::after {
+        content: "";
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        left: 69%;
+        width: 42px;
+        transform: translateX(-50%);
+        background: linear-gradient(90deg, transparent, rgba(126, 233, 212, 0.22), transparent);
+        animation: sweep 5s cubic-bezier(0.2, 0.8, 0.2, 1) infinite alternate;
+      }
+
+      .planning-steps {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 6px;
+        margin-top: 14px;
+      }
+
+      .planning-step {
+        padding: 10px 8px;
+        border-radius: 12px;
+        background: rgba(255, 255, 255, 0.72);
+        color: #617174;
+        font-size: 10px;
+        line-height: 1.35;
+      }
+
+      .planning-step strong {
+        display: block;
+        margin-top: 4px;
+        color: #29484c;
+        font-size: 11px;
+      }
+
+      .planning-step.active { background: var(--teal-soft); }
+      .planning-step.active strong { color: var(--teal-deep); }
+
+      .planning-foot {
+        padding: 13px 14px;
+        border-radius: 14px;
+        background: white;
+      }
+
+      .planning-foot-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        font-size: 12px;
+      }
+
+      .planning-foot-row strong { color: var(--teal-deep); }
+
+      .progress {
+        height: 4px;
+        margin-top: 10px;
+        overflow: hidden;
+        border-radius: 999px;
+        background: #dce7e4;
+      }
+
+      .progress span {
+        display: block;
+        width: 69%;
+        height: 100%;
+        border-radius: inherit;
+        background: var(--teal);
+        animation: progress 5s cubic-bezier(0.2, 0.8, 0.2, 1) infinite alternate;
+      }
+
+      .home-indicator {
+        position: absolute;
+        z-index: 4;
+        bottom: 4px;
+        left: 50%;
+        width: 122px;
+        height: 4px;
+        transform: translateX(-50%);
+        border-radius: 999px;
+        background: #173033;
+        opacity: 0.82;
+      }
+
+      @keyframes revealMap {
+        from { clip-path: inset(0 68% 0 0); }
+        to { clip-path: inset(0 8% 0 0); }
+      }
+
+      @keyframes sweep {
+        from { left: 32%; }
+        to { left: 92%; }
+      }
+
+      @keyframes progress {
+        from { width: 32%; }
+        to { width: 92%; }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        *, *::before, *::after {
+          animation-duration: 0.01ms !important;
+          animation-iteration-count: 1 !important;
+          transition-duration: 0.01ms !important;
+        }
+      }
+
+      @media (max-width: 1260px) {
+        .phones { grid-template-columns: repeat(2, 390px); }
+      }
+
+      @media (max-width: 860px) {
+        .board { padding: 20px 12px 34px; }
+        .board-head { margin-left: auto; margin-right: auto; max-width: 390px; }
+        .phones { grid-template-columns: 390px; justify-content: center; }
+      }
+
+      @media (max-width: 420px) {
+        .board { padding-inline: 0; }
+        .board-head { padding-inline: 16px; }
+        .concept-caption { padding-inline: 12px; }
+        .phones, .phone { width: 100%; }
+        .phone { border-width: 0; border-radius: 0; box-shadow: none; }
+        .screen { border-radius: 0; }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="board">
+      <header class="board-head">
+        <h1>路明 · 路径规划显示优化</h1>
+        <p>把复杂方案压缩为可扫读的决策界面：先给结论，再展示时间轴与换乘证据，细节按需展开。</p>
+      </header>
+
+      <section class="phones" aria-label="路径规划三屏高保真设计稿">
+        <article class="concept">
+          <p class="concept-caption"><strong>规划中</strong>用真实进度解释当前工作，降低等待焦虑</p>
+          <div class="phone">
+            <div class="screen planning-screen">
+              <div class="statusbar"><span>9:41</span><span class="status-icons">▰ ◒</span></div>
+              <div class="planning-body">
+                <div class="planning-top">
+                  <span class="planning-brand">路明</span>
+                  <button class="cancel" type="button">取消规划</button>
+                </div>
+                <div class="planning-main">
+                  <h2>正在为你拼出<br />更稳妥的路线</h2>
+                  <p>已理解上海到青岛的行程需求，正在核对车次、接驳与到达时间。</p>
+                  <div class="map-card" role="img" aria-label="路线数据正在从上海向青岛汇聚">
+                    <img class="map-base" src="../../frontend/assets/maps/world-map.png" alt="" />
+                    <img class="map-flow" src="../../frontend/assets/maps/world-map-flow.png" alt="" />
+                  </div>
+                  <div class="planning-steps">
+                    <div class="planning-step">完成<strong>需求解析</strong></div>
+                    <div class="planning-step">完成<strong>地点确认</strong></div>
+                    <div class="planning-step active">进行中<strong>车次比对</strong></div>
+                    <div class="planning-step">待处理<strong>方案评分</strong></div>
+                  </div>
+                </div>
+                <div class="planning-foot">
+                  <div class="planning-foot-row"><span>当前进度</span><strong>正在比对 6 个候选方案</strong></div>
+                  <div class="progress" aria-hidden="true"><span></span></div>
+                </div>
+              </div>
+              <div class="home-indicator"></div>
+            </div>
+          </div>
+        </article>
+
+        <article class="concept">
+          <p class="concept-caption"><strong>方案总览</strong>结论、关键指标与完整时间轴同屏可见</p>
+          <div class="phone">
+            <div class="screen">
+              <div class="statusbar"><span>9:41</span><span class="status-icons">▰ ◒</span></div>
+              <div class="appbar">
+                <div class="appbar-copy">
+                  <h2 class="appbar-title">上海到青岛</h2>
+                  <p class="appbar-subtitle">7 月 18 日周六 · 08:10 出发</p>
+                </div>
+                <button class="icon-button" type="button" aria-label="更多操作">•••</button>
+              </div>
+              <div class="scroll">
+                <section class="route-summary">
+                  <div class="route-image">
+                    <div class="route-heading"><small>综合推荐</small><h2>上海 <span>→</span> 青岛</h2></div>
+                  </div>
+                  <div class="summary-metrics">
+                    <div class="summary-metric"><small>预计总价</small><strong>¥468</strong></div>
+                    <div class="summary-metric"><small>全程耗时</small><strong>6时12分</strong></div>
+                    <div class="summary-metric"><small>换乘</small><strong>2 次</strong></div>
+                  </div>
+                </section>
+
+                <div class="section-head"><h3>选择方案</h3><button class="section-link" type="button">数据来源</button></div>
+                <div class="plan-selector" role="tablist" aria-label="候选方案">
+                  <button class="plan-button active" type="button" role="tab" aria-selected="true">综合推荐<span>¥468 · 6时12分</span></button>
+                  <button class="plan-button" type="button" role="tab" aria-selected="false">更省时间<span>¥706 · 4时55分</span></button>
+                  <button class="plan-button" type="button" role="tab" aria-selected="false">更省预算<span>¥392 · 7时08分</span></button>
+                </div>
+
+                <div class="insight"><span class="insight-mark">荐</span><p><strong>为什么推荐：</strong>比最快方案多 1时17分，但节省 ¥238，且换乘余量更稳妥。</p></div>
+
+                <div class="section-head"><h3>行程时间轴</h3><button class="section-link" type="button">调整时间</button></div>
+                <div class="timeline">
+                  <div class="timeline-row">
+                    <span class="time">08:10</span><span class="rail"><span class="node"></span></span>
+                    <div class="timeline-copy"><h4 class="timeline-title">上海市区出发</h4><p class="timeline-meta">地铁 2 号线前往虹桥火车站 · 42 分钟</p></div>
+                  </div>
+                  <div class="timeline-row">
+                    <span class="time">09:32</span><span class="rail"><span class="node"></span></span>
+                    <div class="timeline-copy"><h4 class="timeline-title">上海虹桥站 · G230</h4><p class="timeline-meta">二等座 · 预计 14:18 到达青岛北站</p><span class="transfer">建议预留 40 分钟进站</span></div>
+                  </div>
+                  <div class="timeline-row">
+                    <span class="time">14:28</span><span class="rail"><span class="node"></span></span>
+                    <div class="timeline-copy"><h4 class="timeline-title">青岛北站接驳</h4><p class="timeline-meta">地铁 3 号线转 4 号线 · 58 分钟</p></div>
+                  </div>
+                  <div class="timeline-row">
+                    <span class="time">15:26</span><span class="rail"><span class="node"></span></span>
+                    <div class="timeline-copy"><h4 class="timeline-title">抵达五四广场</h4><p class="timeline-meta">预计步行 6 分钟到目的地</p></div>
+                  </div>
+                </div>
+              </div>
+              <div class="bottom-action">
+                <button class="secondary-button" type="button">收藏</button>
+                <button class="primary-button" type="button">查看完整路线</button>
+              </div>
+              <div class="home-indicator"></div>
+            </div>
+          </div>
+        </article>
+
+        <article class="concept">
+          <p class="concept-caption"><strong>路线详情</strong>按交通段落分组，风险提示贴近发生位置</p>
+          <div class="phone">
+            <div class="screen">
+              <div class="statusbar"><span>9:41</span><span class="status-icons">▰ ◒</span></div>
+              <div class="appbar">
+                <button class="icon-button" type="button" aria-label="返回">‹</button>
+                <div class="appbar-copy" style="text-align:center">
+                  <h2 class="appbar-title">路线详情</h2>
+                  <p class="appbar-subtitle">综合推荐 · 低风险</p>
+                </div>
+                <button class="icon-button" type="button" aria-label="分享">↗</button>
+              </div>
+              <div class="scroll detail-scroll">
+                <section class="detail-hero">
+                  <div class="route-code"><strong>上海</strong><span class="route-line"></span><strong>青岛</strong></div>
+                  <div class="detail-metrics">
+                    <div class="detail-metric"><small>出发</small><strong>08:10</strong></div>
+                    <div class="detail-metric"><small>抵达</small><strong>15:26</strong></div>
+                    <div class="detail-metric"><small>总价</small><strong>¥468</strong></div>
+                  </div>
+                </section>
+
+                <div class="section-head"><h3>分段路线</h3><button class="section-link" type="button">票价明细</button></div>
+
+                <section class="journey-leg">
+                  <div class="journey-leg-head">
+                    <div><span class="mode">市内接驳</span><h4 class="leg-title">市区 → 上海虹桥站</h4></div><span class="leg-time">42 分钟</span>
+                  </div>
+                  <p class="leg-meta">08:10 从人民广场站上车<br />地铁 2 号线 · 虹桥火车站下车</p>
+                  <div class="leg-note">预计步行 620 米，2 号口进站更近。</div>
+                </section>
+
+                <section class="journey-leg">
+                  <div class="journey-leg-head">
+                    <div><span class="mode">高铁 G230</span><h4 class="leg-title">上海虹桥 → 青岛北</h4></div><span class="leg-time">4时46分</span>
+                  </div>
+                  <p class="leg-meta">09:32 发车 · 14:18 到达<br />二等座 ¥398 · 当前可候补</p>
+                  <div class="risk-note"><strong>换乘提醒：</strong>早高峰安检可能排队，建议 08:52 前到达进站口。</div>
+                </section>
+
+                <section class="journey-leg">
+                  <div class="journey-leg-head">
+                    <div><span class="mode">到达接驳</span><h4 class="leg-title">青岛北站 → 五四广场</h4></div><span class="leg-time">58 分钟</span>
+                  </div>
+                  <p class="leg-meta">14:28 从青岛北站上车<br />地铁 3 号线转 4 号线</p>
+                  <div class="leg-note">换乘一次，步行约 320 米，预计 15:26 抵达。</div>
+                </section>
+              </div>
+              <div class="home-indicator"></div>
+            </div>
+          </div>
+        </article>
+      </section>
+    </main>
+  </body>
+</html>

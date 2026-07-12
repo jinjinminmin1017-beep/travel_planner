@@ -1,0 +1,372 @@
+# API Contract
+
+更新日期：2026-07-12
+
+本文只记录已在 `backend/app/main.py` 或 `frontend/src/api/client.ts` 中发现的接口。统一错误结构见 `backend/app/models/schemas.py` 的 `ErrorResponse`。
+
+当前 API schema version 为 `1.16`；文末记录已实现的约束无匹配响应与前端消费规则。
+
+## 通用错误响应
+
+- Response：`ErrorResponse`
+- 字段：`schema_version`、`request_id`、`error_code`、`message`、`user_visible_message`、`retryable`、`details`、`generated_at`
+- 典型状态码：400、404、422、429、500
+- 后端位置：`backend/app/main.py` 的 `error_payload`、异常处理器和安全 middleware
+- 前端处理：`frontend/src/api/client.ts` 的 `request<T>()`
+
+## GET /api/health
+
+- Method：GET
+- URL：`/api/health`
+- Request：无 body。
+- Response：`HealthResponse`
+- Error Response：通用 `ErrorResponse`
+- 前端调用位置：未发现前端调用。
+- 后端实现位置：`backend/app/main.py` `health()`
+
+## GET /api/data-sources/status
+
+- Method：GET
+- URL：`/api/data-sources/status`
+- Request：无 body。
+- Response：`DataSourceStatusResponse`
+- Error Response：通用 `ErrorResponse`
+- 前端调用位置：`frontend/src/api/client.ts` `loadDataSources()`；当前未发现 `App.tsx` 调用。
+- 后端实现位置：`backend/app/main.py` `data_sources_status()`
+
+## GET /api/admin/data-sources
+
+- Method：GET
+- URL：`/api/admin/data-sources`
+- Request：无 body。
+- Response：`DataSourceStatusResponse`
+- Error Response：通用 `ErrorResponse`
+- 前端调用位置：未发现前端调用。
+- 后端实现位置：`backend/app/main.py` `admin_data_sources_status()`
+
+## GET /api/observability/metrics
+
+- Method：GET
+- URL：`/api/observability/metrics`
+- Request：无 body。
+- Response：`metrics_snapshot()` 返回的指标快照。
+- Error Response：通用 `ErrorResponse`
+- 前端调用位置：未发现前端调用。
+- 后端实现位置：`backend/app/main.py` `observability_metrics()`
+
+## POST /api/travel/parse
+
+- Method：POST
+- URL：`/api/travel/parse`
+- Request：`ParseTravelRequestBody`，包含 `raw_user_input`。
+- Response：`ParseTravelRequestResponse`
+- Error Response：通用 `ErrorResponse`；解析需补充信息时返回 `PARSE_NEEDS_INPUT`。
+- 前端调用位置：未发现前端调用。
+- 后端实现位置：`backend/app/main.py` `parse_travel()`
+
+## POST /api/travel/plan
+
+- Method：POST
+- URL：`/api/travel/plan`
+- Request：`PlanRequest`，包含 `raw_user_input` 或 `travel_request`。
+- Response：`TravelPlanResponse`
+- Error Response：通用 `ErrorResponse`；解析需补充信息时返回 `PARSE_NEEDS_INPUT`；非法输入可能返回 400。
+- 前端调用位置：`frontend/src/api/client.ts` `planTrip()`；当前未发现 `App.tsx` 调用。
+- 后端实现位置：`backend/app/main.py` `plan_travel()`
+
+## POST /api/travel/plan/async
+
+- Method：POST
+- URL：`/api/travel/plan/async`
+- Request：`PlanRequest`；前端传字符串时 body 为 `{ "raw_user_input": string }`，传结构化请求时 body 为 `{ "travel_request": TravelRequest }`。
+- Response：`TravelPlanResponse`，通常包含 `async_job`、`planning_status=RUNNING`、`polling_url`。
+- Error Response：通用 `ErrorResponse`；解析需补充信息时返回 `PARSE_NEEDS_INPUT`；非法输入可能返回 400。
+- 前端调用位置：`frontend/src/api/client.ts` `planTripAsync()`；`frontend/src/App.tsx` 提交输入和重按时间规划时调用。
+- 后端实现位置：`backend/app/main.py` `plan_travel_async()`
+
+## GET /api/travel/jobs/{job_id}
+
+- Method：GET
+- URL：`/api/travel/jobs/{job_id}`
+- Request：path 参数 `job_id`。
+- Response：`TravelPlanResponse`
+- Error Response：通用 `ErrorResponse`；任务不存在或过期返回 404。
+- 前端调用位置：`frontend/src/api/client.ts` `pollPlanningJob()`；`frontend/src/App.tsx` 轮询异步任务。
+- 后端实现位置：`backend/app/main.py` `get_planning_job()`
+
+## POST /api/travel/jobs/{job_id}/retry
+
+- Method：POST
+- URL：`/api/travel/jobs/{job_id}/retry`
+- Request：path 参数 `job_id`，无 body。
+- Response：`TravelPlanResponse`
+- Error Response：通用 `ErrorResponse`；任务不存在或过期返回 404。
+- 前端调用位置：`frontend/src/api/client.ts` `retryPlanningJob()`；`frontend/src/App.tsx` 重试失败数据来源。
+- 后端实现位置：`backend/app/main.py` `retry_planning_job()`
+
+## POST /api/travel/jobs/{job_id}/cancel
+
+- Method：POST
+- URL：`/api/travel/jobs/{job_id}/cancel`
+- Request：path 参数 `job_id`，无 body。
+- Response：`TravelPlanResponse`
+- Error Response：通用 `ErrorResponse`；任务不存在或过期返回 404。
+- 前端调用位置：`frontend/src/api/client.ts` `cancelPlanningJob()`；`frontend/src/App.tsx` 取消当前规划。
+- 后端实现位置：`backend/app/main.py` `cancel_planning_job()`
+
+## GET /api/travel/plans/{plan_id}
+
+- Method：GET
+- URL：`/api/travel/plans/{plan_id}`
+- Request：path 参数 `plan_id`。
+- Response：`GetTravelPlanResponse`
+- Error Response：通用 `ErrorResponse`；方案不存在或过期返回 404。
+- 前端调用位置：未发现前端调用。
+- 后端实现位置：`backend/app/main.py` `get_travel_plan()`
+
+## POST /api/travel/recalculate
+
+- Method：POST
+- URL：`/api/travel/recalculate`
+- Request：`RecalculateRequest`
+- Response：`RecalculateResponse`
+- Error Response：通用 `ErrorResponse`；方案不存在返回 404；非法重算请求返回 400。
+- 前端调用位置：`frontend/src/api/client.ts` `recalculate()`；`frontend/src/App.tsx` 调整席别、舱位、本地接驳和时间重算后替换方案。
+- 后端实现位置：`backend/app/main.py` `recalculate()`
+
+## POST /api/redirect/booking
+
+- Method：POST
+- URL：`/api/redirect/booking`
+- Request：`BookingRedirectRequest`
+- Response：`BookingRedirectResponse`
+- Error Response：通用 `ErrorResponse`；方案不存在返回 404。
+- 前端调用位置：`frontend/src/api/client.ts` `bookingRedirect()`；`frontend/src/App.tsx` 跳转官方购票或地图导航前调用。
+- 后端实现位置：`backend/app/main.py` `booking_redirect()`；跳转生成在 `backend/app/data_sources/redirect_providers.py`
+
+## POST /api/feedback
+
+- Method：POST
+- URL：`/api/feedback`
+- Request：`FeedbackRequest`
+- Response：`FeedbackResponse`
+- Error Response：通用 `ErrorResponse`；反馈包含账号、支付、实名或凭证信息时返回 400。
+- 前端调用位置：`frontend/src/api/client.ts` `submitFeedback()`；`frontend/src/App.tsx` 方案详情反馈入口。
+- 后端实现位置：`backend/app/main.py` `submit_feedback()`
+
+## POST /api/events
+
+- Method：POST
+- URL：`/api/events`
+- Request：`AppEventRequest`
+- Response：`AppEventResponse`
+- Error Response：通用 `ErrorResponse`；metadata 包含账号、支付、实名或凭证信息时返回 400。
+- 前端调用位置：`frontend/src/api/client.ts` `trackEvent()`；`frontend/src/App.tsx` 输入、规划结果、推荐点击、跳转、反馈、收藏、提醒、偏好等事件。
+- 后端实现位置：`backend/app/main.py` `submit_app_event()`；事件聚合在 `backend/app/services/observability.py`
+
+## 约束无匹配契约（V1.16，已实现）
+
+### 适用接口
+
+以下接口统一返回扩展后的 `TravelPlanResponse`：
+
+- `POST /api/travel/plan`
+- `POST /api/travel/plan/async`
+- `GET /api/travel/jobs/{job_id}`
+- `POST /api/travel/jobs/{job_id}/retry`
+
+Request、Query Params 和 HTTP Error Response 保持现有定义。`NO_MATCH` 是 HTTP 200 的业务结果，不得转换为 4xx/5xx。
+
+### PlanningStatus
+
+V1.16 增加：
+
+```txt
+NO_MATCH
+```
+
+- `NO_MATCH`：规划正常完成，但没有候选满足全部硬约束，且存在可解释的约束分析或最近备选。
+- 异步结果为 `NO_MATCH` 时，`async_job.job_status=COMPLETE`、`progress=100`。
+- `FAILED` 仅用于系统异常、核心事实完全不可用或无法形成可验证结论。
+
+### TravelPlanResponse 扩展
+
+schema version 为 `1.16`，增加可空字段：
+
+```json
+{
+  "planning_status": "NO_MATCH",
+  "progress": 100,
+  "plans": [],
+  "recommendation_result": null,
+  "constraint_analysis": {
+    "result_type": "RELAXATION_AVAILABLE",
+    "coverage": [],
+    "alternatives": []
+  },
+  "async_job": {
+    "job_status": "COMPLETE"
+  }
+}
+```
+
+约束：
+
+- `planning_status=NO_MATCH` 时，正常 `plans` 必须为空，`recommendation_result` 必须为 null。
+- `constraint_analysis` 在 `NO_MATCH` 时必须非空；其他状态允许为 null。
+- 最近备选不得作为正常推荐方案消费，不得直接进入预订跳转。
+
+### ConstraintAnalysis
+
+```json
+{
+  "result_type": "RELAXATION_AVAILABLE",
+  "summary": "没有找到18:00前到达的方案。当前已验证的铁路方案中，最早可于19:12到达。",
+  "coverage": [
+    {
+      "transport_mode": "RAIL",
+      "status": "VERIFIED",
+      "message": "铁路班次已完成有效查询。"
+    },
+    {
+      "transport_mode": "FLIGHT",
+      "status": "UNAVAILABLE",
+      "message": "航班数据源未启用，无法确认是否存在更早航班。"
+    }
+  ],
+  "alternatives": []
+}
+```
+
+字段：
+
+- `result_type`：第一期固定为 `RELAXATION_AVAILABLE`；若无安全可展示备选，使用 `NO_SAFE_ALTERNATIVE`。
+- `summary`：后端基于确定性模板生成的用户可见摘要，不由 LLM 生成。
+- `coverage`：相关交通方式的查询覆盖。
+- `alternatives`：经过安全门禁和 Pareto 筛选的备选，最多 3 条。
+
+Coverage 状态：
+
+- `VERIFIED`：Provider 有效查询完成，可用于范围内最优结论。
+- `EMPTY`：有效查询完成但没有返回候选。
+- `UNAVAILABLE`：Provider 未启用或当前路线未覆盖。
+- `FAILED`：Provider 请求失败。
+- `TIMEOUT`：Provider 查询超时。
+
+只有相关交通方式全部为 `VERIFIED` 或 `EMPTY` 时，摘要才允许使用“所有交通方式中最早/最低”。存在 `UNAVAILABLE`、`FAILED` 或 `TIMEOUT` 时必须限定结论范围。
+
+### RelaxationAlternative
+
+```json
+{
+  "alternative_id": "alt_time_001",
+  "category": "CLOSEST_TO_TIME",
+  "plan": {},
+  "violations": [],
+  "preserved_constraints": [
+    "MAX_TOTAL_COST",
+    "TRANSPORT_MODE"
+  ],
+  "user_confirmation_required": true
+}
+```
+
+- `category`：`CLOSEST_TO_TIME`、`CLOSEST_TO_BUDGET`、`LEAST_BEHAVIOR_CHANGE`。
+- `plan`：完整 `TravelPlan` 快照，但必须满足：
+  - `recommendation_eligibility=NOT_RECOMMENDED`
+  - `can_be_selected_by_llm=false`
+  - 不进入正常 `plans`
+- `violations`：该备选违反的用户约束，至少 1 条。
+- `preserved_constraints`：仍被满足的显式约束类型。
+- `user_confirmation_required`：第一期固定为 true。
+
+同一个计划可命中多个赛道；响应中按 `plan_id` 去重，并保留优先级最高的 category，避免重复展示。
+
+### ConstraintViolation
+
+```json
+{
+  "constraint_type": "LATEST_ARRIVAL",
+  "relaxation_policy": "USER_CONFIRMATION_REQUIRED",
+  "requested_value": {
+    "datetime": "2026-07-13T18:00:00+08:00",
+    "timezone": "Asia/Shanghai",
+    "source_timezone": "Asia/Shanghai"
+  },
+  "actual_value": {
+    "datetime": "2026-07-13T19:12:00+08:00",
+    "timezone": "Asia/Shanghai",
+    "source_timezone": "Asia/Shanghai"
+  },
+  "deviation": {
+    "kind": "DURATION",
+    "value": 72,
+    "unit": "MINUTE",
+    "direction": "LATER"
+  },
+  "reason_code": "TIME_CONSTRAINT_TOO_LATE",
+  "user_visible_message": "该方案预计19:12到达，比期望时间晚1小时12分钟。"
+}
+```
+
+第一期 `constraint_type`：
+
+- `LATEST_ARRIVAL`
+- `EARLIEST_DEPARTURE`
+- `ARRIVAL_TIME_WINDOW`
+- `DEPARTURE_TIME_WINDOW`
+- `MAX_TOTAL_COST`
+- `ALLOWED_TRANSPORT_MODES`
+- `EXCLUDED_TRANSPORT_MODES`
+- `PREFERRED_RAIL_SEAT`
+- `PREFERRED_FLIGHT_CABIN`
+
+`deviation.kind` 与单位：
+
+- 时间：`DURATION` + `MINUTE`。
+- 金额：`MONEY` + `amount_minor/currency/scale` 结构，不使用 float。
+- 交通方式：`MODE_SET` + `added_modes/removed_modes`。
+- 席位/舱位：`CATEGORICAL` + 请求值/实际值。
+
+不同 `kind` 不得由后端或前端换算成通用总分。
+
+### 前端消费规则
+
+- 轮询在 `planning_status=NO_MATCH` 且 `async_job.job_status=COMPLETE` 时结束。
+- 显示独立“约束未满足”页面，不复用网络错误页或普通空态。
+- 最多展示 3 个备选赛道，并显示具体偏差、覆盖范围和“不满足原始要求”。
+- 用户点击备选只能先查看或确认放宽；确认后根据 violation 构造新的 `TravelRequest` 并重新调用 `POST /api/travel/plan/async`。
+- 未确认前不得调用 `/api/redirect/booking`。
+- 规划终态为 `NO_MATCH` 时上报 `PLANNING_NO_MATCH`，不得上报 `PLANNING_SUCCESS` 或系统失败事件。
+
+### AppEventType 扩展
+
+V1.16 为 `POST /api/events` 增加：
+
+```txt
+PLANNING_NO_MATCH
+```
+
+建议 metadata 只包含 `planning_status`、违反的 `constraint_type`、alternative 数量和 coverage 状态，不包含完整用户输入、详细地点或敏感乘客信息。
+
+### 后端校验与生成规则
+
+- 安全、合规、核心事实不完整或 `RiskLevel.BLOCKED` 的方案不得进入 `alternatives`。
+- `alternatives` 必须来自 Provider 返回并经后端验证的候选，LLM 不得生成、修改或排序这些事实。
+- 使用分类型计算器计算 deviation；跨类型不计算总分。
+- 先执行 Pareto 支配筛选，再按赛道用确定性字典序选取，最终不超过 3 条。
+- 摘要必须遵守 coverage 结论边界。
+- 结构化日志记录原始候选数、正常候选数、备选数、reason_code 和 coverage；不得记录敏感信息。
+
+### Empty 与 Loading 行为
+
+- Loading：保持现有 `RUNNING/WAITING_SOURCE` 和轮询行为。
+- `NO_MATCH + RELAXATION_AVAILABLE`：展示最近备选。
+- `NO_MATCH + NO_SAFE_ALTERNATIVE`：展示无法满足的约束和修改条件入口，不展示方案卡。
+- `FAILED`：展示系统/数据失败状态及可重试入口。
+
+### 兼容与回滚
+
+- V1.16 为前后端同步升级；`PlanningStatus` 新枚举会影响穷举判断，不能只部署后端。
+- 功能开关关闭时沿用现有 `FAILED + missing_plan_explanations` 行为，不返回 `constraint_analysis`。
+- 回滚不得改变现有 `COMPLETE/PARTIAL` 正常方案结构。

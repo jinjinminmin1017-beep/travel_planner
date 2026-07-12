@@ -90,7 +90,7 @@ def test_validate_llm_output_rejects_candidate_pool_violations():
 
 def test_intent_prompt_uses_minimal_contract_and_dynamic_user_context():
     system_prompt = _prompt("intent_parser_prompt_v1_0.txt")
-    client = _RecordingLLMClient(['{"schema_version":"1.15"}'])
+    client = _RecordingLLMClient(['{"schema_version":"1.16"}'])
     provider = OpenAICompatibleLLMProvider(api_key="test-key", model="test-model", client=client)
 
     provider.parse_intent("2026-07-09 from Beijing to Shanghai in the morning", "req_prompt", date(2026, 7, 7), "Asia/Shanghai")
@@ -137,7 +137,7 @@ def test_recommendation_prompt_uses_compact_selection_payload():
 
 def test_recommendation_repair_prompt_repeats_legal_plan_ids_and_original_output():
     llm_input = _llm_input()
-    raw_invalid_output = '{"schema_version":"1.15","recommendations":[]}'
+    raw_invalid_output = '{"schema_version":"1.16","recommendations":[]}'
     repaired_output = _output(llm_input.candidate_plan_ids[:3]).model_dump(mode="json")
     client = _RecordingLLMClient([json.dumps(repaired_output)])
     provider = OpenAICompatibleLLMProvider(api_key="test-key", model="test-model", client=client)
@@ -146,7 +146,7 @@ def test_recommendation_repair_prompt_repeats_legal_plan_ids_and_original_output
     provider.repair_recommendation(llm_input, ["schema validation failed: recommendations extra input"])
 
     user_prompt = client.requests[0]["json"]["messages"][1]["content"]
-    assert "target_schema: LLMRecommendationOutput Schema V1.15" in user_prompt
+    assert "target_schema: LLMRecommendationOutput Schema V1.16" in user_prompt
     assert "schema validation failed: recommendations extra input" in user_prompt
     assert "previous_raw_llm_output:" in user_prompt
     assert raw_invalid_output in user_prompt

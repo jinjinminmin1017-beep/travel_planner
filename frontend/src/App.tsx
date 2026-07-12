@@ -18,6 +18,7 @@ import qingdaoHero from "../assets/destination-scenes/qingdao-pier.jpg";
 import { cancelPlanningJob, planTripAsync, pollPlanningJob, retryPlanningJob, trackEvent } from "./api/client";
 import { ui } from "./designSystem";
 import { PlanningProgressScreen } from "./components/planning/PlanningProgressScreen";
+import { ConstraintNoMatchScreen } from "./components/constraints/ConstraintNoMatchScreen";
 import { ResultsBottomAction } from "./components/results/ResultsBottomAction";
 import { ResultsOverview } from "./components/results/ResultsOverview";
 import { RouteDetailScreen } from "./components/results/RouteDetailScreen";
@@ -32,8 +33,9 @@ import {
   saveRetentionPreferences,
   toggleFavoritePlanSnapshot
 } from "./nativeCapabilities";
-import type { DataSourceMetadata, RecalculateResponse, SourceFailure, TimePoint, TravelPlan, TravelPlanResponse, TravelRequest } from "./types";
+import type { DataSourceMetadata, RecalculateResponse, RelaxationAlternative, SourceFailure, TimePoint, TravelPlan, TravelPlanResponse, TravelRequest } from "./types";
 import { minutesToText } from "./utils/format";
+import { applyRelaxationToRequest } from "./utils/routePlanning";
 
 const HERO_IMAGES: Record<string, ImageSourcePropType> = {
   qingdao: qingdaoHero
@@ -488,18 +490,28 @@ export default function App() {
       await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
       if (runId !== planningRunId.current) return;
       current = await pollPlanningJob(current.async_job.polling_url);
-      if (!preserveCurrentResults || current.plans.length > 0) {
+      if (!preserveCurrentResults || current.plans.length > 0 || current.planning_status === "NO_MATCH") {
         setResponse(current);
         syncSelection(current);
       }
       if (!isPlanningActive(current)) {
-        void trackEvent({
-          eventType: current.planning_status === "PARTIAL" ? "PLANNING_PARTIAL" : "PLANNING_SUCCESS",
-          requestId: current.request_id,
-          traceId: current.trace_id,
-          planId: current.plans[0]?.plan_id ?? null,
-          metadata: { planning_status: current.planning_status }
-        }).catch(() => undefined);
+        if (current.planning_status !== "FAILED") {
+          const eventType = current.planning_status === "NO_MATCH" ? "PLANNING_NO_MATCH" : current.planning_status === "PARTIAL" ? "PLANNING_PARTIAL" : "PLANNING_SUCCESS";
+          void trackEvent({
+            eventType,
+            requestId: current.request_id,
+            traceId: current.trace_id,
+            planId: current.plans[0]?.plan_id ?? null,
+            metadata: current.planning_status === "NO_MATCH"
+              ? {
+                  planning_status: current.planning_status,
+                  constraint_types: current.constraint_analysis?.alternatives.flatMap((item) => item.violations.map((violation) => violation.constraint_type)) ?? [],
+                  alternative_count: current.constraint_analysis?.alternatives.length ?? 0,
+                  coverage_statuses: current.constraint_analysis?.coverage.map((item) => item.status) ?? []
+                }
+              : { planning_status: current.planning_status }
+          }).catch(() => undefined);
+        }
         return;
       }
     }
@@ -517,7 +529,7 @@ export default function App() {
     try {
       void trackEvent({ eventType: "INPUT_SUBMITTED", metadata }).catch(() => undefined);
       const result = await planTripAsync(input);
-      if (!preserveCurrentResults || result.plans.length > 0) {
+      if (!preserveCurrentResults || result.plans.length > 0 || result.planning_status === "NO_MATCH") {
         setResponse(result);
         syncSelection(result);
       }
@@ -562,6 +574,16 @@ export default function App() {
       }
     };
     await startPlanning(request, { source: "time_adjustment", time_anchor_type: anchor, time_value: value }, true);
+  }
+
+  async function confirmRelaxation(alternative: RelaxationAlternative) {
+    if (!response) return;
+    const request = applyRelaxationToRequest(response.travel_request, alternative);
+    await startPlanning(request, {
+      source: "constraint_relaxation",
+      alternative_category: alternative.category,
+      constraint_types: alternative.violations.map((item) => item.constraint_type)
+    });
   }
 
   async function requestLocation() {
@@ -768,6 +790,13 @@ export default function App() {
                   <Text style={styles.iconButtonText}>去云起</Text>
                 </Pressable>
               </View>
+            ) : response.planning_status === "NO_MATCH" && response.constraint_analysis ? (
+              <ConstraintNoMatchScreen
+                busy={loading}
+                onConfirm={confirmRelaxation}
+                onEdit={() => setActiveTab("input")}
+                response={response}
+              />
             ) : response.plans.length === 0 ? (
               <EmptyResults response={response} onEdit={() => setActiveTab("input")} />
             ) : resultsPane === "sources" ? (

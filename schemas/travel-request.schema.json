@@ -205,8 +205,8 @@
   "additionalProperties": false,
   "properties": {
     "schema_version": {
-      "const": "1.15",
-      "default": "1.15",
+      "const": "1.16",
+      "default": "1.16",
       "title": "Schema Version",
       "type": "string"
     },
@@ -356,5 +356,5 @@
   "title": "TravelRequest",
   "type": "object",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "x-schema-version": "1.15"
+  "x-schema-version": "1.16"
 }

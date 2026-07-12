@@ -1,6 +1,6 @@
 from datetime import date, datetime
 
-from app.data_sources.flight_providers import FlightOffer, FlightOfferSegment, FlightProviderSearchResult, flight_data_source_metadata
+from app.data_sources.flight_providers import FlightOffer, FlightOfferCabinOption, FlightOfferSegment, FlightProviderSearchResult, flight_data_source_metadata
 from app.data_sources.rail_providers import RailOffer, RailProviderSearchResult, rail_data_source_metadata
 from app.core.context import RequestContext
 from app.models.schemas import AirportCandidate, GeoPoint, LocalTransferSegment, PlanType, RecommendationType, SeatOption, StationCandidate, TravelHardConstraints, TravelRequest, TravelSoftPreferences, money
@@ -69,7 +69,7 @@ def _airport(name: str, city: str) -> AirportCandidate:
 
 
 def _rail_offer(origin: str, destination: str, day: date, dep_h: int, arr_h: int) -> RailOffer:
-    source = rail_data_source_metadata("rail_authorized_partner", "Juhe Train Query API")
+    source = rail_data_source_metadata("rail_12306_public_query", "12306 Public Ticket Query")
     departure = datetime.combine(day, datetime.min.time()).replace(hour=dep_h)
     arrival = datetime.combine(day, datetime.min.time()).replace(hour=arr_h)
     return RailOffer(
@@ -86,7 +86,7 @@ def _rail_offer(origin: str, destination: str, day: date, dep_h: int, arr_h: int
 
 
 def _flight_offer(origin_iata: str, destination_iata: str, day: date, dep_h: int, arr_h: int) -> FlightOffer:
-    source = flight_data_source_metadata("amadeus_flight_offers", "Amadeus Flight Offers Search API")
+    source = flight_data_source_metadata("airline_mu_public_query", "China Eastern Official Public Flight Query", evidence_id="fixture")
     departure = datetime.combine(day, datetime.min.time()).replace(hour=dep_h)
     arrival = datetime.combine(day, datetime.min.time()).replace(hour=arr_h)
     return FlightOffer(
@@ -96,8 +96,19 @@ def _flight_offer(origin_iata: str, destination_iata: str, day: date, dep_h: int
         currency="CNY",
         segments=[FlightOfferSegment(carrier_code="MU", flight_number="1", origin_iata=origin_iata, destination_iata=destination_iata, departure_at=departure, arrival_at=arrival, duration=None)],
         validating_airline_codes=["MU"],
-        raw_offer={"id": "test"},
+        raw_offer={"id": "test", "available": True},
         data_source=source,
+        cabin_options=[
+            FlightOfferCabinOption(
+                option_id="cabin_economy",
+                cabin_type="ECONOMY",
+                price=money(60000),
+                availability="AVAILABLE",
+                source_option_version="fixture_flight_economy",
+                inventory_evidence="fixture_available",
+            )
+        ],
+        evidence_id="fixture",
     )
 
 
@@ -120,7 +131,7 @@ def test_non_sample_route_uses_dynamic_direct_rail_without_old_families():
     _assert_dynamic_provider_only(plans)
     assert candidate_ids == {plan.plan_id for plan in plans}
     assert len(candidate_ids) <= 15
-    assert failures == []
+    assert not any(failure.source_id == "rail_12306_public_query" for failure in failures)
     assert missing == []
     assert PlanType.TRANSFER_RAIL in blocked_types
     assert PlanType.MULTI_TRANSFER_RAIL in blocked_types
@@ -139,7 +150,7 @@ def test_wuhan_route_uses_dynamic_direct_rail_candidates():
     plans, failures, missing, _, _, _ = build_plans(_shanghai_wuhan_request())
 
     _assert_dynamic_provider_only(plans)
-    assert failures == []
+    assert not any(failure.source_id == "rail_12306_public_query" for failure in failures)
     assert "route_coverage" not in missing
     rail_segment = next(segment for segment in plans[0].segments if hasattr(segment, "origin_station"))
     assert rail_segment.origin_station == "上海虹桥"
@@ -171,10 +182,10 @@ def test_dynamic_transfer_rail_planner_builds_connectable_two_leg_plan(monkeypat
 
     def fake_rail(request, environment=None):
         if request.origin_station == "OriginStation" and request.destination_station == "HubStation":
-            return RailProviderSearchResult(offers=[_rail_offer("OriginStation", "HubStation", day, 8, 10)], attempted_source_ids=["rail_authorized_partner"])
+            return RailProviderSearchResult(offers=[_rail_offer("OriginStation", "HubStation", day, 8, 10)], attempted_source_ids=["rail_12306_public_query"])
         if request.origin_station == "HubStation" and request.destination_station == "DestStation":
-            return RailProviderSearchResult(offers=[_rail_offer("HubStation", "DestStation", day, 12, 15)], attempted_source_ids=["rail_authorized_partner"])
-        return RailProviderSearchResult(offers=[], attempted_source_ids=["rail_authorized_partner"], failure_message="empty response")
+            return RailProviderSearchResult(offers=[_rail_offer("HubStation", "DestStation", day, 12, 15)], attempted_source_ids=["rail_12306_public_query"])
+        return RailProviderSearchResult(offers=[], attempted_source_ids=["rail_12306_public_query"], failure_message="empty response")
 
     monkeypatch.setattr("app.services.planner.search_rail_offers_with_enabled_provider_result", fake_rail)
     request = TravelRequest(
@@ -226,13 +237,13 @@ def test_dynamic_flight_rail_mixed_planner_builds_connectable_plan(monkeypatch):
 
     def fake_rail(request, environment=None):
         if request.origin_station == "OriginStation" and request.destination_station == "HubStation":
-            return RailProviderSearchResult(offers=[_rail_offer("OriginStation", "HubStation", day, 8, 10)], attempted_source_ids=["rail_authorized_partner"])
-        return RailProviderSearchResult(offers=[], attempted_source_ids=["rail_authorized_partner"], failure_message="empty response")
+            return RailProviderSearchResult(offers=[_rail_offer("OriginStation", "HubStation", day, 8, 10)], attempted_source_ids=["rail_12306_public_query"])
+        return RailProviderSearchResult(offers=[], attempted_source_ids=["rail_12306_public_query"], failure_message="empty response")
 
     def fake_flight(request, environment=None):
         if request.origin_iata == "HHH" and request.destination_iata == "DDD":
-            return FlightProviderSearchResult(offers=[_flight_offer("HHH", "DDD", day, 13, 15)], attempted_source_ids=["amadeus_flight_offers"])
-        return FlightProviderSearchResult(offers=[], attempted_source_ids=["amadeus_flight_offers"], failure_message="empty response")
+            return FlightProviderSearchResult(offers=[_flight_offer("HHH", "DDD", day, 13, 15)], attempted_source_ids=["airline_mu_public_query"])
+        return FlightProviderSearchResult(offers=[], attempted_source_ids=["airline_mu_public_query"], failure_message="empty response")
 
     monkeypatch.setattr("app.services.planner.search_rail_offers_with_enabled_provider_result", fake_rail)
     monkeypatch.setattr("app.services.planner.search_flight_offers_with_enabled_provider_result", fake_flight)

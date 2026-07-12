@@ -68,6 +68,73 @@ function Get-AvailablePort {
   return $port
 }
 
+function Get-ChildProcessIds {
+  param([int]$ParentId)
+
+  $children = Get-CimInstance Win32_Process -Filter "ParentProcessId=$ParentId" -ErrorAction SilentlyContinue
+  foreach ($child in $children) {
+    Get-ChildProcessIds -ParentId ([int]$child.ProcessId)
+    [int]$child.ProcessId
+  }
+}
+
+function Stop-ProcessTree {
+  param([System.Diagnostics.Process]$Process)
+
+  if (-not $Process) {
+    return
+  }
+
+  $processId = [int]$Process.Id
+  $childProcessIds = @(Get-ChildProcessIds -ParentId $processId | Select-Object -Unique)
+
+  foreach ($childProcessId in $childProcessIds) {
+    Stop-Process -Id $childProcessId -Force -ErrorAction SilentlyContinue
+  }
+
+  Stop-Process -Id $processId -Force -ErrorAction SilentlyContinue
+}
+
+function Stop-ListeningPortProcesses {
+  param([int]$Port)
+
+  $owningProcessIds = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue |
+    Where-Object { $_.OwningProcess -gt 0 } |
+    Select-Object -ExpandProperty OwningProcess -Unique
+
+  foreach ($owningProcessId in $owningProcessIds) {
+    Stop-Process -Id $owningProcessId -Force -ErrorAction SilentlyContinue
+  }
+}
+
+function Stop-DebugSession {
+  param(
+    [System.Diagnostics.Process[]]$StartedProcesses,
+    [int[]]$ManagedPorts
+  )
+
+  if ($StartedProcesses.Count -eq 0 -and $ManagedPorts.Count -eq 0) {
+    return
+  }
+
+  if ($StartedProcesses.Count -gt 0) {
+    Write-Host "Stopping debug processes..."
+  }
+
+  foreach ($process in $StartedProcesses) {
+    Stop-ProcessTree -Process $process
+  }
+
+  if ($ManagedPorts.Count -eq 0) {
+    return
+  }
+
+  Start-Sleep -Milliseconds 500
+  foreach ($port in ($ManagedPorts | Select-Object -Unique)) {
+    Stop-ListeningPortProcesses -Port $port
+  }
+}
+
 if (-not $HostAddress) {
   $HostAddress = Get-LanAddress
 }
@@ -93,6 +160,8 @@ $BackendErr = Join-Path $LogsDir "device-backend.err.log"
 $ExpoOut = Join-Path $LogsDir "device-expo.out.log"
 $ExpoErr = Join-Path $LogsDir "device-expo.err.log"
 $Processes = @()
+$ManagedPorts = @()
+$ShouldCleanup = $true
 
 function New-ExpoQrImage {
   param(
@@ -177,49 +246,52 @@ function Start-Expo {
     -WindowStyle Hidden
 }
 
-New-ExpoQrImage -Value $ExpoUrl -OutputPath $QrFullPath -ApiBase $ApiBaseUrl
-
-$info = @(
-  "Expo URL: $ExpoUrl",
-  "API Base URL: $ApiBaseUrl",
-  "QR image: $QrFullPath",
-  "Backend log: $BackendOut",
-  "Expo log: $ExpoOut",
-  "",
-  "Phone and computer must be on the same Wi-Fi.",
-  "Open Expo Go and scan the QR image."
-)
-$info | Set-Content -LiteralPath $InfoPath -Encoding UTF8
-
-if (-not $SkipBackend) {
-  $backend = Start-Backend
-  $Processes += $backend
-  Write-Host "Backend started: PID $($backend.Id), $ApiBaseUrl"
-}
-
-if (-not $SkipFrontend) {
-  $expo = Start-Expo
-  $Processes += $expo
-  Write-Host "Expo started: PID $($expo.Id), $ExpoUrl"
-}
-
-Write-Host "QR image generated: $QrFullPath"
-Write-Host "Debug info written: $InfoPath"
-Write-Host "Logs: $LogsDir"
-
-if ($OpenQr) {
-  Start-Process -FilePath $QrFullPath | Out-Null
-}
-
-if ($NoWait -or $Processes.Count -eq 0) {
-  if ($Processes.Count -gt 0) {
-    Write-Host "Servers are running in the background. Stop them by PID when finished."
-  }
-  exit 0
-}
-
-Write-Host "Press Ctrl+C to stop device debugging."
 try {
+  New-ExpoQrImage -Value $ExpoUrl -OutputPath $QrFullPath -ApiBase $ApiBaseUrl
+
+  $info = @(
+    "Expo URL: $ExpoUrl",
+    "API Base URL: $ApiBaseUrl",
+    "QR image: $QrFullPath",
+    "Backend log: $BackendOut",
+    "Expo log: $ExpoOut",
+    "",
+    "Phone and computer must be on the same Wi-Fi.",
+    "Open Expo Go and scan the QR image."
+  )
+  $info | Set-Content -LiteralPath $InfoPath -Encoding UTF8
+
+  if (-not $SkipBackend) {
+    $backend = Start-Backend
+    $Processes += $backend
+    $ManagedPorts += $BackendPort
+    Write-Host "Backend started: PID $($backend.Id), $ApiBaseUrl"
+  }
+
+  if (-not $SkipFrontend) {
+    $expo = Start-Expo
+    $Processes += $expo
+    $ManagedPorts += $ExpoPort
+    Write-Host "Expo started: PID $($expo.Id), $ExpoUrl"
+  }
+
+  Write-Host "QR image generated: $QrFullPath"
+  Write-Host "Debug info written: $InfoPath"
+  Write-Host "Logs: $LogsDir"
+
+  if ($OpenQr) {
+    Start-Process -FilePath $QrFullPath | Out-Null
+  }
+
+  if ($NoWait -or $Processes.Count -eq 0) {
+    if ($Processes.Count -gt 0) {
+      Write-Host "Servers are running in the background. Stop them by PID when finished."
+    }
+    $ShouldCleanup = $false
+    exit 0
+  }
+
+  Write-Host "Press Ctrl+C to stop device debugging."
   while ($true) {
     Start-Sleep -Seconds 2
     foreach ($process in @($Processes)) {
@@ -230,9 +302,7 @@ try {
   }
 }
 finally {
-  foreach ($process in $Processes) {
-    if (-not $process.HasExited) {
-      Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
-    }
+  if ($ShouldCleanup) {
+    Stop-DebugSession -StartedProcesses $Processes -ManagedPorts $ManagedPorts
   }
 }

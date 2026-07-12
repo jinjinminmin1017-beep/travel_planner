@@ -16,7 +16,7 @@ def stable_hash(value: str) -> str:
 
 def log_llm_call(**payload: Any) -> None:
     audit_payload = {
-        "schema_version": "1.15",
+"schema_version": "1.16",
         "created_at": now_timepoint().model_dump(mode="json"),
         **payload,
     }

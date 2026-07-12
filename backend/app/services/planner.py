@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import logging
+import os
 from copy import deepcopy
 from dataclasses import dataclass, field
-from datetime import datetime, time, timedelta
+from datetime import datetime, time, timedelta, timezone
 from uuid import uuid4
 
 from app.core.context import RequestContext
-from app.data_sources.flight_providers import FlightOffer, FlightSearchRequest, price_flight_offer_with_enabled_provider_result, search_flight_offers_with_enabled_provider_result
+from app.data_sources.flight_providers import FlightOffer, FlightSearchRequest, search_flight_offers_with_enabled_provider_result
 from app.data_sources.map_providers import MapRouteRequest, estimate_route_with_enabled_provider_result
 from app.data_sources.rail_providers import RailOffer, RailSearchRequest, search_rail_offers_with_enabled_provider_result
 from app.models.schemas import (
@@ -51,6 +53,7 @@ from app.services.cost_comfort_risk_engine import (
     calculate_cost_breakdown,
     refresh_plan_cost_and_quality,
 )
+from app.services.constraints.relaxation_selector import build_constraint_analysis
 from app.services.destination_assets import resolve_destination_presentation
 from app.services.flight_planning_engine import FlightPlanSpec
 from app.services.intent_parser import parse_travel_request
@@ -69,9 +72,20 @@ from app.services.rail_planning_engine import RailPlanSpec, TicketEnhancementSpe
 from app.services.recommendation import recommend_with_validation
 from app.services.store import get_response_for_plan, update_plan
 
+logger = logging.getLogger("app.planner.rail")
+
+
+SHANGHAI_TZ = timezone(timedelta(hours=8))
+
+
+def _as_shanghai_datetime(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=SHANGHAI_TZ)
+    return value.astimezone(SHANGHAI_TZ)
+
 
 def _tp(day, hour: int, minute: int = 0) -> TimePoint:
-    return TimePoint(datetime=datetime.combine(day, time(hour, minute)).astimezone(), timezone="Asia/Shanghai", source_timezone="Asia/Shanghai")
+    return TimePoint(datetime=datetime.combine(day, time(hour, minute), tzinfo=SHANGHAI_TZ), timezone="Asia/Shanghai", source_timezone="Asia/Shanghai")
 
 
 def _source(source_id: str, name: str, source_type: DataSourceType = DataSourceType.INTERNAL_CALCULATION) -> DataSourceMetadata:
@@ -88,8 +102,8 @@ def _source(source_id: str, name: str, source_type: DataSourceType = DataSourceT
 
 
 MAP_SOURCE = _source("amap_route", "AMap Route Planning API", DataSourceType.MAP)
-RAIL_SOURCE = _source("rail_authorized_partner", "Juhe Train Query API", DataSourceType.RAIL)
-FLIGHT_SOURCE = _source("amadeus_flight_offers", "Amadeus Flight Offers Search API", DataSourceType.FLIGHT)
+RAIL_SOURCE = _source("rail_12306_public_query", "12306 Public Ticket Query", DataSourceType.RAIL)
+FLIGHT_SOURCE = _source("airline_public_query", "Official Airline Public Flight Query", DataSourceType.FLIGHT)
 TAXI_SOURCE = _source("amap_route", "AMap Route Planning API", DataSourceType.MAP)
 INTERNAL_SOURCE = _source("internal_calc", "Internal Deterministic Calculator", DataSourceType.INTERNAL_CALCULATION)
 
@@ -108,6 +122,12 @@ class PlanningIssueCollector:
     def add_warning(self, warning: str) -> None:
         if warning not in self.warnings:
             self.warnings.append(warning)
+
+    def has_rail_rate_limit(self) -> bool:
+        return any(
+            failure.source_id == "rail_12306_public_query" and failure.error_code == "RAIL_PROVIDER_RATE_LIMITED"
+            for failure in self.failures
+        )
 
     def add_source_failure(
         self,
@@ -313,7 +333,7 @@ def _rail(segment_id: str, train: str, origin: str, destination: str, day, dep_h
         )
     )
     if not result.offers:
-        source_id = result.attempted_source_ids[-1] if result.attempted_source_ids else "rail_authorized_partner"
+        source_id = result.attempted_source_ids[-1] if result.attempted_source_ids else "rail_12306_public_query"
         raise ValueError(f"real rail provider unavailable: {source_id}; {result.failure_message or 'no offers returned'}")
     offer = result.offers[0]
     return RailSegment(
@@ -348,6 +368,30 @@ def _rail_segment_from_offer(segment_id: str, offer: RailOffer) -> RailSegment:
     )
 
 
+def _cabin_options_from_offer(offer: FlightOffer) -> list[CabinOption]:
+    if not offer.cabin_options:
+        raise ValueError(f"flight offer {offer.offer_id} has no provider cabin options")
+    return [
+        CabinOption(
+            option_id=cabin.option_id,
+            cabin_type=cabin.cabin_type,
+            price=cabin.price,
+            availability=cabin.availability,
+            source_option_version=cabin.source_option_version,
+            data_source=offer.data_source,
+        )
+        for cabin in offer.cabin_options
+        if cabin.availability in {"AVAILABLE", "LIMITED"}
+    ]
+
+
+def _selected_cabin_option_id(offer: FlightOffer) -> str:
+    cabins = _cabin_options_from_offer(offer)
+    if not cabins:
+        raise ValueError(f"flight offer {offer.offer_id} has no available provider cabin options")
+    return min(cabins, key=lambda cabin: cabin.price.amount_minor).option_id
+
+
 def _flight(segment_id: str, flight: str, origin: str, destination: str, day, dep_h: int, dep_m: int, arr_h: int, arr_m: int, base_minor: int, previous_risk: bool = True) -> FlightSegment:
     codes = _flight_search_codes(flight, origin, destination)
     if not codes:
@@ -364,9 +408,9 @@ def _flight(segment_id: str, flight: str, origin: str, destination: str, day, de
         )
     )
     if not result.offers:
-        source_id = result.attempted_source_ids[-1] if result.attempted_source_ids else "amadeus_flight_offers"
+        source_id = result.attempted_source_ids[-1] if result.attempted_source_ids else "airline_public_query"
         raise ValueError(f"real flight provider unavailable: {source_id}; {result.failure_message or 'no offers returned'}")
-    offer = _confirm_flight_offer_price(result.offers[0])
+    offer = result.offers[0]
     first_segment = offer.segments[0] if offer.segments else None
     last_segment = offer.segments[-1] if offer.segments else None
     dep = _timepoint_from_datetime(first_segment.departure_at if first_segment else None, _tp(day, dep_h, dep_m))
@@ -381,12 +425,8 @@ def _flight(segment_id: str, flight: str, origin: str, destination: str, day, de
         departure_time=dep,
         arrival_time=arr,
         duration_minutes=duration,
-        cabin_options=[
-            CabinOption(option_id="cabin_economy", cabin_type="经济舱", price=offer.total_price, availability="AVAILABLE", source_option_version=f"amadeus_{offer.offer_id}", data_source=offer.data_source),
-            CabinOption(option_id="cabin_premium", cabin_type="超级经济舱", price=money(offer.total_price.amount_minor + 26000), availability="AVAILABLE", source_option_version=f"amadeus_{offer.offer_id}", data_source=offer.data_source),
-            CabinOption(option_id="cabin_business", cabin_type="商务舱", price=money(offer.total_price.amount_minor + 76000), availability="LIMITED", source_option_version=f"amadeus_{offer.offer_id}", data_source=offer.data_source),
-        ],
-        selected_cabin_option_id="cabin_economy",
+        cabin_options=_cabin_options_from_offer(offer),
+        selected_cabin_option_id=_selected_cabin_option_id(offer),
         previous_flight_risk_available=previous_risk,
         data_source=offer.data_source,
     )
@@ -408,10 +448,10 @@ def _real_direct_flight_segment(segment_id: str, flight: str, origin: str, desti
         )
     )
     if not result.offers:
-        source_id = result.attempted_source_ids[-1] if result.attempted_source_ids else "amadeus_flight_offers"
+        source_id = result.attempted_source_ids[-1] if result.attempted_source_ids else "airline_public_query"
         raise ValueError(f"real flight provider unavailable: {source_id}; {result.failure_message or 'no offers returned'}")
 
-    offer = _confirm_flight_offer_price(result.offers[0])
+    offer = result.offers[0]
     first_segment = offer.segments[0] if offer.segments else None
     last_segment = offer.segments[-1] if offer.segments else None
     dep = _timepoint_from_datetime(first_segment.departure_at if first_segment else None, _tp(day, dep_h, dep_m))
@@ -426,12 +466,8 @@ def _real_direct_flight_segment(segment_id: str, flight: str, origin: str, desti
         departure_time=dep,
         arrival_time=arr,
         duration_minutes=duration,
-        cabin_options=[
-            CabinOption(option_id="cabin_economy", cabin_type="经济舱", price=offer.total_price, availability="AVAILABLE", source_option_version=f"amadeus_{offer.offer_id}", data_source=offer.data_source),
-            CabinOption(option_id="cabin_premium", cabin_type="超级经济舱", price=money(offer.total_price.amount_minor + 26000), availability="AVAILABLE", source_option_version=f"amadeus_{offer.offer_id}", data_source=offer.data_source),
-            CabinOption(option_id="cabin_business", cabin_type="商务舱", price=money(offer.total_price.amount_minor + 76000), availability="LIMITED", source_option_version=f"amadeus_{offer.offer_id}", data_source=offer.data_source),
-        ],
-        selected_cabin_option_id="cabin_economy",
+        cabin_options=_cabin_options_from_offer(offer),
+        selected_cabin_option_id=_selected_cabin_option_id(offer),
         previous_flight_risk_available=True,
         data_source=offer.data_source,
     )
@@ -450,14 +486,6 @@ AIRPORT_IATA_CODES = {
 }
 
 
-def _confirm_flight_offer_price(offer: FlightOffer) -> FlightOffer:
-    result = price_flight_offer_with_enabled_provider_result(offer)
-    if result.offer:
-        return result.offer
-    source_id = result.attempted_source_ids[-1] if result.attempted_source_ids else "amadeus_flight_price"
-    raise ValueError(f"real flight price provider unavailable: {source_id}; {result.failure_message or 'no price confirmation returned'}")
-
-
 def _flight_search_codes(flight: str, origin_airport: str | None = None, destination_airport: str | None = None) -> tuple[str, str] | None:
     if origin_airport in AIRPORT_IATA_CODES and destination_airport in AIRPORT_IATA_CODES:
         return (AIRPORT_IATA_CODES[origin_airport], AIRPORT_IATA_CODES[destination_airport])
@@ -473,11 +501,11 @@ def _flight_search_codes(flight: str, origin_airport: str | None = None, destina
 def _timepoint_from_datetime(value: datetime | None, fallback: TimePoint) -> TimePoint:
     if value is None:
         return fallback
-    return TimePoint(datetime=value.astimezone(), timezone="Asia/Shanghai", source_timezone="Asia/Shanghai")
+    return TimePoint(datetime=_as_shanghai_datetime(value), timezone="Asia/Shanghai", source_timezone="Asia/Shanghai")
 
 
 def _timepoint_exact(value: datetime) -> TimePoint:
-    return TimePoint(datetime=value.astimezone(), timezone="Asia/Shanghai", source_timezone="Asia/Shanghai")
+    return TimePoint(datetime=_as_shanghai_datetime(value), timezone="Asia/Shanghai", source_timezone="Asia/Shanghai")
 
 
 def _pre_departure_buffer_minutes(segment) -> int:
@@ -757,6 +785,8 @@ def _flight_segments_from_offer(
         destination_label = destination_airport_name if index == len(offer.segments) else offer_segment.destination_iata
         flight_number = f"{offer_segment.carrier_code}{offer_segment.flight_number}".strip() or f"{offer_segment.origin_iata}-{offer_segment.destination_iata}"
         segment_price = money(offer.total_price.amount_minor // segment_count + (offer.total_price.amount_minor % segment_count if index == 1 else 0))
+        cabin_options = _cabin_options_from_offer(offer)
+        selected_cabin_id = _selected_cabin_option_id(offer)
         segments.append(
             FlightSegment(
                 segment_id=f"{segment_prefix}_{index}",
@@ -767,16 +797,10 @@ def _flight_segments_from_offer(
                 arrival_time=arr,
                 duration_minutes=duration,
                 cabin_options=[
-                    CabinOption(
-                        option_id="cabin_economy",
-                        cabin_type="Economy",
-                        price=segment_price,
-                        availability="AVAILABLE",
-                        source_option_version=f"flight_offer_{offer.offer_id}",
-                        data_source=offer.data_source,
-                    )
+                    cabin.model_copy(update={"price": segment_price}) if segment_count > 1 else cabin
+                    for cabin in cabin_options
                 ],
-                selected_cabin_option_id="cabin_economy",
+                selected_cabin_option_id=selected_cabin_id,
                 previous_flight_risk_available=len(offer.segments) == 1,
                 data_source=offer.data_source,
             )
@@ -815,8 +839,10 @@ def _flight_provider_user_message(error_code: str) -> str:
 def _rail_provider_error_code(message: str) -> str:
     if any(marker in message for marker in ("超过每日", "次数", "频率", "限制", "quota", "rate limit", "limit")):
         return "RAIL_PROVIDER_RATE_LIMITED"
-    if any(marker in message for marker in ("unauthorized", "未授权", "key", "credential")):
-        return "RAIL_PROVIDER_UNAUTHORIZED"
+    if any(marker in message for marker in ("station code missing", "站点编码", "电报码")):
+        return "RAIL_PROVIDER_STATION_CODE_MISSING"
+    if "no priced available seats" in message or "缺价" in message or "票价" in message:
+        return "RAIL_PROVIDER_MISSING_PRICE"
     if message and "empty response" in message and not any(marker in message for marker in ("failed", "error", "Exception", "异常", "失败")):
         return "RAIL_PROVIDER_EMPTY"
     if message:
@@ -826,19 +852,58 @@ def _rail_provider_error_code(message: str) -> str:
 
 def _rail_provider_user_message(error_code: str) -> str:
     if error_code == "RAIL_PROVIDER_RATE_LIMITED":
-        return "铁路数据源触发调用频率或配额限制，暂时无法验证真实车次、票价和余票；请结合复现时间点和供应商后台统计继续确认。"
-    if error_code == "RAIL_PROVIDER_UNAUTHORIZED":
-        return "铁路数据源授权或密钥不可用，暂时无法验证真实车次、票价和余票。"
+        return "12306 公开查询触发调用频率或访问限制，暂时无法验证真实车次、票价和有票席别。"
+    if error_code == "RAIL_PROVIDER_STATION_CODE_MISSING":
+        return "未能从 12306 站名目录匹配完整站点电报码，铁路方案已阻断。"
+    if error_code == "RAIL_PROVIDER_MISSING_PRICE":
+        return "12306 公开查询未返回可同时验证有票和票价的席别，铁路方案已阻断。"
     if error_code == "RAIL_PROVIDER_ERROR":
-        return "铁路数据源查询失败，暂时无法验证真实车次、票价和余票。"
-    return "铁路 Provider 暂未返回可验证的直达车次，已阻断铁路直达方案。"
+        return "12306 公开查询失败，暂时无法验证真实车次、票价和有票席别。"
+    return "12306 公开查询暂未返回可验证的有票直达车次，已阻断铁路直达方案。"
+
+
+def _record_rail_provider_block(
+    collector: PlanningIssueCollector,
+    *,
+    failure_messages: list[str],
+    missing_component: str,
+    impacted_plan_types: list[PlanType],
+) -> None:
+    if not failure_messages:
+        return
+    failure_message = "; ".join(failure_messages)
+    error_code = _rail_provider_error_code(failure_message)
+    user_visible_message = _rail_provider_user_message(error_code)
+    logger.warning(
+        "rail_planner_block missing_component=%s error_code=%s impacted_plan_types=%s failure_message=%s",
+        missing_component,
+        error_code,
+        ",".join(plan_type.value for plan_type in impacted_plan_types),
+        failure_message,
+    )
+    collector.add_missing(missing_component)
+    collector.add_warning(user_visible_message)
+    collector.add_source_failure(
+        source_id="rail_12306_public_query",
+        adapter_name="RailPlanningProvider",
+        failure_class=SourceFailureClass.CORE_FACT_FAILURE,
+        handling_strategy=SourceFailureHandlingStrategy.BLOCK_PLAN,
+        error_code=error_code,
+        message=failure_message,
+        user_visible_message=user_visible_message,
+        impacted_plan_types=impacted_plan_types,
+        source_used_id=None,
+        fallback_source_id=None,
+        fallback_reason=None,
+        fallback_used=False,
+    )
 
 
 def _direct_rail_block_message(collector: PlanningIssueCollector) -> str:
     for failure in collector.failures:
-        if failure.source_id == "rail_authorized_partner" and failure.error_code != "RAIL_PROVIDER_EMPTY":
+        if failure.source_id == "rail_12306_public_query" and failure.error_code != "RAIL_PROVIDER_EMPTY":
             return failure.user_visible_message
-    return "铁路 Provider 暂未返回可验证的直达车次，动态直达铁路方案已阻断。"
+    return "12306 公开查询暂未返回可验证的有票直达车次，动态直达铁路方案已阻断。"
 
 
 def _build_dynamic_direct_rail_plans(
@@ -857,15 +922,38 @@ def _build_dynamic_direct_rail_plans(
 ) -> list[TravelPlan]:
     origin_stations = _dynamic_station_names(route_nodes, origin_city)
     destination_stations = _dynamic_station_names(route_nodes, destination_city)
+    logger.info(
+        "rail_direct_planner_start request_id=%s origin_city=%s destination_city=%s origin_station_count=%s destination_station_count=%s",
+        travel_request.request_id,
+        origin_city,
+        destination_city,
+        len(origin_stations),
+        len(destination_stations),
+    )
     if not origin_stations or not destination_stations:
+        logger.warning(
+            "rail_direct_planner_missing_station_candidates request_id=%s origin_stations=%s destination_stations=%s",
+            travel_request.request_id,
+            origin_stations,
+            destination_stations,
+        )
         collector.add_missing("rail_station_candidates")
         collector.add_warning("未能生成完整的铁路站点候选，动态铁路方案已阻断。")
         return []
 
     plans: list[TravelPlan] = []
     failure_messages: list[str] = []
+    failure_source_ids: list[str] = []
     station_pairs = [(origin_station, destination_station) for origin_station in origin_stations for destination_station in destination_stations][:max_station_pairs]
+    logger.info("rail_direct_station_pairs request_id=%s pair_count=%s station_pairs=%s", travel_request.request_id, len(station_pairs), station_pairs)
     for pair_index, (origin_station, destination_station) in enumerate(station_pairs, start=1):
+        logger.info(
+            "rail_direct_provider_query request_id=%s pair_index=%s origin_station=%s destination_station=%s",
+            travel_request.request_id,
+            pair_index,
+            origin_station,
+            destination_station,
+        )
         result = search_rail_offers_with_enabled_provider_result(
             RailSearchRequest(
                 train_number="",
@@ -877,9 +965,24 @@ def _build_dynamic_direct_rail_plans(
         if not result.offers:
             failure_message = f"{origin_station}->{destination_station}: {result.failure_message or 'no rail offers returned'}"
             failure_messages.append(failure_message)
+            logger.info(
+                "rail_direct_provider_empty request_id=%s pair_index=%s origin_station=%s destination_station=%s failure_message=%s",
+                travel_request.request_id,
+                pair_index,
+                origin_station,
+                destination_station,
+                failure_message,
+            )
             if _rail_provider_error_code(failure_message) == "RAIL_PROVIDER_RATE_LIMITED":
+                logger.warning("rail_direct_provider_rate_limited request_id=%s pair_index=%s", travel_request.request_id, pair_index)
                 break
             continue
+        logger.info(
+            "rail_direct_provider_result request_id=%s pair_index=%s offer_count=%s",
+            travel_request.request_id,
+            pair_index,
+            len(result.offers),
+        )
         for offer_index, offer in enumerate(result.offers[: max(1, max_plans - len(plans))], start=1):
             plan_index = len(plans) + 1
             rail_segment = _rail_segment_from_offer(f"seg_rail_dynamic_direct_{plan_index}", offer)
@@ -896,33 +999,29 @@ def _build_dynamic_direct_rail_plans(
                     segments,
                     8.0 if pair_index == 1 and offer_index == 1 else 7.6,
                     RiskLevel.LOW,
-                    "真实铁路 Provider 返回",
-                    "车次、时间、票价和席别来自授权铁路 Provider；接驳段由地图 Provider 或明确降级估算生成。",
+                    "12306 公开查询返回",
+                    "车次、时间、票价和席别来自 12306 公开匿名查询；接驳段由地图 Provider 或明确降级估算生成。",
                 )
             )
+            logger.info(
+                "rail_direct_plan_created request_id=%s plan_id=%s train_number=%s selected_seat_count=%s",
+                travel_request.request_id,
+                f"plan_rail_direct_dynamic_{plan_index}",
+                offer.train_number,
+                len(offer.seat_options),
+            )
             if len(plans) >= max_plans:
+                logger.info("rail_direct_planner_complete request_id=%s plan_count=%s reason=max_plans", travel_request.request_id, len(plans))
                 return plans
 
-    if not plans and failure_messages:
-        failure_message = "; ".join(failure_messages)
-        error_code = _rail_provider_error_code(failure_message)
-        user_visible_message = _rail_provider_user_message(error_code)
-        collector.add_missing("rail_core_fact")
-        collector.add_warning(user_visible_message)
-        collector.add_source_failure(
-            source_id="rail_authorized_partner",
-            adapter_name="RailPlanningProvider",
-            failure_class=SourceFailureClass.CORE_FACT_FAILURE,
-            handling_strategy=SourceFailureHandlingStrategy.BLOCK_PLAN,
-            error_code=error_code,
-            message=failure_message,
-            user_visible_message=user_visible_message,
+    if not plans:
+        _record_rail_provider_block(
+            collector,
+            failure_messages=failure_messages,
+            missing_component="rail_core_fact",
             impacted_plan_types=[PlanType.DIRECT_RAIL],
-            source_used_id=None,
-            fallback_source_id=None,
-            fallback_reason=None,
-            fallback_used=False,
         )
+    logger.info("rail_direct_planner_complete request_id=%s plan_count=%s", travel_request.request_id, len(plans))
     return plans
 
 
@@ -948,6 +1047,7 @@ def _build_dynamic_flight_plans(
 
     plans: list[TravelPlan] = []
     failure_messages: list[str] = []
+    failure_source_ids: list[str] = []
     airport_pairs = [(origin_airport, destination_airport) for origin_airport in origin_airports for destination_airport in destination_airports][:max_airport_pairs]
     for pair_index, (origin_airport, destination_airport) in enumerate(airport_pairs, start=1):
         origin_iata = airport_iata_for_candidate(origin_airport)
@@ -967,6 +1067,7 @@ def _build_dynamic_flight_plans(
         )
         if not result.offers:
             failure_messages.append(f"{origin_iata}->{destination_iata}: {result.failure_message or 'no flight offers returned'}")
+            failure_source_ids.extend(result.attempted_source_ids)
             continue
         for offer_index, offer in enumerate(result.offers[: max(1, max_plans - len(plans))], start=1):
             flight_segments = _flight_segments_from_offer(
@@ -1007,7 +1108,7 @@ def _build_dynamic_flight_plans(
         collector.add_missing("flight_core_fact")
         collector.add_warning(user_visible_message)
         collector.add_source_failure(
-            source_id="amadeus_flight_offers",
+            source_id=failure_source_ids[-1] if failure_source_ids else "airline_public_query",
             adapter_name="FlightPlanningProvider",
             failure_class=SourceFailureClass.CORE_FACT_FAILURE,
             handling_strategy=SourceFailureHandlingStrategy.BLOCK_PLAN,
@@ -1025,6 +1126,7 @@ def _build_dynamic_flight_plans(
 
 def _build_dynamic_transfer_rail_plans(
     *,
+    travel_request: TravelRequest,
     route_nodes,
     day,
     origin_text: str,
@@ -1039,16 +1141,39 @@ def _build_dynamic_transfer_rail_plans(
     origin_stations = _dynamic_station_names(route_nodes, origin_city, limit=2)
     destination_stations = _dynamic_station_names(route_nodes, destination_city, limit=2)
     transfer_stations = transfer_station_candidates_between(origin_city, destination_city, limit=max_hubs)
+    logger.info(
+        "rail_transfer_planner_start request_id=%s origin_station_count=%s destination_station_count=%s transfer_station_count=%s",
+        travel_request.request_id,
+        len(origin_stations),
+        len(destination_stations),
+        len(transfer_stations),
+    )
     if not origin_stations or not destination_stations or not transfer_stations:
+        logger.warning(
+            "rail_transfer_planner_missing_candidates request_id=%s origin_stations=%s destination_stations=%s transfer_station_count=%s",
+            travel_request.request_id,
+            origin_stations,
+            destination_stations,
+            len(transfer_stations),
+        )
         collector.add_missing("rail_transfer_candidates")
         return []
 
     plans: list[TravelPlan] = []
     failure_messages: list[str] = []
+    rail_rate_limited = False
     for origin_station in origin_stations:
+        if rail_rate_limited:
+            break
         for transfer_station in transfer_stations:
             if transfer_station.station_name == origin_station:
                 continue
+            logger.info(
+                "rail_transfer_first_leg_query request_id=%s origin_station=%s transfer_station=%s",
+                travel_request.request_id,
+                origin_station,
+                transfer_station.station_name,
+            )
             first_result = search_rail_offers_with_enabled_provider_result(
                 RailSearchRequest(
                     train_number="",
@@ -1059,12 +1184,28 @@ def _build_dynamic_transfer_rail_plans(
             )
             if not first_result.offers:
                 failure_messages.append(f"{origin_station}->{transfer_station.station_name}: {first_result.failure_message or 'no rail offers returned'}")
+                logger.info(
+                    "rail_transfer_first_leg_empty request_id=%s origin_station=%s transfer_station=%s failure_message=%s",
+                    travel_request.request_id,
+                    origin_station,
+                    transfer_station.station_name,
+                    failure_messages[-1],
+                )
                 if _rail_provider_error_code(failure_messages[-1]) == "RAIL_PROVIDER_RATE_LIMITED":
+                    rail_rate_limited = True
                     break
                 continue
             for destination_station in destination_stations:
+                if rail_rate_limited:
+                    break
                 if transfer_station.station_name == destination_station:
                     continue
+                logger.info(
+                    "rail_transfer_second_leg_query request_id=%s transfer_station=%s destination_station=%s",
+                    travel_request.request_id,
+                    transfer_station.station_name,
+                    destination_station,
+                )
                 second_result = search_rail_offers_with_enabled_provider_result(
                     RailSearchRequest(
                         train_number="",
@@ -1075,7 +1216,15 @@ def _build_dynamic_transfer_rail_plans(
                 )
                 if not second_result.offers:
                     failure_messages.append(f"{transfer_station.station_name}->{destination_station}: {second_result.failure_message or 'no rail offers returned'}")
+                    logger.info(
+                        "rail_transfer_second_leg_empty request_id=%s transfer_station=%s destination_station=%s failure_message=%s",
+                        travel_request.request_id,
+                        transfer_station.station_name,
+                        destination_station,
+                        failure_messages[-1],
+                    )
                     if _rail_provider_error_code(failure_messages[-1]) == "RAIL_PROVIDER_RATE_LIMITED":
+                        rail_rate_limited = True
                         break
                     continue
                 for first_offer in first_result.offers[:2]:
@@ -1104,33 +1253,32 @@ def _build_dynamic_transfer_rail_plans(
                                 "Both rail legs come from the enabled rail provider and pass a minimum transfer-time check.",
                             )
                         )
+                        logger.info(
+                            "rail_transfer_plan_created request_id=%s plan_id=%s transfer_station=%s first_train=%s second_train=%s",
+                            travel_request.request_id,
+                            f"plan_rail_transfer_dynamic_{plan_index}",
+                            transfer_station.station_name,
+                            first_offer.train_number,
+                            second_offer.train_number,
+                        )
                         if len(plans) >= max_plans:
+                            logger.info("rail_transfer_planner_complete request_id=%s plan_count=%s reason=max_plans", travel_request.request_id, len(plans))
                             return plans
 
-    if not plans and failure_messages:
-        failure_message = "; ".join(failure_messages)
-        error_code = _rail_provider_error_code(failure_message)
-        user_visible_message = _rail_provider_user_message(error_code)
-        collector.add_missing("rail_transfer_core_fact")
-        collector.add_source_failure(
-            source_id="rail_authorized_partner",
-            adapter_name="RailPlanningProvider",
-            failure_class=SourceFailureClass.CORE_FACT_FAILURE,
-            handling_strategy=SourceFailureHandlingStrategy.BLOCK_PLAN,
-            error_code=error_code,
-            message=failure_message,
-            user_visible_message=user_visible_message,
+    if not plans:
+        _record_rail_provider_block(
+            collector,
+            failure_messages=failure_messages,
+            missing_component="rail_transfer_core_fact",
             impacted_plan_types=[PlanType.TRANSFER_RAIL],
-            source_used_id=None,
-            fallback_source_id=None,
-            fallback_reason=None,
-            fallback_used=False,
         )
+    logger.info("rail_transfer_planner_complete request_id=%s plan_count=%s rail_rate_limited=%s", travel_request.request_id, len(plans), rail_rate_limited)
     return plans
 
 
 def _build_dynamic_flight_rail_mixed_plans(
     *,
+    travel_request: TravelRequest,
     route_nodes,
     day,
     origin_text: str,
@@ -1149,8 +1297,20 @@ def _build_dynamic_flight_rail_mixed_plans(
     transfer_stations = transfer_station_candidates_between(origin_city, destination_city, limit=max_hubs)
     plans: list[TravelPlan] = []
     failure_messages: list[str] = []
+    rail_rate_limited = False
+    logger.info(
+        "rail_mixed_planner_start request_id=%s origin_station_count=%s destination_station_count=%s origin_airport_count=%s destination_airport_count=%s transfer_station_count=%s",
+        travel_request.request_id,
+        len(origin_stations),
+        len(destination_stations),
+        len(origin_airports),
+        len(destination_airports),
+        len(transfer_stations),
+    )
 
     for transfer_station in transfer_stations:
+        if rail_rate_limited:
+            break
         hub_airports = airport_candidates_for_city(transfer_station.city_name, limit=2)
         hub_airports = [airport for airport in hub_airports if airport_iata_for_candidate(airport)]
         if not hub_airports:
@@ -1171,6 +1331,16 @@ def _build_dynamic_flight_rail_mixed_plans(
                     )
                     if not flight_result.offers or not rail_result.offers:
                         failure_messages.append(f"flight-rail via {transfer_station.station_name}: flight={flight_result.failure_message or len(flight_result.offers)} rail={rail_result.failure_message or len(rail_result.offers)}")
+                        logger.info(
+                            "rail_mixed_flight_rail_empty request_id=%s transfer_station=%s destination_station=%s failure_message=%s",
+                            travel_request.request_id,
+                            transfer_station.station_name,
+                            destination_station,
+                            failure_messages[-1],
+                        )
+                        if _rail_provider_error_code(failure_messages[-1]) == "RAIL_PROVIDER_RATE_LIMITED":
+                            rail_rate_limited = True
+                            break
                         continue
                     flight_segments = _flight_segments_from_offer(
                         segment_prefix=f"seg_mixed_flight_first_{len(plans) + 1}",
@@ -1200,10 +1370,24 @@ def _build_dynamic_flight_rail_mixed_plans(
                                 "The flight and rail facts both come from enabled providers and pass a connection-time check.",
                             )
                         )
+                        logger.info(
+                            "rail_mixed_flight_rail_plan_created request_id=%s plan_id=%s transfer_city=%s rail_train=%s",
+                            travel_request.request_id,
+                            f"plan_flight_rail_mixed_dynamic_{plan_index}",
+                            transfer_station.city_name,
+                            rail_segment.train_number,
+                        )
                         if len(plans) >= max_plans:
+                            logger.info("rail_mixed_planner_complete request_id=%s plan_count=%s reason=max_plans", travel_request.request_id, len(plans))
                             return plans
+                if rail_rate_limited:
+                    break
+            if rail_rate_limited:
+                break
 
         for origin_station in origin_stations:
+            if rail_rate_limited:
+                break
             for destination_airport in destination_airports:
                 for hub_airport in hub_airports:
                     hub_iata = airport_iata_for_candidate(hub_airport)
@@ -1218,6 +1402,16 @@ def _build_dynamic_flight_rail_mixed_plans(
                     )
                     if not rail_result.offers or not flight_result.offers:
                         failure_messages.append(f"rail-flight via {transfer_station.station_name}: rail={rail_result.failure_message or len(rail_result.offers)} flight={flight_result.failure_message or len(flight_result.offers)}")
+                        logger.info(
+                            "rail_mixed_rail_flight_empty request_id=%s origin_station=%s transfer_station=%s failure_message=%s",
+                            travel_request.request_id,
+                            origin_station,
+                            transfer_station.station_name,
+                            failure_messages[-1],
+                        )
+                        if _rail_provider_error_code(failure_messages[-1]) == "RAIL_PROVIDER_RATE_LIMITED":
+                            rail_rate_limited = True
+                            break
                         continue
                     rail_segment = _rail_segment_from_offer(f"seg_mixed_rail_first_{len(plans) + 1}", rail_result.offers[0])
                     flight_segments = _flight_segments_from_offer(
@@ -1247,11 +1441,29 @@ def _build_dynamic_flight_rail_mixed_plans(
                                 "The rail and flight facts both come from enabled providers and pass a connection-time check.",
                             )
                         )
+                        logger.info(
+                            "rail_mixed_rail_flight_plan_created request_id=%s plan_id=%s transfer_city=%s rail_train=%s",
+                            travel_request.request_id,
+                            f"plan_flight_rail_mixed_dynamic_{plan_index}",
+                            transfer_station.city_name,
+                            rail_segment.train_number,
+                        )
                         if len(plans) >= max_plans:
+                            logger.info("rail_mixed_planner_complete request_id=%s plan_count=%s reason=max_plans", travel_request.request_id, len(plans))
                             return plans
+                if rail_rate_limited:
+                    break
 
     if not plans and failure_messages:
         collector.add_missing("mixed_core_fact")
+        if any(_rail_provider_error_code(message) == "RAIL_PROVIDER_RATE_LIMITED" for message in failure_messages):
+            _record_rail_provider_block(
+                collector,
+                failure_messages=failure_messages,
+                missing_component="mixed_core_fact",
+                impacted_plan_types=[PlanType.FLIGHT_RAIL_MIXED],
+            )
+    logger.info("rail_mixed_planner_complete request_id=%s plan_count=%s rail_rate_limited=%s", travel_request.request_id, len(plans), rail_rate_limited)
     return plans
 
 
@@ -1404,62 +1616,6 @@ def _transport_catalog_missing_result(
     return [], collector.failures, collector.missing_components, impacted_types, explanations, collector.warnings
 
 
-def _filter_plans_by_time_constraints(travel_request: TravelRequest, plans: list[TravelPlan]) -> tuple[list[TravelPlan], list[MissingPlanExplanation]]:
-    kept: list[TravelPlan] = []
-    explanations: list[MissingPlanExplanation] = []
-    for plan in plans:
-        reason = _time_constraint_reason(travel_request, plan)
-        if reason is None:
-            kept.append(plan)
-        else:
-            explanations.append(
-                MissingPlanExplanation(
-                    plan_type=plan.plan_type,
-                    reason_code=reason[0],
-                    user_visible_message=reason[1],
-                )
-            )
-    return kept, explanations
-
-
-def _time_constraint_reason(travel_request: TravelRequest, plan: TravelPlan) -> tuple[str, str] | None:
-    anchor = travel_request.time_anchor_type
-    window_start = travel_request.time_window_start
-    window_end = travel_request.time_window_end
-    earliest_departure = travel_request.hard_constraints.earliest_departure_time or travel_request.earliest_departure_time
-    latest_arrival = travel_request.hard_constraints.latest_arrival_time or travel_request.latest_arrival_time
-
-    if anchor == "ARRIVAL":
-        arrival = plan.arrival_time
-        if arrival is None:
-            return ("TIME_CONSTRAINT_ARRIVAL_UNKNOWN", f"{plan.plan_name} 缺少完整到达时间，未进入当前时间约束结果。")
-        start = window_start
-        end = window_end or latest_arrival
-        if start and arrival.datetime < start.datetime:
-            return ("TIME_CONSTRAINT_TOO_EARLY", f"{plan.plan_name} 早于期望到达时间段，未进入当前结果。")
-        if end and arrival.datetime > end.datetime:
-            return ("TIME_CONSTRAINT_TOO_LATE", f"{plan.plan_name} 晚于期望到达时间，未进入当前结果。")
-        return None
-
-    departure = _first_main_departure_time(plan)
-    if departure is None:
-        return ("TIME_CONSTRAINT_DEPARTURE_UNKNOWN", f"{plan.plan_name} 缺少完整出发时间，未进入当前时间约束结果。")
-    start = window_start or earliest_departure
-    end = window_end
-    if start and departure.datetime < start.datetime:
-        return ("TIME_CONSTRAINT_TOO_EARLY", f"{plan.plan_name} 早于期望出发时间，未进入当前结果。")
-    if end and departure.datetime > end.datetime:
-        return ("TIME_CONSTRAINT_TOO_LATE", f"{plan.plan_name} 晚于期望出发时间段，未进入当前结果。")
-    return None
-
-
-def _first_main_departure_time(plan: TravelPlan) -> TimePoint | None:
-    for segment in plan.segments:
-        if isinstance(segment, (RailSegment, FlightSegment)):
-            return segment.departure_time
-    return plan.departure_time
-
-
 def build_plans(travel_request: TravelRequest) -> tuple[list[TravelPlan], list[SourceFailure], list[str], list[PlanType], list[MissingPlanExplanation], list[str]]:
     day = travel_request.travel_date
     origin = travel_request.origin_text
@@ -1472,6 +1628,15 @@ def build_plans(travel_request: TravelRequest) -> tuple[list[TravelPlan], list[S
     route_nodes = planning_nodes_for_request(origin, destination)
     origin_city = resolve_location_city(origin) or ""
     destination_city = resolve_location_city(destination) or ""
+    logger.info(
+        "rail_planning_flow_start request_id=%s origin=%s destination=%s origin_city=%s destination_city=%s travel_date=%s",
+        travel_request.request_id,
+        origin,
+        destination,
+        origin_city,
+        destination_city,
+        day.isoformat(),
+    )
 
     dynamic_rail_plans = _build_dynamic_direct_rail_plans(
         travel_request=travel_request,
@@ -1496,8 +1661,9 @@ def build_plans(travel_request: TravelRequest) -> tuple[list[TravelPlan], list[S
         collector=collector,
     )
     dynamic_transfer_rail_plans = []
-    if not dynamic_rail_plans:
+    if not dynamic_rail_plans and not collector.has_rail_rate_limit():
         dynamic_transfer_rail_plans = _build_dynamic_transfer_rail_plans(
+            travel_request=travel_request,
             route_nodes=route_nodes,
             day=day,
             origin_text=origin,
@@ -1509,8 +1675,9 @@ def build_plans(travel_request: TravelRequest) -> tuple[list[TravelPlan], list[S
             max_hubs=3,
         )
     dynamic_mixed_plans = []
-    if not dynamic_rail_plans and not dynamic_flight_plans:
+    if not dynamic_rail_plans and not dynamic_flight_plans and not collector.has_rail_rate_limit():
         dynamic_mixed_plans = _build_dynamic_flight_rail_mixed_plans(
+            travel_request=travel_request,
             route_nodes=route_nodes,
             day=day,
             origin_text=origin,
@@ -1522,12 +1689,15 @@ def build_plans(travel_request: TravelRequest) -> tuple[list[TravelPlan], list[S
             max_hubs=2,
         )
     plans = [*dynamic_rail_plans, *dynamic_flight_plans, *dynamic_transfer_rail_plans, *dynamic_mixed_plans]
-    plans_before_time_filter = len(plans)
-    plans, time_explanations = _filter_plans_by_time_constraints(travel_request, plans)
-    if plans_before_time_filter and not plans:
-        collector.add_missing("time_constraints")
-        collector.add_warning("已重新查询真实车次/航班，但没有方案满足当前出发或到达时间约束。")
-
+    logger.info(
+        "rail_planning_flow_candidates request_id=%s direct_rail_count=%s transfer_rail_count=%s mixed_count=%s total_plan_count=%s rail_rate_limited=%s",
+        travel_request.request_id,
+        len(dynamic_rail_plans),
+        len(dynamic_transfer_rail_plans),
+        len(dynamic_mixed_plans),
+        len(plans),
+        collector.has_rail_rate_limit(),
+    )
     if not plans and "rail_station_candidates" in collector.missing_components and "flight_airport_candidates" in collector.missing_components:
         return _transport_catalog_missing_result(travel_request, route_nodes, collector)
     if not plans and not collector.missing_components:
@@ -1539,7 +1709,7 @@ def build_plans(travel_request: TravelRequest) -> tuple[list[TravelPlan], list[S
         if plan_type not in generated_types:
             blocked_types.append(plan_type)
 
-    explanations: list[MissingPlanExplanation] = [*time_explanations]
+    explanations: list[MissingPlanExplanation] = []
     if PlanType.DIRECT_RAIL not in generated_types:
         explanations.append(MissingPlanExplanation(plan_type=PlanType.DIRECT_RAIL, reason_code="CORE_FACT_UNAVAILABLE", user_visible_message=_direct_rail_block_message(collector)))
     if PlanType.TRANSFER_RAIL not in generated_types:
@@ -1597,6 +1767,59 @@ def plan_trip(raw_or_request: str | TravelRequest, ctx: RequestContext) -> Trave
     candidate_plans = candidate_pool.llm_candidate_plans
     explanations = candidate_pool.missing_plan_explanations
     warnings = [*warnings, *candidate_pool.user_visible_warnings]
+    constraint_analysis_enabled = os.getenv("TRAVEL_CONSTRAINT_ANALYSIS_ENABLED", "true").strip().lower() not in {"0", "false", "no", "off"}
+    if not candidate_plans and constraint_analysis_enabled and candidate_pool.constraint_evaluations:
+        constraint_analysis = build_constraint_analysis(candidate_pool.constraint_evaluations, failures)
+        violation_types = sorted({violation.constraint_type for item in candidate_pool.constraint_evaluations for violation in item.violations})
+        logger.info(
+            "constraint_no_match request_id=%s raw_candidate_count=%s normal_candidate_count=0 alternative_count=%s violation_types=%s coverage=%s",
+            ctx.request_id,
+            len(plans),
+            len(constraint_analysis.alternatives),
+            violation_types,
+            [item.status for item in constraint_analysis.coverage],
+        )
+        return TravelPlanResponse(
+            request_id=ctx.request_id,
+            trace_id=ctx.trace_id,
+            correlation_id=ctx.correlation_id,
+            idempotency_key=ctx.idempotency_key,
+            planning_status=PlanningStatus.NO_MATCH,
+            progress=100,
+            travel_request=travel_request,
+            destination_presentation=resolve_destination_presentation(travel_request),
+            plans=[],
+            recommendation_result=None,
+            constraint_analysis=constraint_analysis,
+            source_failures=failures,
+            missing_components=missing,
+            blocked_plan_types=blocked_types,
+            missing_plan_explanations=explanations,
+            user_visible_warnings=[*warnings, "没有候选满足全部硬约束；最近备选不会直接进入推荐或购票流程。"],
+            async_job=None,
+            generated_at=now_timepoint(),
+        )
+    if not candidate_plans and not constraint_analysis_enabled:
+        missing = [*missing, "travel_plan"] if "travel_plan" not in missing else missing
+        return TravelPlanResponse(
+            request_id=ctx.request_id,
+            trace_id=ctx.trace_id,
+            correlation_id=ctx.correlation_id,
+            idempotency_key=ctx.idempotency_key,
+            planning_status=PlanningStatus.FAILED,
+            progress=100,
+            travel_request=travel_request,
+            destination_presentation=resolve_destination_presentation(travel_request),
+            plans=[],
+            recommendation_result=None,
+            source_failures=failures,
+            missing_components=missing,
+            blocked_plan_types=blocked_types,
+            missing_plan_explanations=explanations,
+            user_visible_warnings=[*warnings, "约束分析功能已关闭，沿用旧版无匹配失败行为。"],
+            async_job=None,
+            generated_at=now_timepoint(),
+        )
     recommendation_result = None
     if candidate_plans:
         recommendation_result = recommend_with_validation(
@@ -1653,7 +1876,7 @@ def plan_trip(raw_or_request: str | TravelRequest, ctx: RequestContext) -> Trave
         progress=100,
         travel_request=travel_request,
         destination_presentation=resolve_destination_presentation(travel_request),
-        plans=plans,
+        plans=candidate_plans,
         recommendation_result=recommendation_result,
         source_failures=failures,
         missing_components=missing,

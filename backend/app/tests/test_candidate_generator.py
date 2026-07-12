@@ -1,6 +1,7 @@
 from app.core.context import RequestContext
 from app.models.schemas import RecommendationType, TransportMode, money
 from app.services.candidate_generator import generate_candidate_plan_pool
+from app.services.constraints.relaxation_selector import build_constraint_analysis
 from app.services.intent_parser import parse_travel_request
 from app.services.planner import build_plans
 
@@ -15,14 +16,18 @@ def _request():
 
 def test_candidate_pool_filters_disallowed_transport_modes_with_explanations():
     request = _request()
-    request.hard_constraints.allowed_transport_modes = [TransportMode.FLIGHT]
+    request.hard_constraints.allowed_transport_modes = [TransportMode.BUS]
     plans, *_ = build_plans(request)
 
     result = generate_candidate_plan_pool(plans, request)
     candidate_ids = {plan.plan_id for plan in result.llm_candidate_plans}
 
     assert candidate_ids == set()
-    assert any(item.reason_code == "HARD_CONSTRAINT_TRANSPORT_MODE_NOT_ALLOWED" for item in result.missing_plan_explanations)
+    assert any(item.reason_code == "TRANSPORT_MODE_NOT_ALLOWED" for item in result.missing_plan_explanations)
+    analysis = build_constraint_analysis(result.constraint_evaluations, [])
+    assert analysis.result_type == "RELAXATION_AVAILABLE"
+    assert all(item.plan.can_be_selected_by_llm is False for item in analysis.alternatives)
+    assert all(item.plan.booking_redirects == [] for item in analysis.alternatives)
     assert len(result.llm_candidate_plans) <= 15
 
 
@@ -38,4 +43,7 @@ def test_candidate_pool_applies_budget_and_low_cost_sorting():
 
     assert costs == sorted(costs)
     assert all(cost <= 1000 for cost in costs)
-    assert any(item.reason_code == "HARD_CONSTRAINT_MAX_TOTAL_COST" for item in result.missing_plan_explanations)
+    assert any(item.reason_code == "BUDGET_CONSTRAINT_EXCEEDED" for item in result.missing_plan_explanations)
+    analysis = build_constraint_analysis(result.constraint_evaluations, [])
+    assert len(analysis.alternatives) <= 3
+    assert any(item.category == "CLOSEST_TO_BUDGET" for item in analysis.alternatives)

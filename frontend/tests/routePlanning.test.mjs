@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   buildRouteTimeline,
   buildRouteTitle,
+  applyRelaxationToRequest,
   calculatePlanDifference,
   countTransfers,
   findRecommendationReason,
@@ -32,7 +33,7 @@ const segment = (overrides) => ({
   ...overrides
 });
 const plan = (overrides = {}) => ({
-  schema_version: "1.15",
+  schema_version: "1.16",
   plan_id: "plan-a",
   plan_name: "方案 A",
   plan_type: "DIRECT_RAIL",
@@ -78,7 +79,35 @@ test("buildRouteTimeline marks only inferred times as estimated", () => {
 test("recommendation reason and comparison use response facts", () => {
   const selected = plan();
   const cheaper = plan({ plan_id: "plan-b", total_duration_minutes: 240, cost_breakdown: { total_cost: money(25000), items: [] } });
-  assert.equal(findRecommendationReason(selected, [{ schema_version: "1.15", recommendation_type: "BALANCED", status: "AVAILABLE", plan_id: "plan-a", reason: "价格与时间更均衡" }]), "价格与时间更均衡");
+  assert.equal(findRecommendationReason(selected, [{ schema_version: "1.16", recommendation_type: "BALANCED", status: "AVAILABLE", plan_id: "plan-a", reason: "价格与时间更均衡" }]), "价格与时间更均衡");
   assert.deepEqual(calculatePlanDifference(selected, cheaper), { comparedPlanId: "plan-b", costDeltaMinor: 5000, durationDeltaMinutes: -60 });
   assert.equal(moneyDelta(selected.cost_breakdown.total_cost, 5000).display_text, "¥50.00");
+});
+
+test("confirmed relaxation updates the structured request before replanning", () => {
+  const requested = { datetime: "2026-07-11T18:00:00+08:00", timezone: "Asia/Shanghai", source_timezone: "Asia/Shanghai" };
+  const actual = { datetime: "2026-07-11T19:12:00+08:00", timezone: "Asia/Shanghai", source_timezone: "Asia/Shanghai" };
+  const request = {
+    schema_version: "1.16",
+    request_id: "req-a",
+    raw_user_input: "18点前到达",
+    origin_text: "温州",
+    destination_text: "武汉",
+    travel_date: "2026-07-11",
+    preferences: ["BALANCED"],
+    preference_source: "USER_EXPLICIT",
+    hard_constraints: { latest_arrival_time: requested, allowed_transport_modes: ["RAIL"], excluded_transport_modes: [] },
+    soft_preferences: {}
+  };
+  const alternative = {
+    alternative_id: "alt-a",
+    category: "CLOSEST_TO_TIME",
+    plan: plan(),
+    preserved_constraints: ["ALLOWED_TRANSPORT_MODES"],
+    user_confirmation_required: true,
+    violations: [{ constraint_type: "LATEST_ARRIVAL", relaxation_policy: "USER_CONFIRMATION_REQUIRED", requested_value: requested, actual_value: actual, deviation: { kind: "DURATION", value: 72, unit: "MINUTE", direction: "LATER" }, reason_code: "TIME_CONSTRAINT_TOO_LATE", user_visible_message: "晚72分钟" }]
+  };
+  const relaxed = applyRelaxationToRequest(request, alternative);
+  assert.equal(relaxed.hard_constraints.latest_arrival_time.datetime, actual.datetime);
+  assert.equal(relaxed.schema_version, "1.16");
 });

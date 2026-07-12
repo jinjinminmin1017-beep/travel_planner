@@ -112,7 +112,10 @@ def build_data_quality(level: RiskLevel, risk_message: str, missing_components: 
 
 def refresh_plan_cost_and_quality(plan: TravelPlan) -> None:
     plan.cost_breakdown = calculate_cost_breakdown(plan.segments, plan.ticket_enhancement)
-    plan.total_duration_minutes = sum(segment.duration_minutes for segment in plan.segments)
+    if plan.departure_time and plan.arrival_time:
+        plan.total_duration_minutes = max(0, int((plan.arrival_time.datetime - plan.departure_time.datetime).total_seconds() // 60))
+    else:
+        plan.total_duration_minutes = sum(segment.duration_minutes for segment in plan.segments)
 
 
 def _clamp_score(value: float) -> float:

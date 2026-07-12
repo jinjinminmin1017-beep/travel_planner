@@ -20,9 +20,9 @@ def test_exported_schema_files_are_full_pydantic_artifacts():
         payload = json.loads(path.read_text(encoding="utf-8"))
         expected = model.model_json_schema(ref_template="#/$defs/{model}")
         expected["$schema"] = "https://json-schema.org/draft/2020-12/schema"
-        expected["x-schema-version"] = "1.15"
+        expected["x-schema-version"] = "1.16"
         assert payload == expected
-        assert payload["x-schema-version"] == "1.15"
+        assert payload["x-schema-version"] == "1.16"
         assert payload["title"] == model.model_json_schema()["title"]
         if "$defs" in expected:
             assert "$defs" in payload
@@ -31,10 +31,10 @@ def test_exported_schema_files_are_full_pydantic_artifacts():
 def test_travel_request_schema_forbids_unknown_fields():
     payload = json.loads((ROOT / "schemas" / "travel-request.schema.json").read_text(encoding="utf-8"))
     assert payload["additionalProperties"] is False
-    assert payload["properties"]["schema_version"]["const"] == "1.15"
+    assert payload["properties"]["schema_version"]["const"] == "1.16"
 
 
-def test_p0_02_contract_enums_match_schema_v1_15():
+def test_p0_02_contract_enums_match_schema_v1_16():
     recalculate = json.loads((ROOT / "schemas" / "recalculate-request.schema.json").read_text(encoding="utf-8"))
     travel_plan = json.loads((ROOT / "schemas" / "travel-plan-response.schema.json").read_text(encoding="utf-8"))
     data_sources = json.loads((ROOT / "schemas" / "data-source-status.schema.json").read_text(encoding="utf-8"))
@@ -45,7 +45,7 @@ def test_p0_02_contract_enums_match_schema_v1_15():
 
     plan_defs = travel_plan["$defs"]
     assert plan_defs["PlanLifecycleStatus"]["enum"] == ["GENERATED", "PARTIALLY_VERIFIED", "VERIFIED", "EXPIRED", "INVALIDATED", "BOOKED"]
-    assert plan_defs["PlanningStatus"]["enum"] == ["PENDING", "RUNNING", "PARTIAL", "COMPLETE", "FAILED"]
+    assert plan_defs["PlanningStatus"]["enum"] == ["PENDING", "RUNNING", "PARTIAL", "COMPLETE", "NO_MATCH", "FAILED"]
     assert plan_defs["SourceFailureClass"]["enum"] == [
         "AUXILIARY_DATA_FAILURE",
         "FALLBACK_AVAILABLE_FAILURE",

@@ -55,7 +55,7 @@ def main() -> None:
     SCHEMA_DIR.mkdir(exist_ok=True)
     common = {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "title": "AI Travel Planner Common Definitions V1.15",
+        "title": "AI Travel Planner Common Definitions V1.16",
         "description": "Common definitions are embedded in each exported Pydantic schema for this stage.",
         "type": "object",
         "additionalProperties": True,
@@ -64,7 +64,7 @@ def main() -> None:
     for filename, model in SCHEMAS.items():
         schema = model.model_json_schema(ref_template="#/$defs/{model}")
         schema["$schema"] = "https://json-schema.org/draft/2020-12/schema"
-        schema["x-schema-version"] = "1.15"
+        schema["x-schema-version"] = "1.16"
         (SCHEMA_DIR / filename).write_text(json.dumps(schema, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 

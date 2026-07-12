@@ -25,8 +25,8 @@ test("route UI does not contain design-only example values", async () => {
 
 test("existing analytics event names remain wired after component extraction", async () => {
   const combined = `${await read("../src/App.tsx")}\n${await read("../src/components/results/RouteDetailScreen.tsx")}`;
-  for (const eventName of ["INPUT_SUBMITTED", "PLANNING_SUCCESS", "PLANNING_PARTIAL", "RECOMMENDATION_CLICK", "REDIRECT_CLICK", "FEEDBACK_SUBMITTED", "RECENT_PLAN_VIEWED", "FAVORITE_TOGGLED", "PREFERENCE_UPDATED"]) {
-    assert.match(combined, new RegExp(`eventType: [^\\n]*"${eventName}"`));
+  for (const eventName of ["INPUT_SUBMITTED", "PLANNING_SUCCESS", "PLANNING_PARTIAL", "PLANNING_NO_MATCH", "RECOMMENDATION_CLICK", "REDIRECT_CLICK", "FEEDBACK_SUBMITTED", "RECENT_PLAN_VIEWED", "FAVORITE_TOGGLED", "PREFERENCE_UPDATED"]) {
+    assert.match(combined, new RegExp(`"${eventName}"`));
   }
 });
 

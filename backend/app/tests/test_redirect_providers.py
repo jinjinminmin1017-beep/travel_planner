@@ -97,25 +97,6 @@ def test_airline_redirect_uses_default_enabled_official_provider():
     assert redirect.data_source.source_id == "airline_official_redirect"
 
 
-def test_ota_redirect_requires_partner_env(monkeypatch):
-    plan = _plan()
-
-    monkeypatch.setenv("TRAVEL_SOURCE_OTA_PARTNER_REDIRECT_ENABLED", "true")
-    monkeypatch.setenv("TRAVEL_SOURCE_OTA_PARTNER_REDIRECT_LICENSE_STATUS", "APPROVED")
-    monkeypatch.setenv("OTA_PARTNER_ID", "partner_test")
-    missing_base_url = create_booking_redirect(_redirect_request(plan, "OTA"), plan, environment="DEV")
-    assert missing_base_url.url_available is False
-    assert missing_base_url.fallback_instruction
-    assert "不代下单" in missing_base_url.fallback_instruction
-
-    monkeypatch.setenv("OTA_PARTNER_BASE_URL", "https://partner.example/search")
-    redirect = create_booking_redirect(_redirect_request(plan, "OTA"), plan, environment="DEV")
-    assert redirect.url_available is True
-    assert redirect.url and redirect.url.startswith("https://partner.example/search?")
-    assert "partner_id=partner_test" in redirect.url
-    assert redirect.data_source.source_id == "ota_partner_redirect"
-
-
 def test_ride_hailing_redirect_is_redirect_only_navigation():
     plan = _plan()
     transfer_segment = next(segment for segment in plan.segments if getattr(segment, "segment_type", None) == "LOCAL_TRANSFER")
@@ -127,17 +108,3 @@ def test_ride_hailing_redirect_is_redirect_only_navigation():
     assert redirect.url and "uri.amap.com/navigation" in redirect.url
     assert "order" not in redirect.url.lower()
     assert "pay" not in redirect.url.lower()
-
-
-def test_unsafe_ota_redirect_parameters_fall_back_to_manual_instruction(monkeypatch):
-    plan = _plan()
-    monkeypatch.setenv("TRAVEL_SOURCE_OTA_PARTNER_REDIRECT_ENABLED", "true")
-    monkeypatch.setenv("TRAVEL_SOURCE_OTA_PARTNER_REDIRECT_LICENSE_STATUS", "APPROVED")
-    monkeypatch.setenv("OTA_PARTNER_ID", "partner_test")
-    monkeypatch.setenv("OTA_PARTNER_BASE_URL", "https://partner.example/booking")
-
-    redirect = create_booking_redirect(_redirect_request(plan, "OTA"), plan, environment="DEV")
-
-    assert redirect.url_available is False
-    assert redirect.url is None
-    assert "不代下单" in redirect.fallback_instruction

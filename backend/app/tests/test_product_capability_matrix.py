@@ -3,7 +3,7 @@ from pathlib import Path
 from app.data_sources.config_loader import PROJECT_ROOT, load_data_source_configs
 
 
-DOC_PATH = Path(PROJECT_ROOT) / "docs" / "PRODUCT_CAPABILITY_MATRIX.md"
+DOC_PATH = Path(PROJECT_ROOT) / "docs" / "old" / "PRODUCT_CAPABILITY_MATRIX.md"
 
 
 def _doc() -> str:

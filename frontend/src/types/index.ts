@@ -34,13 +34,14 @@ export type RecalculateChangeType = "SEAT_TYPE" | "CABIN_TYPE" | "LOCAL_TRANSFER
 export type SelectedOptionType = "SEAT" | "CABIN" | "TRANSFER_MODE";
 export type RecalculateScope = "PLAN_ONLY" | "PLAN_AND_RECOMMENDATION" | "FULL_REEVALUATION";
 export type DataSourceHealthStatus = "OK" | "DEGRADED" | "DOWN" | "DISABLED";
-export type PlanningStatus = "PENDING" | "RUNNING" | "PARTIAL" | "COMPLETE" | "FAILED";
+export type PlanningStatus = "PENDING" | "RUNNING" | "PARTIAL" | "COMPLETE" | "NO_MATCH" | "FAILED";
 export type AsyncJobStatus = "QUEUED" | "RUNNING" | "WAITING_SOURCE" | "PARTIAL_READY" | "COMPLETE" | "FAILED" | "CANCELLED";
 export type FeedbackCategory = "ROUTE_INACCURATE" | "PRICE_INACCURATE" | "REDIRECT_FAILED" | "HARD_TO_UNDERSTAND" | "OTHER";
 export type AppEventType =
   | "INPUT_SUBMITTED"
   | "PLANNING_SUCCESS"
   | "PLANNING_PARTIAL"
+  | "PLANNING_NO_MATCH"
   | "RECOMMENDATION_CLICK"
   | "REDIRECT_CLICK"
   | "FEEDBACK_SUBMITTED"
@@ -51,7 +52,7 @@ export type AppEventType =
   | "PREFERENCE_UPDATED";
 
 export type ErrorResponse = {
-  schema_version: "1.15";
+  schema_version: "1.16";
   request_id: string;
   error_code: string;
   message: string;
@@ -62,7 +63,7 @@ export type ErrorResponse = {
 };
 
 export type TravelRequest = {
-  schema_version: "1.15";
+  schema_version: "1.16";
   request_id: string;
   raw_user_input: string;
   origin_text: string;
@@ -76,14 +77,20 @@ export type TravelRequest = {
   preferred_departure_time?: TimePoint | null;
   preferences: string[];
   preference_source: string;
-  hard_constraints: Record<string, unknown>;
+  hard_constraints: {
+    latest_arrival_time?: TimePoint | null;
+    earliest_departure_time?: TimePoint | null;
+    max_total_cost?: Money | null;
+    allowed_transport_modes: string[];
+    excluded_transport_modes: string[];
+  };
   soft_preferences: Record<string, unknown>;
   preferred_rail_seat?: string | null;
   preferred_flight_cabin?: string | null;
 };
 
 export type LLMValidationResult = {
-  schema_version: "1.15";
+  schema_version: "1.16";
   schema_valid: boolean;
   semantic_valid: boolean;
   repair_attempted: boolean;
@@ -97,7 +104,7 @@ export type LLMValidationResult = {
 };
 
 export type ParseTravelRequestResponse = {
-  schema_version: "1.15";
+  schema_version: "1.16";
   request_id: string;
   trace_id: string;
   correlation_id: string;
@@ -232,7 +239,7 @@ export type DataQuality = {
 };
 
 export type TravelPlan = {
-  schema_version: "1.15";
+  schema_version: "1.16";
   plan_id: string;
   plan_name: string;
   plan_type: string;
@@ -255,7 +262,7 @@ export type TravelPlan = {
 };
 
 export type RecommendationSlot = {
-  schema_version: "1.15";
+  schema_version: "1.16";
   recommendation_type: "CHEAPEST" | "MOST_COMFORTABLE" | "BALANCED";
   status: "AVAILABLE" | "NOT_AVAILABLE" | "BLOCKED";
   plan_id: string | null;
@@ -263,7 +270,7 @@ export type RecommendationSlot = {
 };
 
 export type DestinationPresentation = {
-  schema_version: "1.15";
+  schema_version: "1.16";
   destination_key: string;
   display_name: string;
   hero_image_url: string;
@@ -298,8 +305,53 @@ export type AsyncJob = {
   polling_url: string | null;
 };
 
+export type ConstraintType =
+  | "LATEST_ARRIVAL"
+  | "EARLIEST_DEPARTURE"
+  | "ARRIVAL_TIME_WINDOW"
+  | "DEPARTURE_TIME_WINDOW"
+  | "MAX_TOTAL_COST"
+  | "ALLOWED_TRANSPORT_MODES"
+  | "EXCLUDED_TRANSPORT_MODES"
+  | "PREFERRED_RAIL_SEAT"
+  | "PREFERRED_FLIGHT_CABIN";
+
+export type ConstraintViolation = {
+  constraint_type: ConstraintType;
+  relaxation_policy: "USER_CONFIRMATION_REQUIRED";
+  requested_value: Record<string, unknown>;
+  actual_value: Record<string, unknown>;
+  deviation:
+    | { kind: "DURATION"; value: number; unit: "MINUTE"; direction: "EARLIER" | "LATER" }
+    | { kind: "MONEY"; amount_minor: number; currency: string; scale: number }
+    | { kind: "MODE_SET"; added_modes: string[]; removed_modes: string[] }
+    | { kind: "CATEGORICAL"; requested: string; actual: string };
+  reason_code: string;
+  user_visible_message: string;
+};
+
+export type RelaxationAlternative = {
+  alternative_id: string;
+  category: "CLOSEST_TO_TIME" | "CLOSEST_TO_BUDGET" | "LEAST_BEHAVIOR_CHANGE";
+  plan: TravelPlan;
+  violations: ConstraintViolation[];
+  preserved_constraints: ConstraintType[];
+  user_confirmation_required: true;
+};
+
+export type ConstraintAnalysis = {
+  result_type: "RELAXATION_AVAILABLE" | "NO_SAFE_ALTERNATIVE";
+  summary: string;
+  coverage: Array<{
+    transport_mode: string;
+    status: "VERIFIED" | "EMPTY" | "UNAVAILABLE" | "FAILED" | "TIMEOUT";
+    message: string;
+  }>;
+  alternatives: RelaxationAlternative[];
+};
+
 export type TravelPlanResponse = {
-  schema_version: "1.15";
+  schema_version: "1.16";
   request_id: string;
   trace_id: string;
   correlation_id: string;
@@ -310,6 +362,7 @@ export type TravelPlanResponse = {
   destination_presentation?: DestinationPresentation | null;
   plans: TravelPlan[];
   recommendation_result: { recommendations: RecommendationSlot[]; llm_validation_result: LLMValidationResult } | null;
+  constraint_analysis?: ConstraintAnalysis | null;
   source_failures: SourceFailure[];
   missing_components: string[];
   blocked_plan_types: string[];
@@ -319,7 +372,7 @@ export type TravelPlanResponse = {
 };
 
 export type RecalculateResponse = {
-  schema_version: "1.15";
+  schema_version: "1.16";
   request_id: string;
   trace_id: string;
   correlation_id: string;
@@ -337,7 +390,7 @@ export type RecalculateResponse = {
 };
 
 export type DataSourceStatusResponse = {
-  schema_version: "1.15";
+  schema_version: "1.16";
   sources: Array<{
     source_id: string;
     source_name: string;
@@ -353,7 +406,7 @@ export type DataSourceStatusResponse = {
 };
 
 export type FeedbackResponse = {
-  schema_version: "1.15";
+  schema_version: "1.16";
   feedback_id: string;
   request_id: string;
   trace_id: string;

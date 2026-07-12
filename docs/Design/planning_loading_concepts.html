@@ -1,0 +1,626 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>规划中加载态优化设计稿</title>
+    <style>
+      :root {
+        --ink: #142326;
+        --muted: #607174;
+        --line: #dbe7e8;
+        --teal: #126b75;
+        --teal-soft: #e7f4f4;
+        --mint: #32d6bf;
+        --gold: #f3b95b;
+        --bg: #f4f8f8;
+        --card: #ffffff;
+        --shadow: 0 18px 45px rgba(18, 52, 58, 0.14);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        background:
+          radial-gradient(circle at 15% 5%, rgba(50, 214, 191, 0.18), transparent 28%),
+          linear-gradient(180deg, #eef7f7 0%, #f8fbfb 42%, #eef5f4 100%);
+        color: var(--ink);
+        font-family:
+          -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei",
+          sans-serif;
+      }
+
+      .page {
+        max-width: 1280px;
+        margin: 0 auto;
+        padding: 36px 24px 52px;
+      }
+
+      .intro {
+        max-width: 760px;
+        margin-bottom: 24px;
+      }
+
+      .eyebrow {
+        color: var(--teal);
+        font-size: 13px;
+        font-weight: 800;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      h1 {
+        margin: 10px 0 10px;
+        font-size: 32px;
+        line-height: 1.18;
+      }
+
+      .lead {
+        margin: 0;
+        color: var(--muted);
+        font-size: 16px;
+        line-height: 1.7;
+      }
+
+      .concepts {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 24px;
+        align-items: start;
+      }
+
+      .concept {
+        display: grid;
+        gap: 12px;
+      }
+
+      .caption {
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.55;
+        min-height: 62px;
+      }
+
+      .phone {
+        width: 390px;
+        max-width: 100%;
+        aspect-ratio: 390 / 844;
+        border: 10px solid #13282d;
+        border-radius: 38px;
+        background: #13282d;
+        box-shadow: var(--shadow);
+        overflow: hidden;
+      }
+
+      .screen {
+        height: 100%;
+        border-radius: 28px;
+        background: var(--bg);
+        overflow: hidden;
+        position: relative;
+      }
+
+      .status {
+        height: 34px;
+        display: flex;
+        align-items: end;
+        justify-content: space-between;
+        padding: 0 22px 7px;
+        color: #10272c;
+        font-size: 12px;
+        font-weight: 700;
+      }
+
+      .scroll {
+        height: calc(100% - 96px);
+        overflow: hidden;
+        padding: 18px 18px 22px;
+      }
+
+      .topbar {
+        margin-bottom: 16px;
+      }
+
+      .app-title {
+        margin: 0;
+        font-size: 28px;
+        letter-spacing: 0;
+      }
+
+      .subtitle {
+        margin: 4px 0 0;
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.45;
+      }
+
+      .state-card {
+        background: var(--card);
+        border: 1px solid rgba(219, 231, 232, 0.9);
+        border-radius: 8px;
+        padding: 16px;
+        box-shadow: 0 10px 28px rgba(18, 52, 58, 0.08);
+      }
+
+      .headline {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 12px;
+      }
+
+      .headline h2 {
+        margin: 0;
+        font-size: 22px;
+        line-height: 1.22;
+      }
+
+      .micro {
+        margin: 6px 0 0;
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.5;
+      }
+
+      .pill {
+        flex: 0 0 auto;
+        border-radius: 999px;
+        background: var(--teal-soft);
+        color: var(--teal);
+        font-size: 12px;
+        font-weight: 800;
+        padding: 7px 10px;
+      }
+
+      .map-shell {
+        margin-top: 16px;
+        border-radius: 8px;
+        overflow: hidden;
+        background: #183b42;
+        min-height: 230px;
+        position: relative;
+      }
+
+      .map-shell img {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
+        opacity: 0.9;
+        transform: scale(1.02);
+      }
+
+      .flow {
+        position: absolute;
+        inset: 0 auto 0 0;
+        width: 68%;
+        overflow: hidden;
+        animation: widen 6s ease-in-out infinite alternate;
+      }
+
+      .flow img {
+        width: 149%;
+        max-width: none;
+        opacity: 1;
+        filter: drop-shadow(0 0 16px rgba(50, 214, 191, 0.45));
+      }
+
+      .scan {
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        width: 42px;
+        left: 46%;
+        background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.26), transparent);
+        animation: scan 2.4s ease-in-out infinite;
+      }
+
+      .route-card {
+        margin-top: 12px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 12px;
+        background: #fbfefe;
+      }
+
+      .route-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        font-size: 13px;
+        font-weight: 800;
+      }
+
+      .route-row span {
+        color: var(--muted);
+        font-weight: 700;
+      }
+
+      .progress-line {
+        height: 6px;
+        margin-top: 10px;
+        border-radius: 999px;
+        background: #d9ecec;
+        overflow: hidden;
+      }
+
+      .progress-line::before {
+        content: "";
+        display: block;
+        width: 72%;
+        height: 100%;
+        border-radius: inherit;
+        background: linear-gradient(90deg, var(--teal), var(--mint));
+        animation: pulse-width 3s ease-in-out infinite alternate;
+      }
+
+      .insight-list {
+        display: grid;
+        gap: 8px;
+        margin-top: 12px;
+      }
+
+      .insight {
+        display: flex;
+        gap: 9px;
+        align-items: flex-start;
+        color: #314549;
+        font-size: 13px;
+        line-height: 1.45;
+      }
+
+      .dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 999px;
+        margin-top: 5px;
+        background: var(--mint);
+        box-shadow: 0 0 0 5px rgba(50, 214, 191, 0.12);
+      }
+
+      .timeline {
+        display: grid;
+        gap: 10px;
+        margin-top: 16px;
+      }
+
+      .step {
+        display: grid;
+        grid-template-columns: 24px 1fr auto;
+        align-items: center;
+        gap: 10px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fbfefe;
+        padding: 11px 10px;
+      }
+
+      .step-mark {
+        width: 24px;
+        height: 24px;
+        border-radius: 999px;
+        background: #dcebec;
+        display: grid;
+        place-items: center;
+      }
+
+      .step.active .step-mark {
+        background: rgba(50, 214, 191, 0.16);
+      }
+
+      .step.active .step-mark::before {
+        content: "";
+        width: 9px;
+        height: 9px;
+        border-radius: 999px;
+        background: var(--mint);
+        animation: pop 1.2s ease-in-out infinite;
+      }
+
+      .step.done .step-mark {
+        background: var(--teal);
+        color: #fff;
+      }
+
+      .step.done .step-mark::before {
+        content: "✓";
+        font-size: 13px;
+        font-weight: 900;
+      }
+
+      .step-title {
+        font-size: 13px;
+        font-weight: 850;
+      }
+
+      .step-copy {
+        margin-top: 2px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .step-time {
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 700;
+      }
+
+      .summary-strip {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 8px;
+        margin-top: 14px;
+      }
+
+      .metric {
+        border-radius: 8px;
+        background: #eef7f7;
+        padding: 10px 8px;
+      }
+
+      .metric b {
+        display: block;
+        font-size: 16px;
+      }
+
+      .metric span {
+        color: var(--muted);
+        font-size: 11px;
+      }
+
+      .result-skeleton {
+        margin-top: 14px;
+        display: grid;
+        gap: 10px;
+      }
+
+      .s-card {
+        border-radius: 8px;
+        border: 1px solid var(--line);
+        background: linear-gradient(110deg, #ffffff 0%, #eef7f7 45%, #ffffff 90%);
+        background-size: 220% 100%;
+        animation: shimmer 1.8s linear infinite;
+        height: 78px;
+      }
+
+      .bottom-tabs {
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        height: 62px;
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        border-top: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.92);
+        backdrop-filter: blur(16px);
+      }
+
+      .tab {
+        display: grid;
+        place-items: center;
+        color: var(--muted);
+        font-size: 13px;
+        font-weight: 800;
+      }
+
+      .tab.active {
+        color: var(--teal);
+      }
+
+      .cancel {
+        margin-top: 14px;
+        width: 100%;
+        height: 42px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #f6fbfb;
+        color: var(--teal);
+        font-weight: 850;
+      }
+
+      .floating-tip {
+        margin-top: 12px;
+        border-radius: 8px;
+        background: #fff8ed;
+        color: #725123;
+        padding: 11px 12px;
+        font-size: 12px;
+        line-height: 1.5;
+      }
+
+      @keyframes widen {
+        from { width: 45%; }
+        to { width: 92%; }
+      }
+
+      @keyframes scan {
+        0% { transform: translateX(-170px); opacity: 0; }
+        20% { opacity: 1; }
+        80% { opacity: 1; }
+        100% { transform: translateX(220px); opacity: 0; }
+      }
+
+      @keyframes pulse-width {
+        from { width: 48%; }
+        to { width: 78%; }
+      }
+
+      @keyframes pop {
+        0%, 100% { transform: scale(0.82); opacity: 0.72; }
+        50% { transform: scale(1.15); opacity: 1; }
+      }
+
+      @keyframes shimmer {
+        from { background-position: 120% 0; }
+        to { background-position: -120% 0; }
+      }
+
+      @media (max-width: 1180px) {
+        .concepts {
+          grid-template-columns: 1fr;
+        }
+
+        .phone {
+          width: 390px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="page">
+      <section class="intro">
+        <div class="eyebrow">Planning Loading Concepts</div>
+        <h1>规划中加载态优化方向</h1>
+        <p class="lead">
+          当前世界地图水流进度有旅行感，但用户等待 50-120 秒时，仅看动画会缺少可解释性。
+          下面三版分别强化“目的地情绪”“可信进展”和“结果预告”，可以按产品气质选择一种主方向。
+        </p>
+      </section>
+
+      <section class="concepts">
+        <article class="concept">
+          <div>
+            <strong>方案 A：地图沉浸感加强</strong>
+            <p class="caption">保留现有地图资产，增加路线意图、扫描光和下一步文案。适合最小改动，但观感会明显更完整。</p>
+          </div>
+          <div class="phone">
+            <div class="screen">
+              <div class="status"><span>9:41</span><span>5G  82%</span></div>
+              <div class="scroll">
+                <header class="topbar">
+                  <h2 class="app-title">路明</h2>
+                  <p class="subtitle">正在把需求拆成门到门方案。</p>
+                </header>
+                <section class="state-card">
+                  <div class="headline">
+                    <div>
+                      <h2>正在为你探路</h2>
+                      <p class="micro">优先查找真实可验证的车次、航班和接驳时间。</p>
+                    </div>
+                    <div class="pill">约 1 分钟</div>
+                  </div>
+                  <div class="map-shell">
+                    <img src="../../frontend/assets/maps/world-map.png" alt="" />
+                    <div class="flow"><img src="../../frontend/assets/maps/world-map-flow.png" alt="" /></div>
+                    <div class="scan"></div>
+                  </div>
+                  <div class="route-card">
+                    <div class="route-row">上海虹桥 <span>到</span> 青岛市南</div>
+                    <div class="progress-line"></div>
+                  </div>
+                  <div class="insight-list">
+                    <div class="insight"><i class="dot"></i><span>正在比较高铁直达、航班和市内接驳组合。</span></div>
+                    <div class="insight"><i class="dot"></i><span>规划结果会保留数据来源和不可用原因。</span></div>
+                  </div>
+                  <button class="cancel">取消规划</button>
+                </section>
+              </div>
+              <nav class="bottom-tabs"><div class="tab">云起</div><div class="tab active">路明</div></nav>
+            </div>
+          </div>
+        </article>
+
+        <article class="concept">
+          <div>
+            <strong>方案 B：可信任务流</strong>
+            <p class="caption">不伪装后端真实阶段，用“正在处理的能力模块”表达进展。更适合真实数据产品，能降低用户对等待的疑虑。</p>
+          </div>
+          <div class="phone">
+            <div class="screen">
+              <div class="status"><span>9:41</span><span>5G  82%</span></div>
+              <div class="scroll">
+                <header class="topbar">
+                  <h2 class="app-title">路明</h2>
+                  <p class="subtitle">我们会先查真实来源，再生成推荐。</p>
+                </header>
+                <section class="state-card">
+                  <div class="headline">
+                    <div>
+                      <h2>正在核对路线</h2>
+                      <p class="micro">耗时取决于第三方来源响应；你可以留在本页等待。</p>
+                    </div>
+                    <div class="pill">进行中</div>
+                  </div>
+                  <div class="timeline">
+                    <div class="step done">
+                      <i class="step-mark"></i>
+                      <div><div class="step-title">理解出行需求</div><div class="step-copy">出发地、目的地、时间偏好</div></div>
+                      <div class="step-time">完成</div>
+                    </div>
+                    <div class="step active">
+                      <i class="step-mark"></i>
+                      <div><div class="step-title">查询可验证来源</div><div class="step-copy">铁路、航班、市内接驳</div></div>
+                      <div class="step-time">等待</div>
+                    </div>
+                    <div class="step">
+                      <i class="step-mark"></i>
+                      <div><div class="step-title">组合门到门方案</div><div class="step-copy">成本、耗时、舒适度</div></div>
+                      <div class="step-time">稍后</div>
+                    </div>
+                    <div class="step">
+                      <i class="step-mark"></i>
+                      <div><div class="step-title">生成推荐理由</div><div class="step-copy">展示边界和风险提示</div></div>
+                      <div class="step-time">稍后</div>
+                    </div>
+                  </div>
+                  <div class="floating-tip">不会用估算票价补结果；如果来源不可用，会告诉你缺了什么。</div>
+                  <button class="cancel">取消规划</button>
+                </section>
+              </div>
+              <nav class="bottom-tabs"><div class="tab">云起</div><div class="tab active">路明</div></nav>
+            </div>
+          </div>
+        </article>
+
+        <article class="concept">
+          <div>
+            <strong>方案 C：结果预告骨架</strong>
+            <p class="caption">让用户提前感知“等完会得到什么”。等待不再是一张空状态，而是逐步长出推荐卡的雏形。</p>
+          </div>
+          <div class="phone">
+            <div class="screen">
+              <div class="status"><span>9:41</span><span>5G  82%</span></div>
+              <div class="scroll">
+                <header class="topbar">
+                  <h2 class="app-title">路明</h2>
+                  <p class="subtitle">正在整理候选方案，完成后自动展示推荐。</p>
+                </header>
+                <section class="state-card">
+                  <div class="headline">
+                    <div>
+                      <h2>方案正在成形</h2>
+                      <p class="micro">先返回可靠候选，再挑出最值得看的三条。</p>
+                    </div>
+                    <div class="pill">72%</div>
+                  </div>
+                  <div class="summary-strip">
+                    <div class="metric"><b>3+</b><span>推荐维度</span></div>
+                    <div class="metric"><b>真实</b><span>来源优先</span></div>
+                    <div class="metric"><b>边界</b><span>清晰说明</span></div>
+                  </div>
+                  <div class="result-skeleton">
+                    <div class="s-card"></div>
+                    <div class="s-card"></div>
+                    <div class="s-card"></div>
+                  </div>
+                  <div class="insight-list">
+                    <div class="insight"><i class="dot"></i><span>即将展示：最省钱、最舒适、综合推荐。</span></div>
+                    <div class="insight"><i class="dot"></i><span>可点进详情查看每一段接驳与跳转入口。</span></div>
+                  </div>
+                  <button class="cancel">取消规划</button>
+                </section>
+              </div>
+              <nav class="bottom-tabs"><div class="tab">云起</div><div class="tab active">路明</div></nav>
+            </div>
+          </div>
+        </article>
+      </section>
+    </main>
+  </body>
+</html>

@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import logging
+from time import perf_counter
 from contextlib import asynccontextmanager
 from uuid import uuid4
 
@@ -11,6 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.core.context import get_context, new_context
+from app.core.logging import configure_logging
 from app.core.security import evaluate_request_security
 from app.data_sources.config_loader import load_data_source_configs, runtime_statuses
 from app.data_sources.redirect_providers import create_booking_redirect
@@ -43,6 +46,10 @@ from app.services.persistence import init_persistence
 from app.services.planner import plan_trip, recalculate_plan
 from app.services.store import get_async_job_by_idempotency, get_async_job_response, get_plan, get_recalculate_response, save_async_job_response, save_feedback, save_recalculate_response, save_response
 
+configure_logging()
+logger = logging.getLogger("app.api")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     load_data_source_configs()
@@ -64,10 +71,24 @@ app.add_middleware(
 
 @app.middleware("http")
 async def attach_context(request: Request, call_next):
+    started_at = perf_counter()
     request.state.ctx = new_context(request)
     decision = evaluate_request_security(request)
     request.state.device_id = decision.device_id
     if not decision.allowed:
+        duration_ms = (perf_counter() - started_at) * 1000
+        logger.warning(
+            "http_request_blocked method=%s path=%s status_code=%s duration_ms=%.1f request_id=%s trace_id=%s correlation_id=%s device_id=%s error_code=%s",
+            request.method,
+            request.url.path,
+            decision.status_code,
+            duration_ms,
+            request.state.ctx.request_id,
+            request.state.ctx.trace_id,
+            request.state.ctx.correlation_id,
+            decision.device_id,
+            decision.error_code or "REQUEST_BLOCKED",
+        )
         return error_payload(
             request,
             decision.error_code or "REQUEST_BLOCKED",
@@ -76,11 +97,37 @@ async def attach_context(request: Request, call_next):
             decision.status_code,
             retryable=decision.status_code == 429,
         )
-    response = await call_next(request)
+    try:
+        response = await call_next(request)
+    except Exception:
+        duration_ms = (perf_counter() - started_at) * 1000
+        logger.exception(
+            "http_request_error method=%s path=%s duration_ms=%.1f request_id=%s trace_id=%s correlation_id=%s device_id=%s",
+            request.method,
+            request.url.path,
+            duration_ms,
+            request.state.ctx.request_id,
+            request.state.ctx.trace_id,
+            request.state.ctx.correlation_id,
+            decision.device_id,
+        )
+        raise
     response.headers["x-request-id"] = request.state.ctx.request_id
     response.headers["x-trace-id"] = request.state.ctx.trace_id
     response.headers["x-correlation-id"] = request.state.ctx.correlation_id
     response.headers["x-device-id"] = decision.device_id
+    duration_ms = (perf_counter() - started_at) * 1000
+    logger.info(
+        "http_request method=%s path=%s status_code=%s duration_ms=%.1f request_id=%s trace_id=%s correlation_id=%s device_id=%s",
+        request.method,
+        request.url.path,
+        response.status_code,
+        duration_ms,
+        request.state.ctx.request_id,
+        request.state.ctx.trace_id,
+        request.state.ctx.correlation_id,
+        decision.device_id,
+    )
     return response
 
 
@@ -345,7 +392,7 @@ def _complete_plan_job(job_id: str, travel_request: TravelRequest, ctx, created_
         return
     try:
         final = plan_trip(travel_request, ctx)
-        if final.planning_status == PlanningStatus.COMPLETE:
+        if final.planning_status in {PlanningStatus.COMPLETE, PlanningStatus.NO_MATCH}:
             job_status = AsyncJobStatus.COMPLETE
         elif final.planning_status == PlanningStatus.FAILED:
             job_status = AsyncJobStatus.FAILED

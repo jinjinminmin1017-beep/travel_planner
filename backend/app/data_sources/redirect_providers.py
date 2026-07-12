@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Protocol
@@ -124,24 +123,6 @@ class BaiduUriRedirectProvider:
         return _redirect(request.redirect_type, f"https://api.map.baidu.com/direction?{urlencode(params)}", self.metadata)
 
 
-class OtaPartnerRedirectProvider:
-    source_id = "ota_partner_redirect"
-
-    def __init__(self, metadata: DataSourceMetadata, partner_id: str, base_url: str) -> None:
-        self.metadata = metadata
-        self.partner_id = partner_id
-        self.base_url = base_url.rstrip("/")
-
-    def create_redirect(self, request: BookingRedirectRequest, plan: TravelPlan) -> BookingRedirect:
-        params = {
-            "partner_id": self.partner_id,
-            "plan_id": plan.plan_id,
-            "plan_type": plan.plan_type,
-            "redirect_only": "true",
-        }
-        return _redirect(request.redirect_type, f"{self.base_url}?{urlencode(params)}", self.metadata)
-
-
 def create_booking_redirect(request: BookingRedirectRequest, plan: TravelPlan, environment: str | None = None) -> BookingRedirect:
     provider = _select_provider(request.redirect_type, environment)
     if provider:
@@ -163,18 +144,13 @@ def _select_provider(redirect_type: str, environment: str | None = None) -> Book
             return AmapUriRedirectProvider(configs["amap_uri_redirect"].metadata)
         if "baidu_uri_redirect" in configs:
             return BaiduUriRedirectProvider(configs["baidu_uri_redirect"].metadata)
-    if redirect_type == "OTA" and "ota_partner_redirect" in configs:
-        base_url = os.getenv("OTA_PARTNER_BASE_URL")
-        partner_id = os.getenv("OTA_PARTNER_ID")
-        if base_url and partner_id:
-            return OtaPartnerRedirectProvider(configs["ota_partner_redirect"].metadata, partner_id, base_url)
     return None
 
 
 def _enabled_redirect_configs(environment: str | None = None) -> list[_ResolvedConfig]:
     resolved: list[_ResolvedConfig] = []
     for config in load_data_source_configs(environment):
-        if config.source_id not in {"rail_12306_redirect", "airline_official_redirect", "amap_uri_redirect", "baidu_uri_redirect", "ota_partner_redirect"}:
+        if config.source_id not in {"rail_12306_redirect", "airline_official_redirect", "amap_uri_redirect", "baidu_uri_redirect"}:
             continue
         if not config.enabled or config.license_status != "APPROVED" or not has_required_secret(config.source_id):
             continue
@@ -227,7 +203,6 @@ def _fallback_redirect(redirect_type: str) -> BookingRedirect:
     labels = {
         "RAIL_12306": "12306 官方网站或 App",
         "AIRLINE": "对应航司官网或 App",
-        "OTA": "合作 OTA 或常用购票平台",
         "MAP_NAVIGATION": "高德/百度地图",
         "RIDE_HAILING": "打车平台",
     }

@@ -19,13 +19,12 @@ from app.data_sources.config_loader import load_data_source_configs, required_se
 from app.models.schemas import DataSourceConfig  # noqa: E402
 
 REQUIRED_FOR_FULL_LIVE_PLANNING = {
-    "amadeus_flight_offers": "航班报价搜索",
-    "amadeus_flight_price": "航班报价确认",
-    "rail_authorized_partner": "铁路时刻、票价和余票",
+    "airline_mu_public_query": "东航官方公开前端航班采集",
+    "airline_cz_public_query": "南航官方公开前端航班采集",
+    "airline_sc_public_query": "山航官方公开前端航班采集",
 }
 SECRET_TIER_SOURCES = {
-    "flight": ("amadeus_flight_offers", "amadeus_flight_price"),
-    "rail": ("rail_authorized_partner",),
+    "flight": ("airline_mu_public_query", "airline_cz_public_query", "airline_sc_public_query"),
 }
 MAP_PROVIDER_SOURCE_IDS = ("amap_route", "baidu_map_route", "osrm_route")
 PUBLIC_READ_ONLY_SOURCE_IDS = {
@@ -33,7 +32,7 @@ PUBLIC_READ_ONLY_SOURCE_IDS = {
     "nominatim_geocode": "地点解析辅助",
     "opensky_states": "航班动态辅助",
     "open_meteo_forecast": "天气风险辅助",
-    "irail_connections": "铁路公开时刻辅助",
+    "rail_12306_public_query": "12306 公开匿名车次、票价和有票席别查询",
     "rail_12306_redirect": "12306 官方入口跳转",
     "airline_official_redirect": "航司官网跳转",
     "amap_uri_redirect": "地图导航跳转",
@@ -139,10 +138,12 @@ def validate_secret_tier(selected_sources: list[str]) -> list[str]:
                 reason = status.degraded_reason or status.health_status
                 failures.append(f"{source_id}: 状态不是 OK（{reason}），无法用于{purpose}")
                 continue
-            if source_id in {"amadeus_flight_offers", "amadeus_flight_price"}:
-                base_url = (os.getenv("AMADEUS_BASE_URL") or "https://test.api.amadeus.com").rstrip("/")
-                if base_url not in {"https://test.api.amadeus.com", "https://api.amadeus.com"}:
-                    failures.append(f"{source_id}: AMADEUS_BASE_URL={base_url} 不在允许列表")
+            if source_id in SECRET_TIER_SOURCES["flight"]:
+                base_url = (os.getenv(_env_key(source_id, "BASE_URL")) or "").rstrip("/")
+                if not base_url:
+                    failures.append(f"{source_id}: 缺少 {_env_key(source_id, 'BASE_URL')}，无法执行官方公开前端采集")
+                if config.fallback_source_id is not None:
+                    failures.append(f"{source_id}: fallback_source_id 必须为空，航班核心事实缺失时应阻断方案")
     return failures
 
 
@@ -161,13 +162,7 @@ def validate_full_tier() -> list[str]:
     if ready_map is None:
         failures.append("map_route: 没有任何地图路线 Provider 处于 OK 状态，无法用于本地接驳路线与费用")
 
-    failures.extend(validate_secret_tier(["flight", "rail"]))
-    base_url = (os.getenv("AMADEUS_BASE_URL") or "https://test.api.amadeus.com").rstrip("/")
-    if base_url != "https://api.amadeus.com":
-        failures.append(
-            "amadeus_flight_offers/amadeus_flight_price: AMADEUS_BASE_URL 仍指向测试环境，"
-            "生产完整规划报价必须使用 https://api.amadeus.com"
-        )
+    failures.extend(validate_secret_tier(["flight"]))
     return failures
 
 
@@ -179,8 +174,8 @@ def _print_failures(title: str, failures: list[str]) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Check real API provider configuration at CI-safe tiers.")
-    parser.add_argument("--tier", choices=("public", "secret", "full"), default="public", help="public is no-key CI-safe; secret checks selected keyed providers; full requires all production providers.")
-    parser.add_argument("--source", action="append", choices=tuple(SECRET_TIER_SOURCES), help="Secret provider group to check. Repeatable. Defaults to flight and rail for --tier secret.")
+    parser.add_argument("--tier", choices=("public", "secret", "full"), default="public", help="public is no-key CI-safe; secret checks explicitly approved non-default providers; full requires all production providers.")
+    parser.add_argument("--source", action="append", choices=tuple(SECRET_TIER_SOURCES), help="Non-default provider group to check. Repeatable. Defaults to flight for --tier secret.")
     args = parser.parse_args()
 
     if args.tier == "public":

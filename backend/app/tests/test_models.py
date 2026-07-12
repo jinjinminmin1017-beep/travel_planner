@@ -53,7 +53,7 @@ def test_error_response_required_fields_and_extra_forbidden():
         details=None,
         generated_at=now_timepoint(),
     )
-    assert payload.schema_version == "1.15"
+    assert payload.schema_version == "1.16"
     with pytest.raises(ValidationError):
         ErrorResponse(
             request_id="req_1",
@@ -73,12 +73,12 @@ def test_source_failure_has_failure_id_and_trace_fields():
         request_id="req_1",
         trace_id="trace_1",
         correlation_id="corr_1",
-        source_id="rail_authorized_partner",
-        adapter_name="AuthorizedRailPartnerProvider",
+        source_id="rail_12306_public_query",
+        adapter_name="Official12306RailProvider",
         handling_strategy=SourceFailureHandlingStrategy.PARTIAL_RESULT,
         error_code=None,
         retry_count=0,
-        source_used_id="rail_authorized_partner",
+        source_used_id="rail_12306_public_query",
         fallback_source_id=None,
         fallback_reason=None,
         fallback_used=False,
@@ -133,7 +133,7 @@ def test_recalculate_request_change_type_must_match_option_type():
         )
 
 
-def test_travel_plan_response_supports_running_and_failed_status_examples():
+def test_travel_plan_response_supports_running_failed_and_no_match_status_examples():
     travel_request = TravelRequest(
         request_id="req_status_examples",
         raw_user_input="我 2026 年 5 月 21 日从上海到青岛",
@@ -181,6 +181,21 @@ def test_travel_plan_response_supports_running_and_failed_status_examples():
         user_visible_warnings=["核心事实缺失，当前无法生成可用方案。"],
         async_job=None,
     )
+    no_match = TravelPlanResponse(
+        **common,
+        planning_status=PlanningStatus.NO_MATCH,
+        progress=100,
+        missing_components=[],
+        user_visible_warnings=[],
+        constraint_analysis={
+            "result_type": "NO_SAFE_ALTERNATIVE",
+            "summary": "没有安全备选。",
+            "coverage": [],
+            "alternatives": [],
+        },
+        async_job=None,
+    )
 
     assert running.planning_status == PlanningStatus.RUNNING
     assert failed.planning_status == PlanningStatus.FAILED
+    assert no_match.planning_status == PlanningStatus.NO_MATCH

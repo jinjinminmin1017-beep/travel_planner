@@ -175,3 +175,77 @@ REAL_LLM_MAX_TOKENS=800
 - 风险：部分非智谱 OpenAI-compatible Provider 可能不接受顶层 `thinking` 字段。
 - 推荐实现：仅当 `REAL_LLM_THINKING_DISABLED` 未显式设为 `false` 时发送 `thinking={"type":"disabled"}`，默认关闭；或至少保证当前智谱 GLM 配置可用。
 - 回滚方式：移除请求体中的 `thinking` 字段，保留 `max_tokens` 配置不影响 OpenAI-compatible 常见接口。
+
+---
+
+## ARC-20260712-01 实现约束无匹配分析与最近备选
+
+来源：架构任务，2026-07-12。
+
+完成状态：已完成。完成时间：2026-07-12 08:41:29 +08:00。代码提交：因工作区包含用户既有未提交改动，尚未创建可安全归属的提交。
+
+### 背景
+
+当前真实候选全部被时间、预算或交通方式硬约束过滤后，会返回 `FAILED + plans=[]`。需要区分系统失败与业务无匹配，并向用户返回安全、可验证、可解释的最近备选。
+
+详细目标设计见：
+
+- `docs/ARCHITECTURE.md` “约束无匹配与最近备选架构”
+- `docs/API_CONTRACT.md` “约束无匹配目标契约（V1.16）”
+
+### 开发范围
+
+- 后端 Schema：`backend/app/models/schemas.py`
+- 约束模块：`backend/app/services/constraints/`
+- 编排：`backend/app/services/planner.py`
+- 候选生成：`backend/app/services/candidate_generator.py`
+- 异步状态：`backend/app/main.py`
+- 持久化/可观测性：`backend/app/services/store.py`、`persistence.py`、`observability.py`
+- 前端类型/API：`frontend/src/types/index.ts`、`frontend/src/api/client.ts`
+- 前端页面：优先新增独立约束无匹配组件，避免继续堆入 `App.tsx`
+- 导出 Schema：`schemas/*.schema.json`
+
+### 后端任务
+
+1. 将 schema version 升级到 `1.16`，增加 `PlanningStatus.NO_MATCH`、`ConstraintAnalysis`、`CoverageItem`、`RelaxationAlternative`、`ConstraintViolation` 和分类型 `Deviation`。
+2. 新建约束模块，实现时间、预算、交通方式、席位/舱位计算器的统一接口。
+3. 实现安全/合规门禁；核心事实不完整、`RiskLevel.BLOCKED` 的方案不得作为备选。
+4. 从 `planner.py`、`candidate_generator.py` 移除重复硬约束判断，统一消费约束评估结果。
+5. 保留过滤前可靠候选；正常候选为空时执行 Pareto 筛选和三个赛道选择，最多返回 3 条并按 plan_id 去重。
+6. `NO_MATCH` 返回 `plans=[]`、`recommendation_result=null`；备选 plan 使用 `recommendation_eligibility=NOT_RECOMMENDED`、`can_be_selected_by_llm=false`。
+7. 异步 `NO_MATCH` 映射到 `AsyncJobStatus.COMPLETE`，不能映射为 FAILED。
+8. 使用确定性模板生成摘要，并根据 coverage 限定“铁路中最早”或“所有已验证方式中最早”等结论。
+9. 增加功能开关，关闭时保留旧的失败行为，便于灰度和回滚。
+10. 增加结构化日志与指标：候选数、过滤数、备选数、违反类型、coverage、NO_MATCH 次数；不记录完整用户输入或敏感数据。
+
+### 前端任务
+
+1. 同步 V1.16 类型和 `NO_MATCH` 枚举。
+2. 轮询把 `NO_MATCH + job COMPLETE` 识别为正常终态，新增 `PLANNING_NO_MATCH` 埋点，不得记为规划失败或普通成功。
+3. 新增约束无匹配页面，显示后端 summary、coverage、偏差和最多 3 个备选赛道。
+4. 备选卡持续显示“不满足原始要求”，不得混入正常推荐卡。
+5. 用户可以查看备选详情；未确认放宽前隐藏/禁用购票跳转。
+6. 用户确认后，根据结构化 violation 更新 `TravelRequest` 并发起新的异步规划，不直接把备选提升成正常方案。
+7. `NO_SAFE_ALTERNATIVE` 只显示约束说明与修改需求入口。
+
+### 非目标
+
+- 不让 LLM 计算偏差、决定安全门禁或选择放宽规则。
+- 不实现跨单位通用总分。
+- 第一期不引入数据库迁移。
+- 第一期不实现余票人数、无障碍、签证等尚无稳定结构化输入的计算器。
+
+### 验收标准
+
+- 查询完成但无匹配时返回 HTTP 200 + `planning_status=NO_MATCH`。
+- 当前温州到武汉 18:00 前到达案例能返回已验证铁路中最早到达备选；航班未启用时明确限定结论范围。
+- 危险换乘和核心事实不完整方案不会进入备选。
+- “晚到 10 分钟/不超预算”和“按时/超预算 20 元”可并列存在，不产生跨单位总分。
+- 正常 COMPLETE/PARTIAL 结果不回退。
+- 执行并通过后端测试、前端 typecheck、前端 helper tests 和 schema export diff 检查。
+
+### 风险与回滚
+
+- 前后端必须同步发布 V1.16；新枚举会影响穷举逻辑。
+- 通过功能开关关闭 constraint analysis 后回到旧行为。
+- 回滚不得修改现有 Provider、推荐和正常结果结构。

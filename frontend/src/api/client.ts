@@ -82,7 +82,7 @@ export function recalculate(planId: string, segmentId: string, changeType: Recal
   return request<RecalculateResponse>("/api/travel/recalculate", {
     method: "POST",
     body: JSON.stringify({
-      schema_version: "1.15",
+      schema_version: "1.16",
       request_id: `req_ui_${Date.now()}`,
       idempotency_key: `idem_ui_${Date.now()}`,
       plan_id: planId,
@@ -103,7 +103,7 @@ export function bookingRedirect(planId: string, segmentId: string | null, redire
   return request<{ redirect: BookingRedirect }>("/api/redirect/booking", {
     method: "POST",
     body: JSON.stringify({
-      schema_version: "1.15",
+      schema_version: "1.16",
       request_id: `req_redirect_${Date.now()}`,
       idempotency_key: `idem_redirect_${Date.now()}`,
       plan_id: planId,
@@ -124,7 +124,7 @@ export function submitFeedback(payload: {
   return request<FeedbackResponse>("/api/feedback", {
     method: "POST",
     body: JSON.stringify({
-      schema_version: "1.15",
+      schema_version: "1.16",
       request_id: payload.requestId,
       trace_id: payload.traceId,
       correlation_id: payload.correlationId,
@@ -140,7 +140,7 @@ export function trackEvent(payload: { eventType: AppEventType; requestId?: strin
   return request<{ accepted: boolean }>("/api/events", {
     method: "POST",
     body: JSON.stringify({
-      schema_version: "1.15",
+      schema_version: "1.16",
       event_type: payload.eventType,
       request_id: payload.requestId ?? null,
       trace_id: payload.traceId ?? null,

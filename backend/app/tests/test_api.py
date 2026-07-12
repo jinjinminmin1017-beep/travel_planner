@@ -21,23 +21,20 @@ def _first_dynamic_rail_plan(plans):
 def _assert_no_legacy_runtime_plans(plans):
     plan_ids = {item["plan_id"] for item in plans}
     assert not any(plan_id.endswith("_shqd") or plan_id.endswith("_bg") for plan_id in plan_ids)
-    assert not any(
-        "flight" in plan_id or "mixed" in plan_id or "ticket" in plan_id or "buy_short" in plan_id or "blocked" in plan_id
-        for plan_id in plan_ids
-    )
+    assert not any("ticket" in plan_id or "buy_short" in plan_id or "blocked" in plan_id for plan_id in plan_ids)
 
 
 def test_health_and_data_source_status():
     health = client.get("/api/health")
     assert health.status_code == 200
-    assert health.json()["schema_version"] == "1.15"
+    assert health.json()["schema_version"] == "1.16"
 
     status = client.get("/api/data-sources/status")
     assert status.status_code == 200
     body = status.json()
-    assert body["schema_version"] == "1.15"
+    assert body["schema_version"] == "1.16"
     source_ids = {source["source_id"] for source in body["sources"]}
-    assert {"amap_route", "baidu_map_route", "amadeus_flight_offers", "rail_authorized_partner", "real_llm", "internal_calc"}.issubset(source_ids)
+    assert {"amap_route", "baidu_map_route", "airline_mu_public_query", "rail_12306_public_query", "real_llm", "internal_calc"}.issubset(source_ids)
     assert not any(source_id.startswith("simulated_") for source_id in source_ids)
     assert "source_id" in body["sources"][0]
     assert "qps_limit" not in body["sources"][0]
@@ -126,7 +123,7 @@ def test_parse_date_prefix_with_explicit_from_to_route():
     request = response.json()["travel_request"]
     assert request["origin_text"] == "上海东方明珠塔"
     assert request["destination_text"] == "云南洱海"
-    assert request["travel_date"] == "2026-06-26"
+    assert request["travel_date"] == "2027-06-26"
 
 
 def test_parse_preference_synonyms_and_text_order():
@@ -218,12 +215,12 @@ def test_parse_uses_llm_repair_once_when_enabled_provider_returns_invalid_output
         model_name = "test-intent-model"
 
         def parse_intent(self, raw_user_input, request_id, current_date, default_timezone):
-            return '{"schema_version":"1.15","origin_text":"","destination_text":"青岛金水假日酒店"}'
+            return '{"schema_version":"1.16","origin_text":"","destination_text":"青岛金水假日酒店"}'
 
         def repair_intent(self, raw_llm_output, invalid_reasons, raw_user_input, request_id):
             return (
                 "{"
-                '"schema_version":"1.15",'
+                '"schema_version":"1.16",'
                 f'"request_id":"{request_id}",'
                 f'"raw_user_input":"{raw_user_input}",'
                 '"origin_text":"上海嘉定南翔格林公馆",'
@@ -309,8 +306,10 @@ def test_plan_requeries_and_filters_by_arrival_time_constraint():
     )
     assert response.status_code == 200
     body = response.json()
-    assert body["planning_status"] == "FAILED"
-    assert "time_constraints" in body["missing_components"]
+    assert body["planning_status"] == "NO_MATCH"
+    assert body["plans"] == []
+    assert body["recommendation_result"] is None
+    assert body["constraint_analysis"]["alternatives"]
     assert any(item["reason_code"] == "TIME_CONSTRAINT_TOO_LATE" for item in body["missing_plan_explanations"])
 
 
@@ -327,11 +326,26 @@ def test_async_plan_returns_running_job_then_pollable_result():
     poll = client.get(body["async_job"]["polling_url"])
     assert poll.status_code == 200
     poll_body = poll.json()
-    assert poll_body["planning_status"] in {"PARTIAL", "COMPLETE", "FAILED"}
+    assert poll_body["planning_status"] in {"PARTIAL", "COMPLETE", "NO_MATCH", "FAILED"}
     assert poll_body["progress"] == 100
     assert poll_body["async_job"]["job_status"] in {"PARTIAL_READY", "COMPLETE", "FAILED"}
-    if poll_body["planning_status"] != "FAILED":
+    if poll_body["planning_status"] not in {"FAILED", "NO_MATCH"}:
         assert poll_body["plans"]
+
+
+def test_async_no_match_is_a_completed_business_job():
+    response = client.post(
+        "/api/travel/plan/async",
+        json={"raw_user_input": "我 2026 年 5 月 21 日，从上海到青岛，只看高铁，不坐飞机，中午12点前到。"},
+        headers={"idempotency-key": "idem_async_no_match_v116"},
+    )
+    assert response.status_code == 200
+    poll = client.get(response.json()["async_job"]["polling_url"])
+    body = poll.json()
+    assert body["planning_status"] == "NO_MATCH"
+    assert body["async_job"]["job_status"] == "COMPLETE"
+    assert body["plans"] == []
+    assert body["constraint_analysis"] is not None
 
 
 def test_async_plan_job_retry_starts_new_pollable_job():
@@ -361,7 +375,7 @@ def test_async_plan_uses_idempotency_key_to_reuse_job():
 
 def test_feedback_submission_is_traceable_and_rejects_sensitive_message():
     payload = {
-        "schema_version": "1.15",
+        "schema_version": "1.16",
         "request_id": "req_feedback",
         "trace_id": "trace_feedback",
         "correlation_id": "corr_feedback",
@@ -387,7 +401,7 @@ def test_feedback_submission_is_traceable_and_rejects_sensitive_message():
 
 def test_app_event_submission_updates_metrics_and_rejects_sensitive_metadata():
     payload = {
-        "schema_version": "1.15",
+        "schema_version": "1.16",
         "event_type": "INPUT_SUBMITTED",
         "request_id": "req_event",
         "trace_id": "trace_event",
@@ -410,7 +424,7 @@ def test_growth_retention_events_are_counted_without_sensitive_payloads():
         response = client.post(
             "/api/events",
             json={
-                "schema_version": "1.15",
+                "schema_version": "1.16",
                 "event_type": event_type,
                 "request_id": "req_growth",
                 "trace_id": "trace_growth",
@@ -428,7 +442,7 @@ def test_growth_retention_events_are_counted_without_sensitive_payloads():
     blocked = client.post(
         "/api/events",
         json={
-            "schema_version": "1.15",
+            "schema_version": "1.16",
             "event_type": "PREFERENCE_UPDATED",
             "request_id": "req_growth",
             "trace_id": "trace_growth",
@@ -479,7 +493,7 @@ def test_plan_returns_failed_business_response_when_core_providers_return_empty(
         "app.services.planner.search_rail_offers_with_enabled_provider_result",
         lambda request, environment=None: RailProviderSearchResult(
             offers=[],
-            attempted_source_ids=["rail_authorized_partner"],
+            attempted_source_ids=["rail_12306_public_query"],
             failure_message="rail empty result",
         ),
     )
@@ -487,7 +501,7 @@ def test_plan_returns_failed_business_response_when_core_providers_return_empty(
         "app.services.planner.search_flight_offers_with_enabled_provider_result",
         lambda request, environment=None: FlightProviderSearchResult(
             offers=[],
-            attempted_source_ids=["amadeus_flight_offers"],
+            attempted_source_ids=["airline_mu_public_query"],
             failure_message="flight empty result",
         ),
     )
@@ -500,7 +514,7 @@ def test_plan_returns_failed_business_response_when_core_providers_return_empty(
     assert body["recommendation_result"] is None
     assert "travel_plan" in body["missing_components"]
     assert "rail_core_fact" in body["missing_components"]
-    assert any(failure["source_id"] == "rail_authorized_partner" for failure in body["source_failures"])
+    assert any(failure["source_id"] == "rail_12306_public_query" for failure in body["source_failures"])
 
 
 def test_plan_uses_real_llm_recommendations_when_provider_returns_valid_output(monkeypatch):
@@ -580,7 +594,7 @@ def test_recalculate_rail_seat_updates_cost_comfort_and_stored_snapshot():
     recalc = client.post(
         "/api/travel/recalculate",
         json={
-            "schema_version": "1.15",
+            "schema_version": "1.16",
             "request_id": "req_test",
             "idempotency_key": "idem_test",
             "plan_id": plan["plan_id"],
@@ -623,7 +637,7 @@ def test_recalculate_local_transfer_consistency_on_dynamic_rail_plan():
     transfer_recalc = client.post(
         "/api/travel/recalculate",
         json={
-            "schema_version": "1.15",
+            "schema_version": "1.16",
             "request_id": "req_transfer",
             "idempotency_key": "idem_transfer",
             "plan_id": plan["plan_id"],
@@ -656,7 +670,7 @@ def test_recalculate_local_transfer_consistency_on_dynamic_rail_plan():
         walk_recalc = client.post(
             "/api/travel/recalculate",
             json={
-                "schema_version": "1.15",
+                "schema_version": "1.16",
                 "request_id": "req_walk",
                 "idempotency_key": "idem_walk",
                 "plan_id": transfer_plan["plan_id"],
@@ -698,7 +712,7 @@ def test_recalculate_is_idempotent_and_can_refresh_recommendation(monkeypatch):
     plan = _first_dynamic_rail_plan(plan_response["plans"])
     rail_segment = next(seg for seg in plan["segments"] if seg["segment_type"] == "RAIL")
     body = {
-        "schema_version": "1.15",
+        "schema_version": "1.16",
         "request_id": "req_recalc_idem",
         "idempotency_key": "idem_recalc_same",
         "plan_id": plan["plan_id"],
@@ -733,7 +747,7 @@ def test_booking_redirect():
     redirect = client.post(
         "/api/redirect/booking",
         json={
-            "schema_version": "1.15",
+            "schema_version": "1.16",
             "request_id": "req_test",
             "idempotency_key": "idem_redirect",
             "plan_id": plan["plan_id"],
@@ -752,7 +766,8 @@ def test_non_sample_route_without_llm_has_no_generated_recommendation_cards():
     )
     assert response.status_code == 200
     body = response.json()
-    assert any(plan["plan_id"].startswith("plan_rail_direct_dynamic") for plan in body["plans"])
+    plan_ids = [plan["plan_id"] for plan in body["plans"]]
+    assert any(plan_id.startswith("plan_rail_direct_dynamic") for plan_id in plan_ids), plan_ids
     assert body["planning_status"] == "PARTIAL"
     assert body["recommendation_result"] is None
 
@@ -765,7 +780,7 @@ def test_non_sample_route_uses_beijing_guangzhou_provider_network():
     assert body["travel_request"]["destination_text"] == "广州天河体育中心"
     assert body["plans"]
     _assert_no_legacy_runtime_plans(body["plans"])
-    assert all(plan["plan_id"].startswith("plan_rail_direct_dynamic") for plan in body["plans"])
+    assert any(plan["plan_id"].startswith("plan_rail_direct_dynamic") for plan in body["plans"])
 
     direct_rail = _first_dynamic_rail_plan(body["plans"])
     rail_segment = next(segment for segment in direct_rail["segments"] if segment["segment_type"] == "RAIL")
@@ -795,11 +810,12 @@ def test_known_city_pair_uses_dynamic_rail_provider_search():
 def test_explicit_poi_route_uses_dynamic_rail_provider_search():
     response = client.post(
         "/api/travel/plan",
-        json={"raw_user_input": "从上海东方明珠塔出发，到北京天安门，6月15号下午"},
+        json={"raw_user_input": "从上海东方明珠塔出发，到北京天安门，6月15号上午"},
     )
     assert response.status_code == 200
     body = response.json()
-    assert any(plan["plan_id"].startswith("plan_rail_direct_dynamic") for plan in body["plans"])
+    plan_ids = [plan["plan_id"] for plan in body["plans"]]
+    assert any(plan_id.startswith("plan_rail_direct_dynamic") for plan_id in plan_ids), plan_ids
     dynamic_rail = next(plan for plan in body["plans"] if plan["plan_id"].startswith("plan_rail_direct_dynamic"))
     rail_segment = next(segment for segment in dynamic_rail["segments"] if segment["segment_type"] == "RAIL")
     assert rail_segment["origin_station"] in {"上海虹桥", "上海站"}
@@ -819,7 +835,7 @@ def test_api_error_paths_return_error_response():
     missing_recalc = client.post(
         "/api/travel/recalculate",
         json={
-            "schema_version": "1.15",
+            "schema_version": "1.16",
             "request_id": "req_missing",
             "idempotency_key": "idem_missing",
             "plan_id": "missing_plan",
@@ -843,7 +859,7 @@ def test_api_error_paths_return_error_response():
     invalid_option = client.post(
         "/api/travel/recalculate",
         json={
-            "schema_version": "1.15",
+            "schema_version": "1.16",
             "request_id": "req_invalid_option",
             "idempotency_key": "idem_invalid_option",
             "plan_id": plan["plan_id"],
@@ -859,5 +875,5 @@ def test_api_error_paths_return_error_response():
         },
     )
     assert invalid_option.status_code == 400
-    assert invalid_option.json()["schema_version"] == "1.15"
+    assert invalid_option.json()["schema_version"] == "1.16"
     assert invalid_option.json()["error_code"] == "HTTP_400"

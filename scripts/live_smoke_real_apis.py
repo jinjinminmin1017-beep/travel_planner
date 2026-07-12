@@ -22,15 +22,12 @@ from app.data_sources.flight_providers import (  # noqa: E402
     FlightSearchRequest,
     FlightStateRequest,
     get_flight_states_with_enabled_provider,
-    price_flight_offer_with_enabled_provider_result,
     search_flight_offers_with_enabled_provider_result,
 )
 from app.data_sources.geocoding_providers import GeocodeRequest, geocode_with_enabled_provider_result  # noqa: E402
 from app.data_sources.map_providers import MapRouteRequest, estimate_route_with_enabled_provider  # noqa: E402
 from app.data_sources.rail_providers import (  # noqa: E402
-    RailConnectionRequest,
     RailSearchRequest,
-    search_rail_connections_with_enabled_provider_result,
     search_rail_offers_with_enabled_provider_result,
 )
 from app.data_sources.redirect_providers import create_booking_redirect  # noqa: E402
@@ -50,18 +47,18 @@ RELEVANT_SOURCE_IDS = [
     "baidu_map_route",
     "osrm_route",
     "nominatim_geocode",
-    "amadeus_flight_offers",
-    "amadeus_flight_price",
+    "airline_mu_public_query",
+    "airline_cz_public_query",
+    "airline_sc_public_query",
     "opensky_states",
     "open_meteo_forecast",
-    "irail_connections",
-    "rail_authorized_partner",
+    "rail_12306_public_query",
     "rail_12306_redirect",
     "airline_official_redirect",
     "amap_uri_redirect",
 ]
-PUBLIC_SMOKE_PROVIDERS = ["map", "geocode", "flight-status", "weather", "rail-schedule", "redirect"]
-SECRET_SMOKE_PROVIDERS = ["flight", "rail"]
+PUBLIC_SMOKE_PROVIDERS = ["map", "geocode", "flight-status", "weather", "redirect"]
+SECRET_SMOKE_PROVIDERS = ["flight"]
 
 
 def _env(name: str, default: str) -> str:
@@ -141,9 +138,10 @@ def smoke_geocode() -> bool:
 
 
 def smoke_flight() -> bool:
-    print("航班报价 Provider live smoke:")
-    if not _enabled_ok("amadeus_flight_offers"):
-        print("- SKIP/FAIL: amadeus_flight_offers 未处于 OK 状态")
+    print("航班官方公开采集 Provider live smoke:")
+    ready_sources = [source_id for source_id in ("airline_mu_public_query", "airline_cz_public_query", "airline_sc_public_query") if _enabled_ok(source_id)]
+    if not ready_sources:
+        print("- SKIP/FAIL: 没有 airline_*_public_query 处于 OK 状态")
         return False
     request = FlightSearchRequest(
         origin_iata=_env("LIVE_SMOKE_FLIGHT_ORIGIN", "SHA"),
@@ -159,17 +157,14 @@ def smoke_flight() -> bool:
         print(f"- FAIL: 未返回航班 offer。attempted={result.attempted_source_ids}, reason={result.failure_message}")
         return False
     first = result.offers[0]
-    if _enabled_ok("amadeus_flight_price"):
-        price_result = price_flight_offer_with_enabled_provider_result(first)
-        if not price_result.offer:
-            print(f"- FAIL: Flight Price 未确认报价。attempted={price_result.attempted_source_ids}, reason={price_result.failure_message}")
-            return False
-        first = price_result.offer
+    if not first.cabin_options:
+        print(f"- FAIL: 航班 offer 没有可售舱位。source={first.data_source.source_id}, offer_id={first.offer_id}")
+        return False
     first_segment = first.segments[0] if first.segments else None
     route = f"{first_segment.origin_iata}->{first_segment.destination_iata}" if first_segment else "unknown route"
     flight_no = f"{first_segment.carrier_code}{first_segment.flight_number}" if first_segment else "unknown flight"
-    price_note = "Price confirmed" if first.data_source.source_id == "amadeus_flight_price" else "Offers only"
-    print(f"- OK: {first.data_source.source_id}, {route}, {flight_no}, {first.total_price.display_text}, {price_note}")
+    cabins = ",".join(f"{item.cabin_type}:{item.availability}" for item in first.cabin_options)
+    print(f"- OK: {first.data_source.source_id}, {route}, {flight_no}, {first.total_price.display_text}, cabins={cabins}, evidence={first.evidence_id}")
     return True
 
 
@@ -216,48 +211,15 @@ def smoke_weather() -> bool:
     return True
 
 
-def smoke_rail_schedule() -> bool:
-    print("铁路时刻 Provider live smoke:")
-    if not _enabled_ok("irail_connections"):
-        print("- SKIP/FAIL: irail_connections 未处于 OK 状态")
-        return False
-    request = RailConnectionRequest(
-        origin_station=_env("LIVE_SMOKE_IRAIL_ORIGIN_STATION", "Brussels-South"),
-        destination_station=_env("LIVE_SMOKE_IRAIL_DESTINATION_STATION", "Gent-Sint-Pieters"),
-        departure_date=None,
-        departure_time=_env("LIVE_SMOKE_IRAIL_DEPARTURE_TIME", ""),
-        results=int(_env("LIVE_SMOKE_IRAIL_RESULTS", "1")),
-        lang=_env("LIVE_SMOKE_IRAIL_LANG", "en"),
-    )
-    if not request.departure_time:
-        request = RailConnectionRequest(
-            origin_station=request.origin_station,
-            destination_station=request.destination_station,
-            results=request.results,
-            lang=request.lang,
-        )
-    result = search_rail_connections_with_enabled_provider_result(request)
-    if not result.connections:
-        print(f"- FAIL: 未返回铁路 connection。attempted={result.attempted_source_ids}, reason={result.failure_message}")
-        return False
-    first = result.connections[0]
-    print(
-        "- OK: "
-        f"{first.data_source.source_id}, {first.origin_station}->{first.destination_station}, "
-        f"{first.train_number or 'unknown train'}, {first.duration_minutes}分钟"
-    )
-    return True
-
-
 def smoke_rail() -> bool:
-    print("铁路票价/余票授权 Provider live smoke:")
-    if not _enabled_ok("rail_authorized_partner"):
-        print("- SKIP/FAIL: rail_authorized_partner 未处于 OK 状态")
+    print("12306 公开查询铁路 Provider live smoke:")
+    if not _enabled_ok("rail_12306_public_query"):
+        print("- SKIP/FAIL: rail_12306_public_query 未处于 OK 状态")
         return False
     request = RailSearchRequest(
-        train_number=_env("LIVE_SMOKE_RAIL_TRAIN_NUMBER", "G234"),
+        train_number=_env("LIVE_SMOKE_RAIL_TRAIN_NUMBER", ""),
         origin_station=_env("LIVE_SMOKE_RAIL_ORIGIN_STATION", "上海虹桥"),
-        destination_station=_env("LIVE_SMOKE_RAIL_DESTINATION_STATION", "青岛北"),
+        destination_station=_env("LIVE_SMOKE_RAIL_DESTINATION_STATION", "北京南"),
         departure_date=_date_env("LIVE_SMOKE_RAIL_DEPARTURE_DATE"),
     )
     result = search_rail_offers_with_enabled_provider_result(request)
@@ -347,13 +309,13 @@ def main() -> int:
         "--tier",
         choices=("public", "secret", "full"),
         default="public",
-        help="public runs no-key read-only/redirect checks; secret runs keyed Amadeus/rail checks; full runs all checks.",
+        help="public runs no-key read-only/redirect checks; secret runs explicitly approved source checks; full runs all checks.",
     )
     parser.add_argument(
         "--provider",
         action="append",
-        choices=("map", "geocode", "flight", "flight-status", "weather", "rail-schedule", "rail", "redirect"),
-        help="Provider to check. Repeatable. Defaults to all.",
+        choices=("map", "geocode", "flight", "flight-status", "weather", "rail", "redirect"),
+        help="Provider to check. Repeatable. Defaults to all. Rail is opt-in for low-frequency 12306 public query smoke.",
     )
     parser.add_argument("--status", action="store_true", help="Print provider status summary before smoke checks.")
     args = parser.parse_args()
@@ -374,7 +336,6 @@ def main() -> int:
         "flight": smoke_flight,
         "flight-status": smoke_flight_status,
         "weather": smoke_weather,
-        "rail-schedule": smoke_rail_schedule,
         "rail": smoke_rail,
         "redirect": smoke_redirect,
     }

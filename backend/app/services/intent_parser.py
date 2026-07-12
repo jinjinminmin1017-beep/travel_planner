@@ -500,7 +500,7 @@ def _travel_request_from_llm_output(raw_output: str, raw_user_input: str, ctx: R
         return None, [f"LLM output is not valid JSON: {exc.msg}"]
     if not isinstance(payload, dict):
         return None, ["LLM output must be a JSON object"]
-    payload.setdefault("schema_version", "1.15")
+    payload.setdefault("schema_version", "1.16")
     payload.setdefault("request_id", ctx.request_id)
     payload.setdefault("raw_user_input", raw_user_input)
     try:
