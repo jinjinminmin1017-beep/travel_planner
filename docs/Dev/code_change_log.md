@@ -124,3 +124,19 @@
 - 验证：
   - `.\.venv\Scripts\python.exe -m pytest backend/app/tests/test_models.py backend/app/tests/test_constraints.py backend/app/tests/test_api.py backend/app/tests/test_logging.py`：通过，62 passed。
   - `.\.venv\Scripts\python.exe -m pytest backend/app/tests`：通过，170 passed。
+
+## 2026-07-12 20:20:00 +08:00
+
+- 任务：参考 Approved 高保真稿，修正规划中世界地图缺少进度扫光光晕的问题。
+- 代码提交：`7422452f`。
+- 根因：当前实现只按进度裁切高亮地图，没有实现高保真稿中位于揭示边缘的独立扫光层，因此边界呈现为硬切线。
+- 修改内容：
+  - 在 `PlanningProgressScreen` 中增加与 `mapClipWidth` 共用进度源的扫光层，使用 56px 外扩柔光、30px 中层光晕和 4px 高亮核心恢复高保真效果。
+  - 将地图揭示区间校准为高保真稿的 32% 至 92%，扫光与裁切边缘始终同步。
+  - 在设计系统中新增地图光晕语义色 Token；保留 reduced motion 的即时静态状态更新。
+  - 增加 UI 合同测试，并归档 390×844 浏览器视觉回归图。
+- 验证：
+  - `npm run test:helpers`：通过，11 passed。
+  - `npm run typecheck`：通过。
+  - `npm run build`：通过，Expo iOS / Android / Web 导出成功。
+  - 本地浏览器 390×844：扫光亮芯、柔光扩散和地图揭示边缘位置与高保真稿一致。
