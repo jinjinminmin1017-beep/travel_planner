@@ -47,3 +47,14 @@ test("rail seat recalculation replaces the full result set while transfers stay 
   assert.match(app, /if \(updatedResponse\.updated_response\)/);
   assert.match(app, /setResponse\(completeResponse\)/);
 });
+
+test("planning map keeps the approved progress glow aligned to the reveal edge", async () => {
+  const planning = await read("../src/components/planning/PlanningProgressScreen.tsx");
+  const tokens = await read("../src/designSystem.ts");
+  assert.match(planning, /styles\.glowSweep, \{ left: mapClipWidth \}/);
+  assert.match(planning, /styles\.glowOuter/);
+  assert.match(planning, /styles\.glowMiddle/);
+  assert.match(planning, /styles\.glowCore/);
+  assert.match(planning, /outputRange: \["32%", "92%"\]/);
+  assert.match(tokens, /mapGlow: "#c9fff4"/);
+});

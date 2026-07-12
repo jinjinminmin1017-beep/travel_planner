@@ -39,7 +39,7 @@ export function PlanningProgressScreen({ progress, originText, destinationText, 
     }).start();
   }, [animatedProgress, normalizedProgress, reduceMotion]);
 
-  const mapClipWidth = animatedProgress.interpolate({ inputRange: [0, 100], outputRange: ["0%", "100%"], extrapolate: "clamp" });
+  const mapClipWidth = animatedProgress.interpolate({ inputRange: [0, 100], outputRange: ["32%", "92%"], extrapolate: "clamp" });
   const routeDescription = originText && destinationText ? `已理解${originText}到${destinationText}的行程需求` : "正在理解你的行程需求";
 
   return (
@@ -60,6 +60,11 @@ export function PlanningProgressScreen({ progress, originText, destinationText, 
           <Image source={worldMapImage} resizeMode="contain" style={styles.mapImage} />
           <Animated.View pointerEvents="none" style={[styles.flowClip, { width: mapClipWidth }] }>
             <Image source={worldMapFlowImage} resizeMode="contain" style={[styles.flowImage, mapWidth ? { width: mapWidth } : null]} />
+          </Animated.View>
+          <Animated.View pointerEvents="none" style={[styles.glowSweep, { left: mapClipWidth }]}>
+            <View style={styles.glowOuter} />
+            <View style={styles.glowMiddle} />
+            <View style={styles.glowCore} />
           </Animated.View>
         </View>
         <PlanningStageList progress={normalizedProgress} />
@@ -91,6 +96,10 @@ const styles = StyleSheet.create({
   mapImage: { height: "100%", left: 0, position: "absolute", top: 0, width: "100%" },
   flowClip: { bottom: 0, left: 0, overflow: "hidden", position: "absolute", top: 0 },
   flowImage: { height: "100%", left: 0, position: "absolute", top: 0, width: "100%" },
+  glowSweep: { bottom: 0, marginLeft: -28, position: "absolute", top: 0, width: 56 },
+  glowOuter: { backgroundColor: ui.colors.mapGlowFaint, borderRadius: ui.radius.pill, bottom: 0, left: 0, position: "absolute", right: 0, top: 0 },
+  glowMiddle: { backgroundColor: ui.colors.mapGlowSoft, borderRadius: ui.radius.pill, bottom: 0, left: 13, position: "absolute", top: 0, width: 30 },
+  glowCore: { backgroundColor: ui.colors.mapGlow, borderRadius: ui.radius.pill, bottom: 0, left: 26, position: "absolute", shadowColor: ui.colors.mapGlow, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.95, shadowRadius: 18, top: 0, width: 4 },
   footer: { backgroundColor: "rgba(255,255,255,0.76)", borderRadius: ui.radius.card, padding: ui.spacing.md },
   progressHeader: { alignItems: "center", flexDirection: "row" },
   progressLabel: { color: ui.colors.textSecondary, fontSize: 11, marginRight: ui.spacing.md },
