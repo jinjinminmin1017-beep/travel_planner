@@ -56,6 +56,10 @@ export function ResultsOverview({ response, plan, recommendations, candidatePlan
     <View style={styles.page}>
       <ResultsHeader request={response.travel_request} plan={plan} onSources={onSources} />
       <RouteSummaryHero destinationName={response.destination_presentation?.display_name} imageSource={imageSource} plan={plan} request={response.travel_request} />
+      <View style={styles.sectionHead}>
+        <Text accessibilityRole="header" style={styles.heading}>选择方案</Text>
+        <Pressable accessibilityRole="button" accessibilityLabel="查看数据来源" hitSlop={ui.hitSlop} onPress={onSources} style={({ pressed }) => pressed && styles.pressed}><Text style={styles.sectionLink}>数据来源</Text></Pressable>
+      </View>
       <PlanSelector onSelect={onSelectRecommendation} plans={response.plans} recommendations={recommendations} selectedPlanId={plan.plan_id} />
       <RecommendationRationale partial={response.planning_status === "PARTIAL"} plan={plan} plans={response.plans} recommendations={recommendations} />
       {schedulePanel}
@@ -78,14 +82,16 @@ export function ResultsOverview({ response, plan, recommendations, candidatePlan
 }
 
 const styles = StyleSheet.create({
-  page: { gap: ui.spacing.lg, paddingBottom: ui.spacing.xl, position: "relative" },
+  page: { gap: ui.spacing.md, paddingBottom: ui.spacing.xl, position: "relative" },
+  sectionHead: { alignItems: "center", flexDirection: "row", justifyContent: "space-between", marginBottom: -ui.spacing.xs, marginTop: ui.spacing.xxs, minHeight: 36 },
+  sectionLink: { color: ui.colors.primary, fontSize: 12, fontWeight: "800" },
   status: { backgroundColor: ui.colors.warningSurface, borderRadius: ui.radius.card, gap: ui.spacing.xs, padding: ui.spacing.md },
   statusTitle: { color: ui.colors.warning, fontSize: 14, fontWeight: "800", lineHeight: 19 },
   statusBody: { color: ui.colors.text, fontSize: 13, lineHeight: 19 },
   statusMeta: { color: ui.colors.textSecondary, fontSize: 12, lineHeight: 18 },
   retry: { alignItems: "center", alignSelf: "flex-start", backgroundColor: ui.colors.surface, borderRadius: ui.radius.control, justifyContent: "center", minHeight: ui.touchTarget, paddingHorizontal: ui.spacing.md },
   retryText: { color: ui.colors.primaryDeep, fontSize: 13, fontWeight: "800" },
-  heading: { color: ui.colors.text, fontSize: 16, fontWeight: "800", lineHeight: 21, marginBottom: ui.spacing.sm },
+  heading: { color: ui.colors.text, fontSize: 16, fontWeight: "800", lineHeight: 21 },
   candidate: { alignItems: "center", borderBottomColor: ui.colors.line, borderBottomWidth: StyleSheet.hairlineWidth, flexDirection: "row", minHeight: 64, paddingVertical: ui.spacing.sm },
   candidateSelected: { backgroundColor: ui.colors.primarySoft },
   candidateCopy: { flex: 1, paddingHorizontal: ui.spacing.sm },

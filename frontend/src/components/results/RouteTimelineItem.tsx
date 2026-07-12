@@ -28,14 +28,14 @@ export function RouteTimelineItem({ item, last }: { item: TimelinePoint; last: b
 }
 
 const styles = StyleSheet.create({
-  row: { flexDirection: "row", minHeight: 92 },
-  rail: { alignItems: "center", width: 28 },
-  dot: { backgroundColor: ui.colors.surface, borderColor: ui.colors.primary, borderRadius: ui.radius.pill, borderWidth: 3, height: 14, marginTop: 4, width: 14, zIndex: 1 },
+  row: { flexDirection: "row", minHeight: 70 },
+  rail: { alignItems: "center", width: 24 },
+  dot: { backgroundColor: ui.colors.surface, borderColor: ui.colors.primary, borderRadius: ui.radius.pill, borderWidth: 3, height: 13, marginTop: 3, width: 13, zIndex: 1 },
   line: { backgroundColor: ui.colors.connection, bottom: 0, position: "absolute", top: 17, width: 2 },
-  content: { flex: 1, paddingBottom: ui.spacing.lg, paddingLeft: ui.spacing.sm },
+  content: { flex: 1, paddingBottom: ui.spacing.md, paddingLeft: ui.spacing.sm },
   topline: { alignItems: "center", flexDirection: "row", justifyContent: "space-between" },
   time: { color: ui.colors.primaryDeep, fontSize: 13, fontWeight: "800" },
   duration: { color: ui.colors.textSecondary, fontSize: 11 },
-  title: { color: ui.colors.text, fontSize: 14, fontWeight: "800", lineHeight: 19, marginTop: ui.spacing.xs },
-  meta: { color: ui.colors.textSecondary, fontSize: 12, lineHeight: 18, marginTop: 2 }
+  title: { color: ui.colors.text, fontSize: 13, fontWeight: "800", lineHeight: 18, marginTop: ui.spacing.xs },
+  meta: { color: ui.colors.textSecondary, fontSize: 11, lineHeight: 16, marginTop: 2 }
 });

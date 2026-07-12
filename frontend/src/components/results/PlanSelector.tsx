@@ -27,7 +27,7 @@ export function PlanSelector({ recommendations, plans, selectedPlanId, onSelect 
             style={({ pressed }) => [styles.option, selected && styles.selected, disabled && styles.disabled, pressed && !disabled && styles.pressed]}
           >
             <Text numberOfLines={1} style={[styles.label, selected && styles.selectedText, disabled && styles.disabledText]}>{LABELS[type]}</Text>
-            <Text numberOfLines={1} style={[styles.value, selected && styles.selectedText, disabled && styles.disabledText]}>{plan ? formatMoney(plan.cost_breakdown.total_cost) : "暂不可用"}</Text>
+            <Text adjustsFontSizeToFit minimumFontScale={0.82} numberOfLines={1} style={[styles.value, selected && styles.selectedText, disabled && styles.disabledText]}>{plan ? `${formatMoney(plan.cost_breakdown.total_cost)} · ${minutesToText(plan.total_duration_minutes)}` : "暂不可用"}</Text>
           </Pressable>
         );
       })}
@@ -36,13 +36,13 @@ export function PlanSelector({ recommendations, plans, selectedPlanId, onSelect 
 }
 
 const styles = StyleSheet.create({
-  selector: { backgroundColor: ui.colors.primarySoft, borderRadius: ui.radius.control, flexDirection: "row", gap: ui.spacing.xxs, padding: ui.spacing.xxs },
+  selector: { backgroundColor: ui.colors.disabled, borderRadius: ui.radius.card, flexDirection: "row", gap: ui.spacing.xs, padding: ui.spacing.xxs },
   option: { alignItems: "center", borderRadius: ui.radius.small, flex: 1, justifyContent: "center", minHeight: ui.touchTarget, minWidth: 0, paddingHorizontal: ui.spacing.xxs, paddingVertical: ui.spacing.sm },
   selected: { backgroundColor: ui.colors.surface, shadowColor: ui.colors.primaryDeep, shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.1, shadowRadius: 4 },
   disabled: { backgroundColor: ui.colors.disabled },
   pressed: { transform: [{ scale: 0.98 }] },
   label: { color: ui.colors.textSecondary, fontSize: 12, fontWeight: "700" },
-  value: { color: ui.colors.text, fontSize: 12, fontWeight: "800", marginTop: 2 },
+  value: { color: ui.colors.text, fontSize: 10, fontWeight: "700", marginTop: 2 },
   selectedText: { color: ui.colors.primaryDeep },
   disabledText: { color: ui.colors.disabledText }
 });

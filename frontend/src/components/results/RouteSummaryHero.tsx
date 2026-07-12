@@ -9,30 +9,40 @@ type Props = { request: TravelRequest; plan: TravelPlan; imageSource?: ImageSour
 
 export function RouteSummaryHero({ request, plan, imageSource, destinationName }: Props) {
   const resolvedDestinationName = destinationName && destinationName !== "目的地" ? destinationName : request.destination_text;
-  const content = (
-    <View style={styles.overlay}>
-      <Text style={styles.destination}>{resolvedDestinationName || "目的地待确认"}</Text>
-      <Text style={styles.route}>{request.origin_text || "起点"} → {request.destination_text || "终点"}</Text>
-      <View style={styles.metrics}>
-        <View style={styles.primaryMetric}><Text numberOfLines={1} style={styles.metricLabel}>预计总价</Text><Text numberOfLines={1} style={styles.metricValue}>{formatMoney(plan.cost_breakdown.total_cost)}</Text></View>
-        <View style={styles.metric}><Text numberOfLines={1} style={styles.metricLabel}>总耗时</Text><Text numberOfLines={1} style={styles.metricValue}>{minutesToText(plan.total_duration_minutes)}</Text></View>
-        <View style={styles.metric}><Text numberOfLines={1} style={styles.metricLabel}>换乘</Text><Text numberOfLines={1} style={styles.metricValue}>{countTransfers(plan.segments)} 次</Text></View>
+  const heading = (
+    <View style={styles.imageOverlay}>
+      <View style={styles.routeHeading}>
+        <Text style={styles.eyebrow}>综合推荐 · {resolvedDestinationName || "目的地"}</Text>
+        <Text numberOfLines={2} style={styles.route}>{request.origin_text || "起点"} <Text style={styles.arrow}>→</Text> {request.destination_text || "终点"}</Text>
       </View>
     </View>
   );
-  return imageSource ? <ImageBackground source={imageSource} imageStyle={styles.image} style={styles.hero}>{content}</ImageBackground> : <View style={[styles.hero, styles.fallback]}>{content}</View>;
+  return (
+    <View style={styles.hero}>
+      {imageSource ? <ImageBackground source={imageSource} imageStyle={styles.image} style={styles.imageFrame}>{heading}</ImageBackground> : <View style={[styles.imageFrame, styles.fallback]}>{heading}</View>}
+      <View style={styles.metrics}>
+        <View style={styles.metric}><Text numberOfLines={1} style={styles.metricLabel}>预计总价</Text><Text adjustsFontSizeToFit minimumFontScale={0.78} numberOfLines={1} style={styles.metricValue}>{formatMoney(plan.cost_breakdown.total_cost)}</Text></View>
+        <View style={[styles.metric, styles.durationMetric]}><Text numberOfLines={1} style={styles.metricLabel}>全程耗时</Text><Text adjustsFontSizeToFit minimumFontScale={0.78} numberOfLines={1} style={styles.metricValue}>{minutesToText(plan.total_duration_minutes)}</Text></View>
+        <View style={[styles.metric, styles.transferMetric]}><Text numberOfLines={1} style={styles.metricLabel}>换乘</Text><Text adjustsFontSizeToFit minimumFontScale={0.78} numberOfLines={1} style={styles.metricValue}>{countTransfers(plan.segments)} 次</Text></View>
+      </View>
+    </View>
+  );
 }
 
 const styles = StyleSheet.create({
-  hero: { borderRadius: ui.radius.card, minHeight: 190, overflow: "hidden" },
-  image: { borderRadius: ui.radius.card },
+  hero: { backgroundColor: ui.colors.primaryDeep, borderRadius: ui.radius.card, overflow: "hidden" },
+  imageFrame: { height: 116 },
+  image: { borderTopLeftRadius: ui.radius.card, borderTopRightRadius: ui.radius.card },
   fallback: { backgroundColor: ui.colors.primaryDeep },
-  overlay: { backgroundColor: "rgba(8, 28, 31, 0.54)", flex: 1, justifyContent: "flex-end", padding: ui.spacing.lg },
-  destination: { color: ui.colors.surface, fontSize: 25, fontWeight: "800", lineHeight: 30 },
-  route: { color: ui.colors.onPrimaryMuted, fontSize: 13, lineHeight: 19, marginTop: ui.spacing.xs },
-  metrics: { alignItems: "stretch", flexDirection: "row", marginTop: ui.spacing.lg },
-  primaryMetric: { flex: 1.25, minWidth: 0 },
-  metric: { borderLeftColor: "rgba(255,255,255,0.34)", borderLeftWidth: StyleSheet.hairlineWidth, flex: 1, minWidth: 0, paddingLeft: ui.spacing.sm },
+  imageOverlay: { backgroundColor: "rgba(7,36,40,0.42)", flex: 1, justifyContent: "flex-end", padding: ui.spacing.lg },
+  routeHeading: { maxWidth: "96%" },
+  eyebrow: { color: ui.colors.onPrimaryMuted, fontSize: 11, fontWeight: "700", lineHeight: 16 },
+  route: { color: ui.colors.surface, fontSize: 24, fontWeight: "800", letterSpacing: -0.5, lineHeight: 29, marginTop: 2 },
+  arrow: { color: ui.colors.connection },
+  metrics: { alignItems: "stretch", backgroundColor: "rgba(255,255,255,0.12)", flexDirection: "row", gap: 1 },
+  metric: { backgroundColor: ui.colors.primaryDeep, flex: 1, minHeight: 64, minWidth: 0, paddingHorizontal: 10, paddingVertical: ui.spacing.md },
+  durationMetric: { flex: 1.25 },
+  transferMetric: { flex: 0.75 },
   metricLabel: { color: ui.colors.onPrimaryMuted, fontSize: 11, lineHeight: 16 },
-  metricValue: { color: ui.colors.surface, fontSize: 15, fontWeight: "800", lineHeight: 20, marginTop: 2 }
+  metricValue: { color: ui.colors.surface, fontSize: 14, fontWeight: "800", letterSpacing: -0.2, lineHeight: 18, marginTop: 3 }
 });

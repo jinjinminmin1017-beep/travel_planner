@@ -15,18 +15,18 @@ export function ResultsHeader({ request, plan, onSources }: Props) {
         <Text style={styles.meta}>{request.travel_date}{departure ? ` · ${departure} 出发` : " · 出发时间待确认"}</Text>
       </View>
       <Pressable accessibilityRole="button" accessibilityLabel="查看数据来源" hitSlop={ui.hitSlop} onPress={onSources} style={({ pressed }) => [styles.action, pressed && styles.pressed]}>
-        <Text style={styles.actionText}>数据来源</Text>
+        <Text style={styles.actionText}>•••</Text>
       </Pressable>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  header: { alignItems: "flex-start", flexDirection: "row", justifyContent: "space-between", marginBottom: ui.spacing.lg },
+  header: { alignItems: "center", flexDirection: "row", justifyContent: "space-between", marginBottom: ui.spacing.md },
   copy: { flex: 1, minWidth: 0, paddingRight: ui.spacing.sm },
   title: { color: ui.colors.text, fontSize: 25, fontWeight: "800", lineHeight: 30 },
   meta: { color: ui.colors.textSecondary, fontSize: 12, lineHeight: 18, marginTop: ui.spacing.xs },
-  action: { alignItems: "center", flexShrink: 0, justifyContent: "center", minHeight: ui.touchTarget, paddingHorizontal: ui.spacing.sm },
-  actionText: { color: ui.colors.primary, fontSize: 13, fontWeight: "700" },
+  action: { alignItems: "center", backgroundColor: ui.colors.surface, borderRadius: ui.radius.control, flexShrink: 0, justifyContent: "center", minHeight: ui.touchTarget, minWidth: ui.touchTarget },
+  actionText: { color: ui.colors.primaryDeep, fontSize: 15, fontWeight: "800", letterSpacing: 1 },
   pressed: { opacity: 0.72, transform: [{ scale: 0.98 }] }
 });

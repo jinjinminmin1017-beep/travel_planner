@@ -21,7 +21,7 @@ export function ResultsBottomAction({ favorite, disabled, onFavorite, onDetails 
 const styles = StyleSheet.create({
   bar: { backgroundColor: ui.colors.surface, borderTopColor: ui.colors.line, borderTopWidth: StyleSheet.hairlineWidth, paddingHorizontal: ui.spacing.lg, paddingVertical: ui.spacing.sm },
   content: { alignSelf: "center", flexDirection: "row", gap: ui.spacing.sm, maxWidth: ui.contentMaxWidth, width: "100%" },
-  favorite: { alignItems: "center", backgroundColor: ui.colors.primarySoft, borderRadius: ui.radius.control, justifyContent: "center", minHeight: ui.touchTarget, paddingHorizontal: ui.spacing.lg },
+  favorite: { alignItems: "center", backgroundColor: ui.colors.surface, borderColor: ui.colors.line, borderRadius: ui.radius.control, borderWidth: 1, justifyContent: "center", minHeight: ui.touchTarget, minWidth: 92, paddingHorizontal: ui.spacing.lg },
   favoriteText: { color: ui.colors.primaryDeep, fontSize: 14, fontWeight: "800" },
   primary: { alignItems: "center", backgroundColor: ui.colors.primary, borderRadius: ui.radius.control, flex: 1, justifyContent: "center", minHeight: ui.touchTarget, paddingHorizontal: ui.spacing.lg },
   primaryText: { color: ui.colors.surface, fontSize: 14, fontWeight: "800" },

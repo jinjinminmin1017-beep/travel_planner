@@ -17,12 +17,9 @@ export function PlanningStageList({ progress }: { progress: number }) {
         const complete = progress >= 100 || index < activeIndex;
         const active = progress < 100 && index === activeIndex;
         return (
-          <View accessibilityRole="summary" key={stage.label} style={styles.row}>
-            <View style={[styles.marker, complete && styles.markerComplete, active && styles.markerActive]}>
-              <Text style={[styles.markerText, (complete || active) && styles.markerTextActive]}>{complete ? "✓" : index + 1}</Text>
-            </View>
-            <Text style={[styles.label, (complete || active) && styles.labelActive]}>{stage.label}</Text>
-            <Text style={styles.status}>{complete ? "已完成" : active ? "处理中" : "等待"}</Text>
+          <View accessibilityRole="summary" key={stage.label} style={[styles.stage, active && styles.stageActive]}>
+            <Text style={[styles.status, (complete || active) && styles.statusActive]}>{complete ? "完成" : active ? "进行中" : "待处理"}</Text>
+            <Text numberOfLines={1} style={[styles.label, (complete || active) && styles.labelActive]}>{stage.label}</Text>
           </View>
         );
       })}
@@ -31,14 +28,11 @@ export function PlanningStageList({ progress }: { progress: number }) {
 }
 
 const styles = StyleSheet.create({
-  list: { gap: ui.spacing.sm },
-  row: { alignItems: "center", flexDirection: "row", minHeight: ui.touchTarget },
-  marker: { alignItems: "center", backgroundColor: ui.colors.disabled, borderRadius: ui.radius.pill, height: 28, justifyContent: "center", width: 28 },
-  markerActive: { backgroundColor: ui.colors.primarySoft },
-  markerComplete: { backgroundColor: ui.colors.primary },
-  markerText: { color: ui.colors.disabledText, fontSize: 12, fontWeight: "800" },
-  markerTextActive: { color: ui.colors.primaryDeep },
-  label: { color: ui.colors.textSecondary, flex: 1, fontSize: 14, fontWeight: "600", marginLeft: ui.spacing.md },
-  labelActive: { color: ui.colors.text, fontWeight: "800" },
-  status: { color: ui.colors.textSecondary, fontSize: 12 }
+  list: { flexDirection: "row", gap: ui.spacing.xs },
+  stage: { backgroundColor: "rgba(255,255,255,0.68)", borderRadius: ui.radius.control, flex: 1, minHeight: 58, minWidth: 0, paddingHorizontal: ui.spacing.sm, paddingVertical: ui.spacing.sm },
+  stageActive: { backgroundColor: ui.colors.primarySoft },
+  status: { color: ui.colors.textSecondary, fontSize: 10, lineHeight: 14 },
+  statusActive: { color: ui.colors.primary },
+  label: { color: ui.colors.textSecondary, fontSize: 11, fontWeight: "700", lineHeight: 16, marginTop: 2 },
+  labelActive: { color: ui.colors.text, fontWeight: "800" }
 });

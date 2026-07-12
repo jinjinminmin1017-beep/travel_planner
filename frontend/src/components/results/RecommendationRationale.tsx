@@ -20,17 +20,23 @@ export function RecommendationRationale({ plan, plans, recommendations, partial 
 
   return (
     <View style={[styles.notice, partial && styles.partial]}>
-      <Text style={styles.title}>{partial ? "当前为部分结果" : "为什么推荐这条路线"}</Text>
-      <Text style={styles.body}>{reason || comparisons.join("；") || "这条路线基于当前可用数据生成，建议在跳转后再次确认票价与时刻。"}</Text>
-      {reason && comparisons.length ? <Text style={styles.meta}>{comparisons.join("；")}</Text> : null}
+      <View style={[styles.mark, partial && styles.markPartial]}><Text style={styles.markText}>{partial ? "注" : "荐"}</Text></View>
+      <View style={styles.copy}>
+        <Text style={styles.body}><Text style={styles.title}>{partial ? "当前为部分结果：" : "为什么推荐："}</Text>{reason || comparisons.join("；") || "这条路线基于当前可用数据生成，建议在跳转后再次确认票价与时刻。"}</Text>
+        {reason && comparisons.length ? <Text style={styles.meta}>{comparisons.join("；")}</Text> : null}
+      </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  notice: { backgroundColor: ui.colors.primarySoft, borderRadius: ui.radius.card, padding: ui.spacing.md },
+  notice: { alignItems: "flex-start", backgroundColor: ui.colors.primarySoft, borderRadius: ui.radius.card, flexDirection: "row", gap: ui.spacing.sm, padding: ui.spacing.md },
   partial: { backgroundColor: ui.colors.warningSurface },
-  title: { color: ui.colors.text, fontSize: 14, fontWeight: "800", lineHeight: 19 },
-  body: { color: ui.colors.text, fontSize: 13, lineHeight: 19, marginTop: ui.spacing.xs },
+  mark: { alignItems: "center", backgroundColor: ui.colors.primary, borderRadius: ui.radius.small, height: 28, justifyContent: "center", width: 28 },
+  markPartial: { backgroundColor: ui.colors.warning },
+  markText: { color: ui.colors.surface, fontSize: 12, fontWeight: "800" },
+  copy: { flex: 1 },
+  title: { color: ui.colors.primaryDeep, fontWeight: "800" },
+  body: { color: ui.colors.text, fontSize: 12, lineHeight: 18 },
   meta: { color: ui.colors.textSecondary, fontSize: 12, lineHeight: 18, marginTop: ui.spacing.xs }
 });

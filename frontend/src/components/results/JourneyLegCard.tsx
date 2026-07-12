@@ -14,6 +14,12 @@ function OptionButton({ label, selected, disabled, onPress }: { label: string; s
   );
 }
 
+function modeLabel(segment: Segment): string {
+  if (segment.segment_type === "RAIL") return segment.train_number ? `高铁 ${segment.train_number}` : "铁路";
+  if (segment.segment_type === "FLIGHT") return segment.flight_number ? `航班 ${segment.flight_number}` : "航班";
+  return segment.transfer_mode === "WALK" ? "步行接驳" : "市内接驳";
+}
+
 export function JourneyLegCard({ segment, expanded, busy, onToggle, onApply }: Props) {
   const departure = formatClockTime(segment.departure_time);
   const arrival = formatClockTime(segment.arrival_time);
@@ -23,11 +29,15 @@ export function JourneyLegCard({ segment, expanded, busy, onToggle, onApply }: P
     <View style={styles.leg}>
       <Pressable accessibilityRole="button" accessibilityLabel={`${expanded ? "收起" : "展开"}${segmentTitle(segment)}的调整选项`} accessibilityState={{ expanded, disabled: !hasOptions }} disabled={!hasOptions} onPress={onToggle} style={({ pressed }) => [styles.header, pressed && hasOptions && styles.pressed]}>
         <View style={styles.copy}>
+          <Text style={styles.mode}>{modeLabel(segment)}</Text>
           <Text style={styles.title}>{segmentTitle(segment)}</Text>
-          <Text style={styles.meta}>{departure && arrival ? `${departure}–${arrival} · ` : ""}{minutesToText(segment.duration_minutes)}{selectedOptionLabel(segment) ? ` · ${selectedOptionLabel(segment)}` : ""}</Text>
+          <Text style={styles.meta}>{departure && arrival ? `${departure} 发车 · ${arrival} 到达` : "时间待确认"}{selectedOptionLabel(segment) ? `\n${selectedOptionLabel(segment)}` : ""}</Text>
           {selectedTransfer?.walking_distance_meters ? <Text style={styles.meta}>步行约 {selectedTransfer.walking_distance_meters} 米</Text> : null}
         </View>
-        {hasOptions ? <Text style={styles.expand}>{expanded ? "收起" : "调整"}</Text> : null}
+        <View style={styles.aside}>
+          <Text style={styles.duration}>{minutesToText(segment.duration_minutes)}</Text>
+          {hasOptions ? <Text style={styles.expand}>{expanded ? "收起" : "调整"}</Text> : null}
+        </View>
       </Pressable>
       {expanded ? (
         <View style={styles.options}>
@@ -42,12 +52,15 @@ export function JourneyLegCard({ segment, expanded, busy, onToggle, onApply }: P
 }
 
 const styles = StyleSheet.create({
-  leg: { borderBottomColor: ui.colors.line, borderBottomWidth: StyleSheet.hairlineWidth, paddingVertical: ui.spacing.md },
-  header: { alignItems: "center", flexDirection: "row", minHeight: ui.touchTarget },
+  leg: { backgroundColor: ui.colors.surface, borderRadius: ui.radius.card, marginBottom: ui.spacing.sm, padding: ui.spacing.md },
+  header: { alignItems: "flex-start", flexDirection: "row", minHeight: ui.touchTarget },
   copy: { flex: 1, paddingRight: ui.spacing.md },
-  title: { color: ui.colors.text, fontSize: 14, fontWeight: "800", lineHeight: 20 },
-  meta: { color: ui.colors.textSecondary, fontSize: 12, lineHeight: 18, marginTop: 2 },
-  expand: { color: ui.colors.primary, fontSize: 13, fontWeight: "700" },
+  mode: { alignSelf: "flex-start", backgroundColor: ui.colors.primarySoft, borderRadius: ui.radius.pill, color: ui.colors.primaryDeep, fontSize: 10, fontWeight: "800", lineHeight: 16, overflow: "hidden", paddingHorizontal: ui.spacing.sm, paddingVertical: ui.spacing.xxs },
+  title: { color: ui.colors.text, fontSize: 14, fontWeight: "800", lineHeight: 20, marginTop: ui.spacing.xs },
+  meta: { color: ui.colors.textSecondary, fontSize: 11, lineHeight: 17, marginTop: ui.spacing.xs },
+  aside: { alignItems: "flex-end", gap: ui.spacing.sm },
+  duration: { color: ui.colors.primaryDeep, fontSize: 13, fontWeight: "800", lineHeight: 18 },
+  expand: { color: ui.colors.primary, fontSize: 12, fontWeight: "800" },
   options: { backgroundColor: ui.colors.primarySoft, borderRadius: ui.radius.control, gap: ui.spacing.sm, marginTop: ui.spacing.sm, padding: ui.spacing.sm },
   instruction: { color: ui.colors.text, fontSize: 12, lineHeight: 18 },
   option: { backgroundColor: ui.colors.surface, borderRadius: ui.radius.small, justifyContent: "center", minHeight: ui.touchTarget, paddingHorizontal: ui.spacing.md, paddingVertical: ui.spacing.sm },

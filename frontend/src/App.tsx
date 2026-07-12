@@ -907,10 +907,11 @@ const styles = StyleSheet.create({
   },
   scheduleToggle: {
     alignItems: "center",
-    alignSelf: "flex-start",
+    alignSelf: "flex-end",
     justifyContent: "center",
     minHeight: ui.touchTarget,
-    paddingHorizontal: ui.spacing.sm
+    marginBottom: -ui.spacing.sm,
+    paddingHorizontal: ui.spacing.xs
   },
   scheduleToggleText: {
     color: ui.colors.primary,

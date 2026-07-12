@@ -4,8 +4,7 @@ import { bookingRedirect, recalculate, submitFeedback, trackEvent } from "../../
 import { ui } from "../../designSystem";
 import { copyPlanSummary, openExternalUrl, sharePlan } from "../../nativeCapabilities";
 import type { FeedbackCategory, RecalculateChangeType, RecalculateResponse, Segment, TravelPlan, TravelPlanResponse } from "../../types";
-import { formatMoney, minutesToText, riskLabel } from "../../utils/format";
-import { countTransfers } from "../../utils/routePlanning";
+import { formatMoney, riskLabel } from "../../utils/format";
 import { JourneyLegCard } from "./JourneyLegCard";
 import { PlanRiskNotice } from "./PlanRiskNotice";
 import { formatClockTime } from "./presentation";
@@ -101,29 +100,32 @@ export function RouteDetailScreen({ response, plan, favorite, onBack, onSources,
   return (
     <View style={styles.page}>
       <View style={styles.header}>
-        <Pressable accessibilityRole="button" accessibilityLabel="返回方案总览" onPress={onBack} style={({ pressed }) => [styles.headerAction, pressed && styles.pressed]}><Text style={styles.headerActionText}>返回</Text></Pressable>
-        <View style={styles.headerCopy}><Text accessibilityRole="header" style={styles.title}>完整路线</Text><Text style={styles.risk}>{riskLabel(plan.risk_assessment.overall_risk_level)}</Text></View>
-        <Pressable accessibilityRole="button" accessibilityLabel="分享当前路线" disabled={busy} onPress={shareCurrentPlan} style={({ pressed }) => [styles.headerAction, pressed && styles.pressed]}><Text style={styles.headerActionText}>分享</Text></Pressable>
+        <Pressable accessibilityRole="button" accessibilityLabel="返回方案总览" onPress={onBack} style={({ pressed }) => [styles.headerAction, pressed && styles.pressed]}><Text style={styles.headerActionText}>‹</Text></Pressable>
+        <View style={styles.headerCopy}><Text accessibilityRole="header" style={styles.title}>路线详情</Text><Text style={styles.risk}>综合推荐 · {riskLabel(plan.risk_assessment.overall_risk_level)}</Text></View>
+        <Pressable accessibilityRole="button" accessibilityLabel="分享当前路线" disabled={busy} onPress={shareCurrentPlan} style={({ pressed }) => [styles.headerAction, pressed && styles.pressed]}><Text style={styles.headerActionText}>↗</Text></Pressable>
       </View>
 
       <View style={styles.summary}>
-        <Text style={styles.route}>{response.travel_request.origin_text || "起点"} → {response.travel_request.destination_text || "终点"}</Text>
-        <Text style={styles.time}>{departure} 出发 · {arrival} 到达</Text>
+        <View style={styles.routeLineRow}>
+          <Text numberOfLines={2} style={styles.routeEnd}>{response.travel_request.origin_text || "起点"}</Text>
+          <View style={styles.routeLine}><View style={styles.routeNodeLeft} /><View style={styles.routeNodeRight} /></View>
+          <Text numberOfLines={2} style={[styles.routeEnd, styles.routeEndRight]}>{response.travel_request.destination_text || "终点"}</Text>
+        </View>
         <View style={styles.metrics}>
-          <Text style={styles.metric}>{formatMoney(plan.cost_breakdown.total_cost)}</Text>
-          <Text style={styles.metric}>{minutesToText(plan.total_duration_minutes)}</Text>
-          <Text style={styles.metric}>{countTransfers(plan.segments)} 次换乘</Text>
+          <View style={styles.metric}><Text style={styles.metricLabel}>出发</Text><Text style={styles.metricValue}>{departure}</Text></View>
+          <View style={styles.metric}><Text style={styles.metricLabel}>抵达</Text><Text style={styles.metricValue}>{arrival}</Text></View>
+          <View style={styles.metric}><Text style={styles.metricLabel}>总价</Text><Text style={styles.metricValue}>{formatMoney(plan.cost_breakdown.total_cost)}</Text></View>
         </View>
       </View>
 
       <PlanRiskNotice plan={plan} />
 
-      <View>
-        <Text accessibilityRole="header" style={styles.sectionTitle}>分段路线</Text>
+      <View style={styles.section}>
+        <View style={styles.sectionHead}><Text accessibilityRole="header" style={styles.sectionTitle}>分段路线</Text><Text style={styles.sectionLink}>票价明细见下方</Text></View>
         {plan.segments.map((segment) => <JourneyLegCard busy={busy} expanded={expandedSegmentId === segment.segment_id} key={segment.segment_id} onApply={applyOption} onToggle={() => setExpandedSegmentId((current) => current === segment.segment_id ? null : segment.segment_id)} segment={segment} />)}
       </View>
 
-      <View>
+      <View style={styles.costCard}>
         <Text accessibilityRole="header" style={styles.sectionTitle}>费用明细</Text>
         {plan.cost_breakdown.items.map((item) => <View key={`${item.label}-${item.amount.amount_minor}`} style={styles.costRow}><Text style={styles.body}>{item.label}</Text><Text style={styles.cost}>{formatMoney(item.amount)}{item.amount.is_estimated ? " · 估算" : ""}</Text></View>)}
       </View>
@@ -147,19 +149,29 @@ export function RouteDetailScreen({ response, plan, favorite, onBack, onSources,
 }
 
 const styles = StyleSheet.create({
-  page: { gap: ui.spacing.xl, paddingBottom: ui.spacing.xl },
+  page: { gap: ui.spacing.lg, paddingBottom: ui.spacing.xl },
   header: { alignItems: "center", flexDirection: "row", justifyContent: "space-between" },
   headerCopy: { alignItems: "center", flex: 1 },
-  headerAction: { alignItems: "center", justifyContent: "center", minHeight: ui.touchTarget, minWidth: ui.touchTarget, paddingHorizontal: ui.spacing.sm },
-  headerActionText: { color: ui.colors.primary, fontSize: 14, fontWeight: "700" },
+  headerAction: { alignItems: "center", backgroundColor: ui.colors.surface, borderRadius: ui.radius.control, justifyContent: "center", minHeight: ui.touchTarget, minWidth: ui.touchTarget },
+  headerActionText: { color: ui.colors.primaryDeep, fontSize: 22, fontWeight: "700" },
   title: { color: ui.colors.text, fontSize: 20, fontWeight: "800", lineHeight: 24 },
-  risk: { color: ui.colors.warning, fontSize: 11, marginTop: 2 },
-  summary: { backgroundColor: ui.colors.primaryDeep, borderRadius: ui.radius.card, padding: ui.spacing.lg },
-  route: { color: ui.colors.surface, fontSize: 20, fontWeight: "800", lineHeight: 26 },
-  time: { color: ui.colors.onPrimaryMuted, fontSize: 12, lineHeight: 18, marginTop: ui.spacing.xs },
-  metrics: { flexDirection: "row", flexWrap: "wrap", gap: ui.spacing.lg, marginTop: ui.spacing.lg },
-  metric: { color: ui.colors.surface, fontSize: 15, fontWeight: "800" },
+  risk: { color: ui.colors.textSecondary, fontSize: 11, marginTop: 2 },
+  summary: { backgroundColor: ui.colors.surface, borderRadius: ui.radius.card, padding: ui.spacing.lg },
+  routeLineRow: { alignItems: "center", flexDirection: "row", gap: ui.spacing.sm },
+  routeEnd: { color: ui.colors.text, flexShrink: 1, fontSize: 16, fontWeight: "800", lineHeight: 21, maxWidth: "36%" },
+  routeEndRight: { textAlign: "right" },
+  routeLine: { backgroundColor: ui.colors.primary, flex: 1, height: 2, position: "relative" },
+  routeNodeLeft: { backgroundColor: ui.colors.surface, borderColor: ui.colors.primary, borderRadius: ui.radius.pill, borderWidth: 2, height: 11, left: 0, position: "absolute", top: -5, width: 11 },
+  routeNodeRight: { backgroundColor: ui.colors.surface, borderColor: ui.colors.primary, borderRadius: ui.radius.pill, borderWidth: 2, height: 11, position: "absolute", right: 0, top: -5, width: 11 },
+  metrics: { flexDirection: "row", gap: ui.spacing.sm, marginTop: ui.spacing.lg },
+  metric: { flex: 1 },
+  metricLabel: { color: ui.colors.textSecondary, fontSize: 10, lineHeight: 15 },
+  metricValue: { color: ui.colors.text, fontSize: 15, fontWeight: "800", lineHeight: 20, marginTop: 2 },
+  section: { gap: 0 },
+  sectionHead: { alignItems: "center", flexDirection: "row", justifyContent: "space-between", marginBottom: ui.spacing.sm },
+  sectionLink: { color: ui.colors.primary, fontSize: 11, fontWeight: "700" },
   sectionTitle: { color: ui.colors.text, fontSize: 16, fontWeight: "800", lineHeight: 21, marginBottom: ui.spacing.sm },
+  costCard: { backgroundColor: ui.colors.surface, borderRadius: ui.radius.card, padding: ui.spacing.md },
   costRow: { alignItems: "center", borderBottomColor: ui.colors.line, borderBottomWidth: StyleSheet.hairlineWidth, flexDirection: "row", justifyContent: "space-between", minHeight: ui.touchTarget },
   body: { color: ui.colors.text, flex: 1, fontSize: 13, lineHeight: 19 },
   cost: { color: ui.colors.text, fontSize: 13, fontWeight: "800", paddingLeft: ui.spacing.md },
