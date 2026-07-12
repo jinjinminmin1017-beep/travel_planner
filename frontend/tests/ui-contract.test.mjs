@@ -50,11 +50,16 @@ test("rail seat recalculation replaces the full result set while transfers stay 
 
 test("planning map keeps the approved progress glow aligned to the reveal edge", async () => {
   const planning = await read("../src/components/planning/PlanningProgressScreen.tsx");
+  const app = await read("../src/App.tsx");
   const tokens = await read("../src/designSystem.ts");
   assert.match(planning, /styles\.glowSweep, \{ left: mapClipWidth \}/);
-  assert.match(planning, /styles\.glowOuter/);
-  assert.match(planning, /styles\.glowMiddle/);
-  assert.match(planning, /styles\.glowCore/);
+  assert.match(planning, /<SvgLinearGradient id="mapSweep"/);
+  assert.match(planning, /offset="50%" stopColor=\{ui\.colors\.mapGlow\} stopOpacity=\{0\.22\}/);
   assert.match(planning, /outputRange: \["32%", "92%"\]/);
-  assert.match(tokens, /mapGlow: "#c9fff4"/);
+  assert.match(planning, /glowSweep: \{ bottom: 0, marginLeft: -21,[^\n]+width: 42 \}/);
+  assert.match(planning, /duration: normalizedProgress >= 100 \? 220 : 5_000/);
+  assert.match(tokens, /mapGlow: "#7ee9d4"/);
+  assert.match(app, /!planningFullScreen \? <View style=\{styles\.bottomTabs\}>/);
+  assert.match(app, /planningFullScreen && styles\.planningContent/);
+  assert.doesNotMatch(planning, /glowOuter|glowMiddle|glowCore/);
 });

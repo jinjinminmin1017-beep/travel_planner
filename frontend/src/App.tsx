@@ -447,6 +447,7 @@ export default function App() {
   const candidatePlans = useMemo(() => response?.plans.filter((plan) => !recommendedPlanIds.has(plan.plan_id)) ?? [], [response, recommendedPlanIds]);
   const selectedPlanFavorite = selectedPlan ? favoritePlans.some((plan) => plan.plan_id === selectedPlan.plan_id) : false;
   const recentPlan = recentPlans[0] ?? null;
+  const planningFullScreen = activeTab === "results" && loading && (!response || response.plans.length === 0);
 
   useEffect(() => {
     if (response && selectedPlan) {
@@ -783,8 +784,8 @@ export default function App() {
             </View>
           </ScrollView>
         ) : (
-          <ScrollView style={styles.screen} contentContainerStyle={[styles.content, wideLayout && styles.contentWide]}>
-            {loading && (!response || response.plans.length === 0) ? (
+          <ScrollView style={styles.screen} contentContainerStyle={[styles.content, planningFullScreen && styles.planningContent, wideLayout && styles.contentWide]}>
+            {planningFullScreen ? (
               <PlanningProgressScreen
                 destinationText={response?.travel_request.destination_text}
                 onCancel={response?.async_job ? cancelCurrentJob : undefined}
@@ -858,7 +859,7 @@ export default function App() {
           <ResultsBottomAction disabled={loading} favorite={selectedPlanFavorite} onDetails={() => setResultsPane("details")} onFavorite={() => toggleFavorite(selectedPlan)} />
         ) : null}
 
-        <View style={styles.bottomTabs}>
+        {!planningFullScreen ? <View style={styles.bottomTabs}>
           <Pressable
             accessibilityRole="tab"
             accessibilityLabel="云起，输入出行需求"
@@ -879,7 +880,7 @@ export default function App() {
           >
             <Text style={[styles.tabLabel, activeTab === "results" && styles.tabTextActive]}>路明</Text>
           </Pressable>
-        </View>
+        </View> : null}
       </View>
     </SafeAreaView>
   );
@@ -904,6 +905,10 @@ const styles = StyleSheet.create({
     alignSelf: "center",
     maxWidth: ui.contentMaxWidth,
     width: "100%"
+  },
+  planningContent: {
+    flexGrow: 1,
+    padding: 0
   },
   scheduleToggle: {
     alignItems: "center",
