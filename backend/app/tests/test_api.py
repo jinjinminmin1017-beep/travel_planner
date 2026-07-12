@@ -348,6 +348,65 @@ def test_async_no_match_is_a_completed_business_job():
     assert body["constraint_analysis"] is not None
 
 
+def test_async_plan_accepts_naive_datetime_with_declared_timezone():
+    parsed = client.post("/api/travel/parse", json={"raw_user_input": RAW_INPUT}).json()["travel_request"]
+    naive_latest = {
+        "datetime": "2026-05-21T17:00:00",
+        "timezone": "Asia/Shanghai",
+        "source_timezone": "Asia/Shanghai",
+    }
+    parsed["time_anchor_type"] = "ARRIVAL"
+    parsed["latest_arrival_time"] = naive_latest
+    parsed["time_window_end"] = naive_latest
+    parsed["hard_constraints"]["latest_arrival_time"] = naive_latest
+
+    response = client.post(
+        "/api/travel/plan/async",
+        json={"travel_request": parsed},
+        headers={"x-idempotency-key": "idem_async_naive_timezone_regression"},
+    )
+    poll = client.get(response.json()["async_job"]["polling_url"])
+    body = poll.json()
+
+    assert response.status_code == 200
+    assert poll.status_code == 200
+    assert body["planning_status"] in {"COMPLETE", "PARTIAL", "NO_MATCH"}
+    assert body["async_job"]["job_status"] in {"COMPLETE", "PARTIAL_READY"}
+    assert body["travel_request"]["latest_arrival_time"]["datetime"].endswith("+08:00")
+
+
+def test_async_background_error_is_logged_and_not_exposed(monkeypatch, caplog):
+    secret_error = "can't compare offset-naive and offset-aware datetimes"
+
+    def fail_planning(*args, **kwargs):
+        raise TypeError(secret_error)
+
+    monkeypatch.setattr("app.main.plan_trip", fail_planning)
+    caplog.set_level("ERROR", logger="app.api")
+    response = client.post(
+        "/api/travel/plan/async",
+        json={"raw_user_input": RAW_INPUT},
+        headers={
+            "x-request-id": "req_background_failure",
+            "x-trace-id": "trace_background_failure",
+            "x-correlation-id": "corr_background_failure",
+            "x-idempotency-key": "idem_background_failure",
+        },
+    )
+    poll = client.get(response.json()["async_job"]["polling_url"])
+    body = poll.json()
+
+    assert body["planning_status"] == "FAILED"
+    assert body["async_job"]["job_status"] == "FAILED"
+    assert body["user_visible_warnings"] == ["规划任务暂时失败，请稍后重试。"]
+    assert secret_error not in " ".join(body["user_visible_warnings"])
+    assert "planning_job_error" in caplog.text
+    assert body["async_job"]["job_id"] in caplog.text
+    assert "req_background_failure" in caplog.text
+    assert "trace_background_failure" in caplog.text
+    assert "corr_background_failure" in caplog.text
+
+
 def test_async_plan_job_retry_starts_new_pollable_job():
     response = client.post("/api/travel/plan/async", json={"raw_user_input": RAW_INPUT})
     assert response.status_code == 200

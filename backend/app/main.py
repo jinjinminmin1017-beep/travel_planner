@@ -406,7 +406,14 @@ def _complete_plan_job(job_id: str, travel_request: TravelRequest, ctx, created_
             polling_url=f"/api/travel/jobs/{job_id}",
         )
         save_async_job_response(final.model_copy(update={"async_job": final_job}))
-    except Exception as exc:  # Background errors must become pollable business state.
+    except Exception:  # Background errors must become pollable business state.
+        logger.exception(
+            "planning_job_error job_id=%s request_id=%s trace_id=%s correlation_id=%s",
+            job_id,
+            ctx.request_id,
+            ctx.trace_id,
+            ctx.correlation_id,
+        )
         failed = _planning_job_response(
             travel_request=travel_request,
             ctx=ctx,
@@ -417,7 +424,7 @@ def _complete_plan_job(job_id: str, travel_request: TravelRequest, ctx, created_
             created_at=created_at,
         )
         failed.missing_components.append("travel_plan")
-        failed.user_visible_warnings = [f"规划任务失败：{exc}"]
+        failed.user_visible_warnings = ["规划任务暂时失败，请稍后重试。"]
         save_async_job_response(failed)
 
 

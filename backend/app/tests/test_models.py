@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
 import pytest
 from pydantic import ValidationError
@@ -41,6 +41,30 @@ def test_timepoint_requires_datetime_shape():
     assert tp.timezone == "Asia/Shanghai"
     with pytest.raises(ValidationError):
         TimePoint(datetime="not-a-date", timezone="Asia/Shanghai")
+
+
+def test_timepoint_normalizes_naive_datetime_with_declared_timezone():
+    point = TimePoint(datetime="2026-07-15T17:00:00", timezone="Asia/Shanghai")
+
+    assert point.datetime.isoformat() == "2026-07-15T17:00:00+08:00"
+    assert point.source_timezone == "Asia/Shanghai"
+
+
+def test_timepoint_converts_aware_datetime_to_declared_timezone_without_changing_instant():
+    point = TimePoint(
+        datetime="2026-07-15T09:00:00+00:00",
+        timezone="Asia/Shanghai",
+        source_timezone="UTC",
+    )
+
+    assert point.datetime.isoformat() == "2026-07-15T17:00:00+08:00"
+    assert point.datetime.astimezone(timezone.utc).isoformat() == "2026-07-15T09:00:00+00:00"
+    assert point.source_timezone == "UTC"
+
+
+def test_timepoint_rejects_invalid_iana_timezone():
+    with pytest.raises(ValidationError, match="valid IANA timezone"):
+        TimePoint(datetime="2026-07-15T17:00:00", timezone="Mars/Olympus_Mons")
 
 
 def test_error_response_required_fields_and_extra_forbidden():

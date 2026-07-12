@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime, timezone
 from enum import Enum
 from typing import Any, Literal
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -185,6 +186,28 @@ class TimePoint(StrictModel):
     datetime: datetime
     timezone: str
     source_timezone: str | None = None
+
+    @model_validator(mode="after")
+    def normalize_timezone(self) -> "TimePoint":
+        timezone_name = self.timezone.strip()
+        if not timezone_name:
+            raise ValueError("timezone must be a non-empty IANA timezone")
+        try:
+            target_timezone = ZoneInfo(timezone_name)
+        except (ZoneInfoNotFoundError, ValueError) as exc:
+            raise ValueError(f"timezone must be a valid IANA timezone: {timezone_name}") from exc
+
+        normalized_datetime = self.datetime
+        if normalized_datetime.tzinfo is None or normalized_datetime.utcoffset() is None:
+            normalized_datetime = normalized_datetime.replace(tzinfo=target_timezone)
+        else:
+            normalized_datetime = normalized_datetime.astimezone(target_timezone)
+
+        self.datetime = normalized_datetime
+        self.timezone = timezone_name
+        if not self.source_timezone:
+            self.source_timezone = timezone_name
+        return self
 
 
 class GeoPoint(StrictModel):

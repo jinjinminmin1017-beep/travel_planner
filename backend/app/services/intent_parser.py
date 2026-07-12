@@ -523,14 +523,20 @@ def validate_travel_request_semantics(request: TravelRequest) -> list[str]:
     if conflict:
         reasons.append(f"allowed_transport_modes conflicts with excluded_transport_modes: {', '.join(conflict)}")
     for label, point in [
+        ("time_window_start", request.time_window_start),
+        ("time_window_end", request.time_window_end),
         ("earliest_departure_time", request.earliest_departure_time),
         ("latest_arrival_time", request.latest_arrival_time),
         ("preferred_departure_time", request.preferred_departure_time),
         ("hard_constraints.earliest_departure_time", request.hard_constraints.earliest_departure_time),
         ("hard_constraints.latest_arrival_time", request.hard_constraints.latest_arrival_time),
     ]:
-        if point is not None and not point.timezone:
+        if point is None:
+            continue
+        if not point.timezone:
             reasons.append(f"{label}.timezone is required")
+        if point.datetime.tzinfo is None or point.datetime.utcoffset() is None:
+            reasons.append(f"{label}.datetime must include timezone information")
     cost = request.hard_constraints.max_total_cost
     if cost is not None and (cost.currency != "CNY" or cost.scale != 2):
         reasons.append("hard_constraints.max_total_cost must use CNY minor units with scale 2")

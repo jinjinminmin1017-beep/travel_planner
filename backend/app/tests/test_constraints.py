@@ -1,13 +1,15 @@
-from datetime import datetime
+import json
+from datetime import datetime, timezone
 
 import pytest
 
 from app.core.context import RequestContext
-from app.models.schemas import PlanningStatus, RecommendationEligibility, RiskLevel, TimePoint, TransportMode, money
+from app.models.schemas import FlightSegment, PlanningStatus, RailSegment, RecommendationEligibility, RiskLevel, TimePoint, TransportMode, money
 from app.services.candidate_generator import generate_candidate_plan_pool
 from app.services.constraints.evaluator import evaluate_plan_constraints
+from app.services.constraints.time_calculator import evaluate_time_constraints
 from app.services.constraints.relaxation_selector import build_constraint_analysis
-from app.services.intent_parser import parse_travel_request
+from app.services.intent_parser import _travel_request_from_llm_output, parse_travel_request, validate_travel_request_semantics
 from app.services.planner import build_plans, plan_trip
 
 
@@ -86,3 +88,41 @@ def test_time_and_budget_tracks_are_not_collapsed_into_cross_unit_score():
     assert "CLOSEST_TO_TIME" in categories
     assert any(violation.constraint_type == "MAX_TOTAL_COST" for item in analysis.alternatives for violation in item.violations)
     assert len(analysis.alternatives) <= 3
+
+
+def test_llm_naive_timepoint_is_normalized_before_semantic_validation():
+    request = _request()
+    payload = request.model_dump(mode="json")
+    payload["latest_arrival_time"] = {
+        "datetime": "2026-07-15T17:00:00",
+        "timezone": "Asia/Shanghai",
+        "source_timezone": None,
+    }
+    payload["hard_constraints"]["latest_arrival_time"] = payload["latest_arrival_time"]
+
+    parsed, errors = _travel_request_from_llm_output(json.dumps(payload), request.raw_user_input, _context())
+
+    assert errors == []
+    assert parsed is not None
+    assert parsed.latest_arrival_time is not None
+    assert parsed.latest_arrival_time.datetime.isoformat() == "2026-07-15T17:00:00+08:00"
+    assert validate_travel_request_semantics(parsed) == []
+
+
+def test_time_constraints_compare_different_offsets_by_absolute_instant():
+    request = _request()
+    plans, *_ = build_plans(request)
+    plan = plans[0]
+    arrival = next(segment.arrival_time for segment in reversed(plan.segments) if isinstance(segment, (RailSegment, FlightSegment)))
+    latest = TimePoint(
+        datetime=arrival.datetime.astimezone(timezone.utc),
+        timezone="UTC",
+        source_timezone="UTC",
+    )
+    request.latest_arrival_time = latest
+    request.hard_constraints.latest_arrival_time = latest
+
+    violations, preserved = evaluate_time_constraints(plan, request)
+
+    assert not any(item.constraint_type == "LATEST_ARRIVAL" for item in violations)
+    assert "LATEST_ARRIVAL" in preserved
