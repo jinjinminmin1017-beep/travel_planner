@@ -210,6 +210,99 @@
 - 前端拆分：当前 `App.tsx` 较集中；后续可按“输入、规划状态、结果概览、方案详情、数据来源、反馈”等边界抽出组件，但需要同步更新本索引。
 - 合同变更：运行 `scripts/export_schemas.py`，检查 `schemas/` diff，并同步前端类型。
 
+## 地图路线降级与结果集席别偏好架构（V1.17，已实现）
+
+### 当前问题与根因
+
+#### 地图 Provider 状态被过度放大
+
+- 2026-07-12 本地真实 smoke 已确认高德路线、Nominatim、地图跳转均可用；额外对打车、地铁、公交、步行进行的上海样例查询也均成功。因此“地图路线 Provider 不可用”不能解释为地图服务整体宕机。
+- `local_transfer_engine.py` 会为一个接驳段分别查询打车、地铁、公交、步行。任一需记录的选项缺坐标或查询失败，`_record_rule_fallback()` 都会立刻写入全局 `missing_components += map_route` 和全局警告。
+- `planner.py` 只要发现 `map_route` 缺失就把整次结果标为 `PARTIAL`；前端 `ResultsOverview` 又优先展示第一条全局 warning/source failure，导致“某个未选接驳备选失败”被表达成“当前地图 Provider 不可用”。
+- 首选 Provider 失败、备用 Provider 成功时，现有文案仍强调“首选不可用”，没有先表达“当前路线已有可用结果”。这属于降级成功，不应与无可用路线混为一类。
+- `OsrmRouteProvider` 当前固定调用 driving profile，却会接收地铁、公交和步行请求。OSRM 只能作为其真实支持方式的备用来源，不能以 driving 结果冒充公共交通或步行结果。
+
+#### 席别调整只修改单个计划快照
+
+- 完整路线页调用 `/api/travel/recalculate` 时虽默认发送 `PLAN_AND_RECOMMENDATION`，后端仍只 `deepcopy(existing)` 并修改目标 `plan_id`。
+- 推荐重算只把已修改计划放回原计划列表；其他计划的铁路段、费用和舒适度均保持原值。
+- `RecalculateResponse` 只返回一个 `plan`；前端 `replacePlan()` 也只按 `plan_id` 替换一条计划。因此返回门到门路线后，其他推荐卡仍显示旧席别，这是当前合同和状态模型的必然结果，不是单一页面刷新问题。
+- 用户选择的是“席别语义”（如二等座/一等座），不是可跨车次复用的 `option_id`。不同车次的同一席别可能具有不同 option_id 和价格，不能把目标段的 option_id 复制到其他方案。
+
+### 推荐方案
+
+#### 1. 分离 Provider 健康、精确查询结果和展示影响
+
+地图状态分三层处理：
+
+1. Provider 配置/健康：由 `/api/data-sources/status` 与独立 smoke 表达，回答“服务是否已启用、当前是否健康”。
+2. 精确路线查询：每个接驳选项记录 `PRIMARY_VERIFIED`、`FALLBACK_VERIFIED`、`RULE_ESTIMATED` 或 `UNAVAILABLE`，回答“本次起终点 + 交通方式是否取得路线”。
+3. 计划影响：只有当前计划实际选中的接驳选项为规则估算或不可用时，才允许把 `map_route` 放入全局 `missing_components` 并影响 `planning_status`；未选备选失败只保留在数据来源详情，不污染结果页主警告。
+
+具体规则：
+
+- 首选成功：不产生失败警告。
+- 首选失败、能力匹配的备用 Provider 成功：保留可观测性记录，但主文案为“当前路线已由备用地图数据源提供”；不写“地图 Provider 不可用”，也不把可用路线记为缺失。
+- 所有能力匹配 Provider 均失败、规则估算成功：仅受影响的选项标记 `RULE_ESTIMATED`；若它是当前选中项，结果可为 `PARTIAL`，文案限定为“该接驳路线暂未取得地图结果，已使用规则估算”。
+- 坐标缺失：使用 `MAP_COORDINATES_MISSING`，不得归因成 Provider 宕机。
+- Provider 超时、限流、空结果、未启用分别保留独立 error code，不再统一映射为 `MAP_ROUTE_UNAVAILABLE`。
+- 地图适配器声明支持的 `TransportMode`；调度器只把请求交给能力匹配的 Provider。OSRM driving 只可覆盖驾车/打车类路线，除非未来接入并验证对应 profile。
+
+#### 2. 将席别选择提升为当前结果集偏好
+
+为重算增加与计算范围正交的应用范围：
+
+- `TARGET_PLAN`：保留现有局部调整，适用于接驳方式等仅针对当前方案的操作。
+- `RESULT_SET`：把席别选择应用到当前 `TravelPlanResponse` 的全部铁路方案，并重新生成推荐结果。完整路线页的铁路席别调整必须使用该范围。
+
+结果集席别重算流程：
+
+1. 后端根据目标铁路段的 `option_id` 查出权威 `seat_type`，不得信任前端传入的展示 label 作为事实。
+2. 将该语义值写入结果集快照的 `travel_request.preferred_rail_seat`，并把 `preference_source` 设为 `USER_EXPLICIT`。
+3. 遍历同一结果集的所有 `TravelPlan` 和其中所有 `RailSegment`，按规范化后的 `seat_type` 查找各自可用 option；匹配后分别写入各自的 `selected_seat_option_id`。
+4. 对每个已应用计划重新计算票价、总费用、舒适度、数据质量和相关展示摘要；不复用目标计划的价格。
+5. 某计划任一铁路段没有该席别时，不得静默保留旧席别并继续占据推荐卡。该计划可作为“不支持当前席别”的候选保留，但必须退出本轮推荐候选池并返回结构化未应用原因。
+6. 对更新后的完整计划集重新执行候选门禁和 Recommendation；推荐卡中的 AVAILABLE 计划必须全部满足当前席别。数量不足时对应 slot 返回 NOT_AVAILABLE，不得用旧席别补位。
+7. 后端原子更新结果集快照、plan 索引和 plan-to-response 索引，再返回完整更新后的结果集。后续再次重算、详情读取和跳转必须看到同一版本。
+8. 前端用返回的完整结果集替换 `response`，而不是只替换单个 plan；尽量保留当前 plan_id，若它不再具备推荐资格则选择新的首个可用推荐方案。
+
+### 数据流
+
+```mermaid
+flowchart TD
+    A["完整路线选择席别 option_id"] --> B["POST /api/travel/recalculate\napplication_scope=RESULT_SET"]
+    B --> C["后端从目标段解析 canonical seat_type"]
+    C --> D["更新 TravelRequest 的当前结果集偏好"]
+    D --> E["逐计划、逐铁路段匹配各自 seat option"]
+    E --> F["重算每个计划费用与质量"]
+    F --> G["剔除不支持该席别的推荐资格"]
+    G --> H["重新生成三类推荐"]
+    H --> I["原子保存并返回完整 TravelPlanResponse"]
+    I --> J["前端整体替换结果并返回门到门路线"]
+```
+
+### 影响范围与文件修改范围
+
+- API/schema：`backend/app/models/schemas.py`、`schemas/*.schema.json`、`frontend/src/types/index.ts`。
+- 后端重算与推荐：`backend/app/services/planner.py`、`candidate_generator.py`、`store.py`、`persistence.py`，必要时抽出结果集偏好应用器。
+- 地图能力与错误聚合：`backend/app/data_sources/map_providers.py`、`backend/app/services/local_transfer_engine.py`、`planner.py`、Provider 配置与 smoke 脚本。
+- 前端：`frontend/src/api/client.ts`、`App.tsx`、`RouteDetailScreen.tsx`、`ResultsOverview.tsx` 和数据来源展示。
+- 测试：地图 Provider 能力路由、失败分级、选中/未选选项影响、结果集席别传播、推荐重排、持久化一致性和前端整体替换。
+
+### 风险与控制
+
+- 结果集批量更新可能出现部分计划成功、部分失败：先在内存构造完整新快照并验证，再一次性更新索引；不得边遍历边持久化。
+- 不同铁路段席别命名可能不一致：引入受控规范化映射，但保留 Provider 原始 label；未知值不猜测匹配。
+- 用户选择席别后可推荐方案减少：使用 NOT_AVAILABLE 明确表达，不能悄悄回退席别。
+- LLM 只能在已完成席别应用和资格过滤后的候选中选卡，不能修改席别、价格或 option_id。
+- 地图主警告收敛后可能降低问题可见性：详细 source failure 和结构化日志继续保留，只有结果页主状态按实际选中路线聚合。
+
+### 回滚方式
+
+- 席别结果集传播使用功能开关；关闭后回到 `TARGET_PLAN` 旧行为，但前端必须同步隐藏“应用到全部方案”的承诺。
+- 新增合同字段保持可空/有默认值，回滚服务时旧客户端仍可使用单计划 `plan` 字段。
+- 地图错误聚合可回滚展示策略，不回滚 Provider 原始失败日志；禁止通过重新启用不匹配的 OSRM mode 来掩盖问题。
+
 ## 当前边界
 
 - 当前没有独立 Web 前端交付路线。

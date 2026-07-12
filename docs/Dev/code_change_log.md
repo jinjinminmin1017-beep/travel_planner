@@ -77,3 +77,20 @@
   - `npm run typecheck`：通过。
   - `npm run test:helpers`：通过，9 passed。
   - `npm run build`：通过，Expo iOS / Android / Web 导出成功。
+## 2026-07-12 09:36:27 +08:00
+
+- 任务：ARC-20260712-02 修正地图降级语义并实现结果集席别传播。
+- 代码提交：`3f17f50fd1d04bf9c92c9faaa47e5633b9bec96e`。
+- 修改内容：
+  - 地图 Provider 声明并按交通方式过滤能力，OSRM driving 不再处理地铁、公交或步行请求。
+  - 精确路线查询区分首选、备用、规则估算、超时、限流、空结果、未启用、坐标缺失和能力不匹配；只有选中接驳项降级才影响计划与整体 `PARTIAL`。
+  - API 与前后端合同升级到 V1.17，新增 `application_scope`、完整 `updated_response` 和结构化 `preference_application`。
+  - 新增结果集席别偏好应用器，以目标段合法 option_id 解析权威席别，逐计划逐铁路段匹配各自 option_id、重算费用和舒适度，并剔除不支持席别的推荐候选。
+  - 完整快照在校验后一次性更新持久化与内存索引；前端整体替换结果集并保留或安全切换当前方案。
+  - 扩展真实地图 smoke、后端回归和前端合同测试，重新导出全部 JSON Schema。
+- 验证：
+  - `.\.venv\Scripts\python.exe -m pytest backend/app/tests -q`：通过，163 passed。
+  - `.\.venv\Scripts\python.exe -m pytest backend/app/tests/test_schema_exports.py -q`：通过，3 passed。
+  - `npm run test:helpers`：通过，10 passed。
+  - `npm run typecheck`：通过。
+  - `npm run build`：通过，Expo iOS / Android / Web 导出成功。

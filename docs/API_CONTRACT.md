@@ -4,7 +4,7 @@
 
 本文只记录已在 `backend/app/main.py` 或 `frontend/src/api/client.ts` 中发现的接口。统一错误结构见 `backend/app/models/schemas.py` 的 `ErrorResponse`。
 
-当前 API schema version 为 `1.16`；文末记录已实现的约束无匹配响应与前端消费规则。
+当前 API schema version 为 `1.17`；文末记录已实现的约束无匹配响应与前端消费规则。
 
 ## 通用错误响应
 
@@ -133,6 +133,63 @@
 - Error Response：通用 `ErrorResponse`；方案不存在返回 404；非法重算请求返回 400。
 - 前端调用位置：`frontend/src/api/client.ts` `recalculate()`；`frontend/src/App.tsx` 调整席别、舱位、本地接驳和时间重算后替换方案。
 - 后端实现位置：`backend/app/main.py` `recalculate()`
+
+### 结果集席别重算契约（V1.17，已实现）
+
+现有 V1.16 的 `recalculate_scope=PLAN_AND_RECOMMENDATION` 只表示是否重新计算推荐，不表示把选择应用到其他计划。V1.17 增加独立字段：
+
+```json
+{
+  "plan_id": "plan_a",
+  "change_type": "SEAT_TYPE",
+  "target_segment_id": "rail_a",
+  "selected_option": {
+    "option_type": "SEAT",
+    "option_id": "seat_a_first",
+    "option_value": "一等座",
+    "source_option_version": "ui_selected"
+  },
+  "application_scope": "RESULT_SET",
+  "recalculate_scope": "FULL_REEVALUATION"
+}
+```
+
+- `application_scope`：`TARGET_PLAN | RESULT_SET`，默认 `TARGET_PLAN` 以兼容旧客户端。
+- `SEAT_TYPE + RESULT_SET`：以后端从目标段 option_id 解析出的 `seat_type` 为准，应用到同一结果集全部铁路段。
+- `LOCAL_TRANSFER_MODE` 第一阶段只允许 `TARGET_PLAN`；非法组合返回 422 `VALIDATION_ERROR`。
+- 前端不得假设同一席别在不同车次中具有相同 option_id。
+
+`RecalculateResponse` 保留现有 `plan` 作为兼容字段，并增加：
+
+```json
+{
+  "plan": {},
+  "updated_response": {},
+  "preference_application": {
+    "preference_type": "RAIL_SEAT",
+    "canonical_value": "一等座",
+    "application_scope": "RESULT_SET",
+    "applied_plan_ids": ["plan_a", "plan_b"],
+    "unsupported_plan_ids": ["plan_c"],
+    "message": "一等座已应用到2个方案；1个方案不提供该席别，已退出推荐。"
+  },
+  "recommendation_result": {}
+}
+```
+
+合同约束：
+
+- `RESULT_SET` 时 `updated_response` 和 `preference_application` 必须非空；`updated_response.plans` 是完整替换快照，不是增量 patch。
+- `updated_response.travel_request.preferred_rail_seat` 必须等于后端解析的 `canonical_value`，`preference_source=USER_EXPLICIT`。
+- `applied_plan_ids` 中每个包含铁路段的计划，其所有铁路段所选席别都必须匹配 `canonical_value`。
+- `unsupported_plan_ids` 不得出现在 AVAILABLE 推荐 slot 中；推荐不足时返回 NOT_AVAILABLE。
+- `updated_response.recommendation_result` 与顶层 `recommendation_result` 必须一致；后续版本可弃用重复的顶层字段，但 V1.17 保留兼容。
+- 后端必须先完成整组验证再持久化；失败时不允许留下部分计划已更新的状态。
+- 幂等键命中时返回同一完整结果集版本。
+
+Loading 行为：前端保留当前门到门结果并显示局部更新态；成功后整体替换结果集，失败时继续显示旧快照并提示调整失败。
+
+Empty 行为：若没有任何计划支持所选席别，返回成功的重算响应，推荐 slot 全部 NOT_AVAILABLE，并给出结构化 unsupported 说明；不得静默恢复原席别。
 
 ## POST /api/redirect/booking
 
