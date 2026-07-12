@@ -3,12 +3,30 @@
 ## 0. 任务状态
 
 - 视觉方案：已由用户确认
-- 设计稿：[`route_planning_ui_concept.html`](./route_planning_ui_concept.html)
-- 效果图：[`route_planning_ui_concept.png`](./route_planning_ui_concept.png)
+- 设计批准状态：Approved
+- 前端实施状态：已完成，并于 2026-07-12 按 Approved 高保真稿完成二次视觉精修
+- 最后更新：2026-07-12
+- 已批准高保真原型：[`route_planning_ui_concept.html`](../Design/route_planning_ui_concept.html)
+- 已批准高保真效果图：[`route_planning_ui_concept.png`](../Design/route_planning_ui_concept.png)
+- 已批准效果图绝对路径：`C:\Users\儿儿的爹妈\Documents\travel_planner\docs\Design\route_planning_ui_concept.png`
 - 实施范围：路径规划加载态、方案总览、路线详情
 - 技术栈：React Native 0.81 + Expo 54 + TypeScript
 - 主要入口：`frontend/src/App.tsx`
 - 设计 Token：`frontend/src/designSystem.ts`
+
+### 0.1 当前代码落点
+
+- 规划加载态：`frontend/src/components/planning/PlanningProgressScreen.tsx`
+- 规划阶段：`frontend/src/components/planning/PlanningStageList.tsx`
+- 方案总览：`frontend/src/components/results/ResultsOverview.tsx`
+- 路线摘要：`frontend/src/components/results/RouteSummaryHero.tsx`
+- 方案切换：`frontend/src/components/results/PlanSelector.tsx`
+- 推荐理由：`frontend/src/components/results/RecommendationRationale.tsx`
+- 路线时间轴：`frontend/src/components/results/RouteTimeline.tsx`
+- 路线详情：`frontend/src/components/results/RouteDetailScreen.tsx`
+- 分段卡片：`frontend/src/components/results/JourneyLegCard.tsx`
+- 底部操作：`frontend/src/components/results/ResultsBottomAction.tsx`
+- 风险提示：`frontend/src/components/results/PlanRiskNotice.tsx`
 
 ## 1. 页面目标
 
@@ -69,7 +87,7 @@
 
 ## 3. 组件拆分
 
-建议从 `frontend/src/App.tsx` 拆出以下纯展示或轻交互组件，避免继续扩大单文件：
+已从 `frontend/src/App.tsx` 拆出以下纯展示或轻交互组件。后续迭代应继续保持该边界，不得把展示逻辑重新堆回 `App.tsx`：
 
 ```text
 frontend/src/components/planning/
@@ -101,19 +119,19 @@ frontend/src/components/results/
 - `JourneyLegCard`：展示单个 `Segment`，支持按需展开可选座席、舱位或接驳方案。
 - `PlanRiskNotice`：展示方案级风险，不猜测交通段归属。
 
-把 `resultsPane` 从当前的：
+结果页状态已经从原有的：
 
 ```ts
 "overview" | "sources"
 ```
 
-扩展为：
+扩展并落地为：
 
 ```ts
 "overview" | "details" | "sources"
 ```
 
-方案切换、重新计算或返回总览时，必须保持当前 `selectedPlanId`。
+方案切换、重新计算或返回总览时，必须继续保持当前 `selectedPlanId`。
 
 ## 4. 设计 Token
 
@@ -408,6 +426,15 @@ spacing: {
 - [x] 在 Android 和 iOS 至少各验证一次安全区和固定底栏。（2026-07-11，SafeArea/固定栏代码检查与双平台导出；当前 Windows 环境无真机模拟器）
 - [x] 验证无方案、部分结果、来源失败、重新规划和取消任务。（2026-07-11，无方案/部分结果/来源失败实测，其余状态代码与回归测试覆盖）
 - [x] 验证现有埋点事件名称没有改变。（2026-07-11，静态合同测试覆盖）
+
+### Phase 7：Approved 高保真视觉精修
+
+- [x] 将规划阶段改为高保真稿中的横向四阶段状态卡，并收敛地图、标题和底部进度区的垂直节奏。（2026-07-12，提交 `83b23b7`）
+- [x] 将方案摘要重构为“目的地图 + 深青指标栏”，补齐选择方案标题、数据来源层级和推荐标识。（2026-07-12，提交 `83b23b7`）
+- [x] 将门到门时间轴放入白色承载面，缩短单段高度并保留真实推算时间语义。（2026-07-12，提交 `83b23b7`）
+- [x] 将路线详情重构为线路节点总览、白色分段卡、交通方式标签和独立费用卡。（2026-07-12，提交 `83b23b7`）
+- [x] 在 360、390、430px 下完成浏览器视觉回归，360px 核心价格、耗时和换乘指标均完整显示。（2026-07-12）
+- [x] 更新 `docs/Design/visual-regression-*.png` 回归图。（2026-07-12）
 
 ## 11. 验收标准
 
