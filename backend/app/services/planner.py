@@ -30,6 +30,7 @@ from app.models.schemas import (
     RecalculateRequest,
     RecalculateResponse,
     RecommendationEligibility,
+    RecommendationResult,
     RiskLevel,
     SourceFailure,
     SourceFailureClass,
@@ -70,6 +71,7 @@ from app.services.location_resolver import (
 from app.services.planning_rules import assert_option_available
 from app.services.rail_planning_engine import RailPlanSpec, TicketEnhancementSpec
 from app.services.recommendation import recommend_with_validation
+from app.services.result_set_preferences import apply_rail_seat_to_result_set
 from app.services.store import get_response_for_plan, update_plan
 
 logger = logging.getLogger("app.planner.rail")
@@ -1889,6 +1891,39 @@ def plan_trip(raw_or_request: str | TravelRequest, ctx: RequestContext) -> Trave
 
 
 def recalculate_plan(existing: TravelPlan, request: RecalculateRequest, ctx: RequestContext) -> RecalculateResponse:
+    if (
+        request.change_type == "SEAT_TYPE"
+        and request.application_scope == "RESULT_SET"
+        and os.getenv("RESULT_SET_SEAT_PROPAGATION_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
+    ):
+        original_response = get_response_for_plan(existing.plan_id)
+        if original_response is None:
+            raise ValueError("current result set is unavailable for seat propagation")
+        updated_response, preference_application, updated_plan = apply_rail_seat_to_result_set(
+            original_response,
+            target_plan_id=existing.plan_id,
+            target_segment_id=request.target_segment_id,
+            target_option_id=request.selected_option.option_id,
+            ctx=ctx,
+        )
+        return RecalculateResponse(
+            request_id=ctx.request_id,
+            trace_id=ctx.trace_id,
+            correlation_id=ctx.correlation_id,
+            idempotency_key=request.idempotency_key,
+            plan=updated_plan,
+            change_summary=RecalculateChangeSummary(
+                cost_delta=money_delta(updated_plan.cost_breakdown.total_cost.amount_minor - existing.cost_breakdown.total_cost.amount_minor),
+                duration_delta_minutes=updated_plan.total_duration_minutes - existing.total_duration_minutes,
+                comfort_delta=round(updated_plan.comfort_score.total_score - existing.comfort_score.total_score, 2),
+                changed_fields=["travel_request.preferred_rail_seat", "plans", "recommendation_result"],
+                message=preference_application.message,
+            ),
+            updated_response=updated_response,
+            preference_application=preference_application,
+            recommendation_result=updated_response.recommendation_result,
+            generated_at=now_timepoint(),
+        )
     plan = deepcopy(existing)
     target = next((segment for segment in plan.segments if segment.segment_id == request.target_segment_id), None)
     if target is None:
@@ -1918,6 +1953,10 @@ def recalculate_plan(existing: TravelPlan, request: RecalculateRequest, ctx: Req
         target.duration_minutes = selected_transfer.duration_minutes
         target.walking_distance_meters = selected_transfer.walking_distance_meters
         target.option_id = selected_transfer.option_id
+        target.data_source = selected_transfer.data_source
+        target.route_status = selected_transfer.route_status
+        target.route_error_code = selected_transfer.route_error_code
+        _sync_plan_selected_map_quality(plan)
         if request.selected_option.option_id == "transfer_subway":
             plan.comfort_score.total_score = max(0, plan.comfort_score.total_score - 0.5)
         elif request.selected_option.option_id == "transfer_bus":
@@ -1930,8 +1969,8 @@ def recalculate_plan(existing: TravelPlan, request: RecalculateRequest, ctx: Req
     update_plan(plan)
     after_cost = plan.cost_breakdown.total_cost.amount_minor
     recommendation_result = None
+    original_response = get_response_for_plan(existing.plan_id)
     if request.recalculate_scope in {"PLAN_AND_RECOMMENDATION", "FULL_REEVALUATION"}:
-        original_response = get_response_for_plan(existing.plan_id)
         if original_response:
             scoped_plans = [plan if item.plan_id == plan.plan_id else item for item in original_response.plans]
             candidate_pool = generate_candidate_plan_pool(scoped_plans, original_response.travel_request, original_response.missing_plan_explanations)
@@ -1944,6 +1983,9 @@ def recalculate_plan(existing: TravelPlan, request: RecalculateRequest, ctx: Req
                         candidate_plans=candidate_pool.llm_candidate_plans,
                     )
                 )
+    updated_response = None
+    if request.change_type == "LOCAL_TRANSFER_MODE" and original_response is not None:
+        updated_response = _updated_target_plan_snapshot(original_response, plan, recommendation_result)
     return RecalculateResponse(
         request_id=ctx.request_id,
         trace_id=ctx.trace_id,
@@ -1957,6 +1999,57 @@ def recalculate_plan(existing: TravelPlan, request: RecalculateRequest, ctx: Req
             changed_fields=["cost_breakdown", "comfort_score", "selected_option"],
             message="已基于后端返回的合法 option_id 完成重算。",
         ),
+        updated_response=updated_response,
         recommendation_result=recommendation_result,
         generated_at=now_timepoint(),
     )
+
+
+def _sync_plan_selected_map_quality(plan: TravelPlan) -> None:
+    selected_degraded = any(
+        isinstance(segment, LocalTransferSegment) and segment.route_status in {"RULE_ESTIMATED", "UNAVAILABLE"}
+        for segment in plan.segments
+    )
+    warning = "当前选中的接驳路线暂未取得地图结果，已使用规则估算。"
+    if selected_degraded:
+        if "map_route" not in plan.data_quality.missing_components:
+            plan.data_quality.missing_components.append("map_route")
+        if warning not in plan.data_quality.warnings:
+            plan.data_quality.warnings.append(warning)
+    else:
+        plan.data_quality.missing_components = [item for item in plan.data_quality.missing_components if item != "map_route"]
+        plan.data_quality.warnings = [item for item in plan.data_quality.warnings if item != warning]
+
+
+def _updated_target_plan_snapshot(
+    original: TravelPlanResponse,
+    updated_plan: TravelPlan,
+    recommendation_result: RecommendationResult | None,
+) -> TravelPlanResponse:
+    snapshot = deepcopy(original)
+    snapshot.plans = [updated_plan if plan.plan_id == updated_plan.plan_id else plan for plan in snapshot.plans]
+    if recommendation_result is not None:
+        snapshot.recommendation_result = recommendation_result
+    has_degraded_selected_route = any(
+        isinstance(segment, LocalTransferSegment) and segment.route_status in {"RULE_ESTIMATED", "UNAVAILABLE"}
+        for plan in snapshot.plans
+        for segment in plan.segments
+    )
+    warning = "当前选中的接驳路线暂未取得地图结果，已使用规则估算。"
+    if has_degraded_selected_route:
+        snapshot.planning_status = PlanningStatus.PARTIAL
+        if "map_route" not in snapshot.missing_components:
+            snapshot.missing_components.append("map_route")
+        if warning not in snapshot.user_visible_warnings:
+            snapshot.user_visible_warnings.append(warning)
+    else:
+        snapshot.missing_components = [item for item in snapshot.missing_components if item != "map_route"]
+        snapshot.user_visible_warnings = [
+            item
+            for item in snapshot.user_visible_warnings
+            if not ("接驳路线" in item and "规则估算" in item)
+        ]
+        if snapshot.recommendation_result is not None:
+            snapshot.planning_status = PlanningStatus.COMPLETE
+    snapshot.generated_at = now_timepoint()
+    return TravelPlanResponse.model_validate(snapshot.model_dump())

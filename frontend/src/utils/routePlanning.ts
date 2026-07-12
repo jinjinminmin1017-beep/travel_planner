@@ -124,7 +124,7 @@ function asMoney(value: Record<string, unknown>): Money | null {
 export function applyRelaxationToRequest(request: TravelRequest, alternative: RelaxationAlternative): TravelRequest {
   const next: TravelRequest = {
     ...request,
-    schema_version: "1.16",
+    schema_version: "1.17",
     request_id: `req_relax_${Date.now()}`,
     raw_user_input: `${request.raw_user_input}；已确认放宽：${alternative.violations.map((item) => item.user_visible_message).join("；")}`,
     hard_constraints: { ...request.hard_constraints }

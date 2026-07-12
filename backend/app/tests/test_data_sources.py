@@ -82,7 +82,7 @@ class _FakeLLMResponse:
         return None
 
     def json(self):
-        return {"choices": [{"message": {"content": '{"schema_version":"1.16"}'}}]}
+        return {"choices": [{"message": {"content": '{"schema_version":"1.17"}'}}]}
 
 
 class _RecordingLLMClient:

@@ -4,8 +4,8 @@
       "additionalProperties": false,
       "properties": {
         "schema_version": {
-          "const": "1.16",
-          "default": "1.16",
+          "const": "1.17",
+          "default": "1.17",
           "title": "Schema Version",
           "type": "string"
         },
@@ -269,8 +269,8 @@
       "additionalProperties": false,
       "properties": {
         "schema_version": {
-          "const": "1.16",
-          "default": "1.16",
+          "const": "1.17",
+          "default": "1.17",
           "title": "Schema Version",
           "type": "string"
         },
@@ -468,8 +468,8 @@
   "additionalProperties": false,
   "properties": {
     "schema_version": {
-      "const": "1.16",
-      "default": "1.16",
+      "const": "1.17",
+      "default": "1.17",
       "title": "Schema Version",
       "type": "string"
     },
@@ -511,5 +511,5 @@
   "title": "ParseTravelRequestResponse",
   "type": "object",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "x-schema-version": "1.16"
+  "x-schema-version": "1.17"
 }

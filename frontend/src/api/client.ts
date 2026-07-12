@@ -78,11 +78,19 @@ const OPTION_TYPE_BY_CHANGE_TYPE: Record<RecalculateChangeType, "SEAT" | "CABIN"
   LOCAL_TRANSFER_MODE: "TRANSFER_MODE"
 };
 
-export function recalculate(planId: string, segmentId: string, changeType: RecalculateChangeType, optionId: string, optionValue: string, recalculateScope: RecalculateScope = "PLAN_AND_RECOMMENDATION") {
+export function recalculate(
+  planId: string,
+  segmentId: string,
+  changeType: RecalculateChangeType,
+  optionId: string,
+  optionValue: string,
+  recalculateScope: RecalculateScope = "PLAN_AND_RECOMMENDATION",
+  applicationScope: "TARGET_PLAN" | "RESULT_SET" = "TARGET_PLAN"
+) {
   return request<RecalculateResponse>("/api/travel/recalculate", {
     method: "POST",
     body: JSON.stringify({
-      schema_version: "1.16",
+      schema_version: "1.17",
       request_id: `req_ui_${Date.now()}`,
       idempotency_key: `idem_ui_${Date.now()}`,
       plan_id: planId,
@@ -94,6 +102,7 @@ export function recalculate(planId: string, segmentId: string, changeType: Recal
         option_value: optionValue,
         source_option_version: "ui_selected"
       },
+      application_scope: applicationScope,
       recalculate_scope: recalculateScope
     })
   });
@@ -103,7 +112,7 @@ export function bookingRedirect(planId: string, segmentId: string | null, redire
   return request<{ redirect: BookingRedirect }>("/api/redirect/booking", {
     method: "POST",
     body: JSON.stringify({
-      schema_version: "1.16",
+      schema_version: "1.17",
       request_id: `req_redirect_${Date.now()}`,
       idempotency_key: `idem_redirect_${Date.now()}`,
       plan_id: planId,
@@ -124,7 +133,7 @@ export function submitFeedback(payload: {
   return request<FeedbackResponse>("/api/feedback", {
     method: "POST",
     body: JSON.stringify({
-      schema_version: "1.16",
+      schema_version: "1.17",
       request_id: payload.requestId,
       trace_id: payload.traceId,
       correlation_id: payload.correlationId,
@@ -140,7 +149,7 @@ export function trackEvent(payload: { eventType: AppEventType; requestId?: strin
   return request<{ accepted: boolean }>("/api/events", {
     method: "POST",
     body: JSON.stringify({
-      schema_version: "1.16",
+      schema_version: "1.17",
       event_type: payload.eventType,
       request_id: payload.requestId ?? null,
       trace_id: payload.traceId ?? null,

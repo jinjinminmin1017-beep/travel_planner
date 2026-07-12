@@ -35,7 +35,15 @@ export function RouteDetailScreen({ response, plan, favorite, onBack, onSources,
   async function applyOption(segment: Segment, changeType: RecalculateChangeType, optionId: string, label: string) {
     setBusy(true);
     try {
-      const result = await recalculate(plan.plan_id, segment.segment_id, changeType, optionId, label);
+      const result = await recalculate(
+        plan.plan_id,
+        segment.segment_id,
+        changeType,
+        optionId,
+        label,
+        changeType === "SEAT_TYPE" ? "FULL_REEVALUATION" : "PLAN_AND_RECOMMENDATION",
+        changeType === "SEAT_TYPE" ? "RESULT_SET" : "TARGET_PLAN"
+      );
       onRecalculated(result);
       Alert.alert("已更新路线", `${result.change_summary.message} ${result.change_summary.cost_delta.display_text}`);
     } catch (error) {

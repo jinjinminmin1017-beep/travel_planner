@@ -650,8 +650,8 @@
       "additionalProperties": false,
       "properties": {
         "schema_version": {
-          "const": "1.16",
-          "default": "1.16",
+          "const": "1.17",
+          "default": "1.17",
           "title": "Schema Version",
           "type": "string"
         },
@@ -826,8 +826,8 @@
       "additionalProperties": false,
       "properties": {
         "schema_version": {
-          "const": "1.16",
-          "default": "1.16",
+          "const": "1.17",
+          "default": "1.17",
           "title": "Schema Version",
           "type": "string"
         },
@@ -1005,6 +1005,29 @@
         },
         "data_source": {
           "$ref": "#/$defs/DataSourceMetadata"
+        },
+        "route_status": {
+          "default": "PRIMARY_VERIFIED",
+          "enum": [
+            "PRIMARY_VERIFIED",
+            "FALLBACK_VERIFIED",
+            "RULE_ESTIMATED",
+            "UNAVAILABLE"
+          ],
+          "title": "Route Status",
+          "type": "string"
+        },
+        "route_error_code": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Route Error Code"
         }
       },
       "required": [
@@ -1106,6 +1129,29 @@
         },
         "data_source": {
           "$ref": "#/$defs/DataSourceMetadata"
+        },
+        "route_status": {
+          "default": "PRIMARY_VERIFIED",
+          "enum": [
+            "PRIMARY_VERIFIED",
+            "FALLBACK_VERIFIED",
+            "RULE_ESTIMATED",
+            "UNAVAILABLE"
+          ],
+          "title": "Route Status",
+          "type": "string"
+        },
+        "route_error_code": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Route Error Code"
         },
         "redirect_info": {
           "anyOf": [
@@ -1430,8 +1476,8 @@
       "additionalProperties": false,
       "properties": {
         "schema_version": {
-          "const": "1.16",
-          "default": "1.16",
+          "const": "1.17",
+          "default": "1.17",
           "title": "Schema Version",
           "type": "string"
         },
@@ -1468,8 +1514,8 @@
       "additionalProperties": false,
       "properties": {
         "schema_version": {
-          "const": "1.16",
-          "default": "1.16",
+          "const": "1.17",
+          "default": "1.17",
           "title": "Schema Version",
           "type": "string"
         },
@@ -2045,8 +2091,8 @@
       "additionalProperties": false,
       "properties": {
         "schema_version": {
-          "const": "1.16",
-          "default": "1.16",
+          "const": "1.17",
+          "default": "1.17",
           "title": "Schema Version",
           "type": "string"
         },
@@ -2199,8 +2245,8 @@
       "additionalProperties": false,
       "properties": {
         "schema_version": {
-          "const": "1.16",
-          "default": "1.16",
+          "const": "1.17",
+          "default": "1.17",
           "title": "Schema Version",
           "type": "string"
         },
@@ -2398,8 +2444,8 @@
   "additionalProperties": false,
   "properties": {
     "schema_version": {
-      "const": "1.16",
-      "default": "1.16",
+      "const": "1.17",
+      "default": "1.17",
       "title": "Schema Version",
       "type": "string"
     },
@@ -2540,5 +2586,5 @@
   "title": "TravelPlanResponse",
   "type": "object",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "x-schema-version": "1.16"
+  "x-schema-version": "1.17"
 }

@@ -5,7 +5,7 @@ Convert the user's travel request into one TravelRequest JSON object.
 
 Output rules:
 1. Output JSON only. Do not output Markdown or explanatory text.
-2. Set schema_version to "1.16".
+2. Set schema_version to "1.17".
 3. Copy request_id exactly from the user prompt.
 4. Copy raw_user_input exactly from the user prompt.
 5. Do not guess missing origin, destination, or travel_date. Use an empty string or null and let backend validation ask follow-up questions.
@@ -70,7 +70,7 @@ Forbidden field names:
 
 Minimal shape example. Replace the values with the current user prompt values:
 {
-  "schema_version": "1.16",
+  "schema_version": "1.17",
   "request_id": "copy-from-user-prompt",
   "raw_user_input": "copy-from-user-prompt",
   "origin_text": "",

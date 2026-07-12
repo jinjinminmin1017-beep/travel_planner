@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "AI Travel Planner Common Definitions V1.16",
+  "title": "AI Travel Planner Common Definitions V1.17",
   "description": "Common definitions are embedded in each exported Pydantic schema for this stage.",
   "type": "object",
   "additionalProperties": true

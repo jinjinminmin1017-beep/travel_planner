@@ -100,4 +100,35 @@ def test_local_transfer_engine_records_rule_fallback_when_map_provider_empty():
     assert "map_route" in sink.missing
     assert sink.failures
     assert all(failure["fallback_used"] for failure in sink.failures)
-    assert any("地图路线 Provider 不可用" in warning for warning in sink.warnings)
+    assert any("该接驳路线暂未取得地图结果" in warning for warning in sink.warnings)
+
+
+def test_unselected_transfer_failure_does_not_mark_selected_route_partial():
+    sink = _IssueSink()
+
+    def mixed_estimate(request, environment=None):
+        if request.mode == TransportMode.TAXI:
+            return _estimate_for_mode(request, environment)
+        return MapRouteProviderResult(
+            estimate=None,
+            attempted_source_ids=["amap_route"],
+            failure_message=f"empty {request.mode.value} route",
+            error_code="MAP_ROUTE_EMPTY",
+            query_status="UNAVAILABLE",
+        )
+
+    segment = build_local_transfer_segment(
+        segment_id="seg_selected_verified",
+        origin="上海嘉定南翔格林公馆",
+        destination="上海虹桥站",
+        default_minutes=38,
+        default_cost_minor=7800,
+        selected_option_id="transfer_taxi",
+        route_estimator=mixed_estimate,
+        issue_sink=sink,
+    )
+
+    assert segment.route_status == "PRIMARY_VERIFIED"
+    assert sink.missing == []
+    assert sink.warnings == []
+    assert sink.failures

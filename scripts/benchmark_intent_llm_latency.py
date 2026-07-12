@@ -70,7 +70,7 @@ def build_user_prompt(raw_input: str, request_id: str, current_date: date) -> st
         [
             "请将以下用户出行需求解析为 TravelRequest JSON。",
             "",
-            "schema_version: 1.16",
+            "schema_version: 1.17",
             f"request_id: {request_id}",
             f"default_timezone: {DEFAULT_TIMEZONE}",
             f"current_date: {current_date.isoformat()}",
@@ -83,7 +83,7 @@ def build_user_prompt(raw_input: str, request_id: str, current_date: date) -> st
             "- 不要 Markdown",
             "- 不要解释",
             "- 不要生成车次、航班、价格、余票或路线方案",
-            "- 必须符合 TravelRequest Schema V1.16",
+            "- 必须符合 TravelRequest Schema V1.17",
         ]
     )
 

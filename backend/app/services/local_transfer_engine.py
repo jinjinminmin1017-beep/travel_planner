@@ -71,6 +71,13 @@ class TransferContext:
         return self.origin.endswith("站") or self.destination.endswith("站") or "站" in self.origin or "站" in self.destination
 
 
+@dataclass(frozen=True)
+class RouteResolution:
+    estimate: MapRouteEstimate | None
+    route_status: str
+    error_code: str | None = None
+
+
 INTERNAL_TRANSFER_SOURCE = DataSourceMetadata(
     source_id="internal_calc",
     source_name="Internal Local Transfer Engine",
@@ -97,6 +104,8 @@ def build_local_transfer_segment(
     context = TransferContext(origin, destination, default_minutes, default_cost_minor, route_estimator, issue_sink)
     options = build_local_transfer_options(context)
     selected = next((option for option in options if option.option_id == selected_option_id), options[0])
+    if selected.route_status in {"RULE_ESTIMATED", "UNAVAILABLE"}:
+        _record_selected_degradation(context, selected)
     return LocalTransferSegment(
         segment_id=segment_id,
         origin=origin,
@@ -111,6 +120,8 @@ def build_local_transfer_segment(
         available_options=[option.option_id for option in options],
         transfer_options=options,
         data_source=selected.data_source,
+        route_status=selected.route_status,
+        route_error_code=selected.route_error_code,
         redirect_info=None,
     )
 
@@ -119,7 +130,7 @@ def build_local_transfer_options(context: TransferContext) -> list[LocalTransfer
     taxi = _estimate_or_fallback(context, TransportMode.TAXI)
     subway = _estimate_or_fallback(context, TransportMode.SUBWAY)
     bus = _estimate_or_fallback(context, TransportMode.BUS)
-    walk = _estimate_or_fallback(context, TransportMode.WALK, record_issue=False)
+    walk = _estimate_or_fallback(context, TransportMode.WALK)
 
     options = [
         _taxi_option(context, taxi),
@@ -132,13 +143,18 @@ def build_local_transfer_options(context: TransferContext) -> list[LocalTransfer
     return options
 
 
-def _estimate_or_fallback(context: TransferContext, mode: TransportMode, record_issue: bool = True) -> MapRouteEstimate | None:
+def _estimate_or_fallback(context: TransferContext, mode: TransportMode) -> RouteResolution:
     origin_point = resolve_location_point(context.origin)
     destination_point = resolve_location_point(context.destination)
     if not origin_point or not destination_point:
-        if record_issue:
-            _record_rule_fallback(context, "map_route", "MAP_COORDINATES_MISSING", f"missing coordinates for local transfer: {context.origin} -> {context.destination}", "地图路线坐标不完整，接驳段已使用规则估算。")
-        return None
+        _record_route_detail(
+            context,
+            source_id="map_route",
+            error_code="MAP_COORDINATES_MISSING",
+            message=f"missing coordinates for local transfer: {context.origin} -> {context.destination}",
+            user_message="该接驳路线坐标不完整，已使用规则估算。",
+        )
+        return RouteResolution(None, "RULE_ESTIMATED", "MAP_COORDINATES_MISSING")
 
     result = context.route_estimator(
         MapRouteRequest(
@@ -151,16 +167,16 @@ def _estimate_or_fallback(context: TransferContext, mode: TransportMode, record_
         None,
     )
     if result.estimate is None:
-        if record_issue:
-            source_id = result.attempted_source_ids[-1] if result.attempted_source_ids else "map_route"
-            _record_rule_fallback(
-                context,
-                source_id,
-                "MAP_ROUTE_UNAVAILABLE",
-                result.failure_message or f"map route unavailable for {mode.value}: {context.origin} -> {context.destination}",
-                "地图路线 Provider 不可用，接驳段已使用规则估算，并标记为降级。",
-            )
-        return None
+        source_id = result.attempted_source_ids[-1] if result.attempted_source_ids else "map_route"
+        error_code = result.error_code or "MAP_ROUTE_UNAVAILABLE"
+        _record_route_detail(
+            context,
+            source_id=source_id,
+            error_code=error_code,
+            message=result.failure_message or f"map route unavailable for {mode.value}: {context.origin} -> {context.destination}",
+            user_message=_route_failure_message(error_code),
+        )
+        return RouteResolution(None, "RULE_ESTIMATED", error_code)
     if result.fallback_used and context.issue_sink:
         context.issue_sink.add_source_failure(
             source_id=result.attempted_source_ids[0],
@@ -169,17 +185,18 @@ def _estimate_or_fallback(context: TransferContext, mode: TransportMode, record_
             handling_strategy=SourceFailureHandlingStrategy.FALLBACK,
             error_code="MAP_ROUTE_FALLBACK_USED",
             message=result.fallback_reason or "map route fallback provider used",
-            user_visible_message="首选地图 Provider 不可用，已使用备用地图数据源估算接驳。",
+            user_visible_message="当前路线已由备用地图数据源提供，可正常使用。",
             impacted_plan_types=_impacted_plan_types(),
             source_used_id=result.fallback_source_id,
             fallback_source_id=result.fallback_source_id,
             fallback_reason=result.fallback_reason,
             fallback_used=True,
         )
-    return result.estimate
+    return RouteResolution(result.estimate, result.query_status)
 
 
-def _taxi_option(context: TransferContext, estimate: MapRouteEstimate | None) -> LocalTransferOption:
+def _taxi_option(context: TransferContext, resolution: RouteResolution) -> LocalTransferOption:
+    estimate = resolution.estimate
     duration = estimate.duration_minutes if estimate else context.default_minutes
     cost = estimate.estimated_cost if estimate and estimate.estimated_cost else money(context.default_cost_minor, estimated=True)
     return LocalTransferOption(
@@ -194,10 +211,13 @@ def _taxi_option(context: TransferContext, estimate: MapRouteEstimate | None) ->
         egress_instruction=f"在 {context.destination} 下车，跳转后以地图或打车平台确认为准。",
         walking_distance_meters=120,
         data_source=estimate.data_source if estimate else INTERNAL_TRANSFER_SOURCE,
+        route_status=resolution.route_status,
+        route_error_code=resolution.error_code,
     )
 
 
-def _transit_option(context: TransferContext, mode: TransportMode, estimate: MapRouteEstimate | None) -> LocalTransferOption:
+def _transit_option(context: TransferContext, mode: TransportMode, resolution: RouteResolution) -> LocalTransferOption:
+    estimate = resolution.estimate
     is_subway = mode == TransportMode.SUBWAY
     label = "地铁" if is_subway else "公交"
     option_id = "transfer_subway" if is_subway else "transfer_bus"
@@ -224,10 +244,13 @@ def _transit_option(context: TransferContext, mode: TransportMode, estimate: Map
         egress_instruction=f"从 {egress} 步行/短驳至 {context.destination}。",
         walking_distance_meters=walking_distance,
         data_source=estimate.data_source if estimate else INTERNAL_TRANSFER_SOURCE,
+        route_status=resolution.route_status,
+        route_error_code=resolution.error_code,
     )
 
 
-def _walk_option(context: TransferContext, estimate: MapRouteEstimate | None) -> LocalTransferOption | None:
+def _walk_option(context: TransferContext, resolution: RouteResolution) -> LocalTransferOption | None:
+    estimate = resolution.estimate
     distance = estimate.distance_meters if estimate else context.rule_distance_meters
     if context.is_airport_transfer or distance > 2200:
         return None
@@ -244,14 +267,14 @@ def _walk_option(context: TransferContext, estimate: MapRouteEstimate | None) ->
         egress_instruction=f"到达 {context.destination}，请现场确认入口位置。",
         walking_distance_meters=distance,
         data_source=estimate.data_source if estimate else INTERNAL_TRANSFER_SOURCE,
+        route_status=resolution.route_status,
+        route_error_code=resolution.error_code,
     )
 
 
-def _record_rule_fallback(context: TransferContext, source_id: str, error_code: str, message: str, user_message: str) -> None:
+def _record_route_detail(context: TransferContext, source_id: str, error_code: str, message: str, user_message: str) -> None:
     if not context.issue_sink:
         return
-    context.issue_sink.add_missing("map_route")
-    context.issue_sink.add_warning(user_message)
     context.issue_sink.add_source_failure(
         source_id=source_id,
         adapter_name="LocalTransferEngine",
@@ -266,6 +289,25 @@ def _record_rule_fallback(context: TransferContext, source_id: str, error_code: 
         fallback_reason=message,
         fallback_used=True,
     )
+
+
+def _record_selected_degradation(context: TransferContext, selected: LocalTransferOption) -> None:
+    if not context.issue_sink:
+        return
+    message = _route_failure_message(selected.route_error_code or "MAP_ROUTE_UNAVAILABLE")
+    context.issue_sink.add_missing("map_route")
+    context.issue_sink.add_warning(message)
+
+
+def _route_failure_message(error_code: str) -> str:
+    return {
+        "MAP_COORDINATES_MISSING": "该接驳路线坐标不完整，已使用规则估算。",
+        "MAP_ROUTE_TIMEOUT": "该接驳路线查询超时，已使用规则估算。",
+        "MAP_ROUTE_RATE_LIMITED": "该接驳路线查询触发限流，已使用规则估算。",
+        "MAP_ROUTE_EMPTY": "该接驳路线未返回可用结果，已使用规则估算。",
+        "MAP_ROUTE_NOT_ENABLED": "该接驳方式暂无已启用的地图数据源，已使用规则估算。",
+        "MAP_MODE_UNSUPPORTED": "当前地图数据源不支持该接驳方式，已使用规则估算。",
+    }.get(error_code, "该接驳路线暂未取得地图结果，已使用规则估算。")
 
 
 def _traffic_risk(option: LocalTransferOption) -> RiskLevel:

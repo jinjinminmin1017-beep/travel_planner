@@ -24,24 +24,24 @@ Output rules:
 
 Required output shape:
 {
-  "schema_version": "1.16",
+  "schema_version": "1.17",
   "selected_recommendations": [
     {
-      "schema_version": "1.16",
+      "schema_version": "1.17",
       "recommendation_type": "CHEAPEST",
       "status": "NOT_AVAILABLE",
       "plan_id": null,
       "reason": "No selectable candidate is available for this slot."
     },
     {
-      "schema_version": "1.16",
+      "schema_version": "1.17",
       "recommendation_type": "MOST_COMFORTABLE",
       "status": "NOT_AVAILABLE",
       "plan_id": null,
       "reason": "No selectable candidate is available for this slot."
     },
     {
-      "schema_version": "1.16",
+      "schema_version": "1.17",
       "recommendation_type": "BALANCED",
       "status": "NOT_AVAILABLE",
       "plan_id": null,

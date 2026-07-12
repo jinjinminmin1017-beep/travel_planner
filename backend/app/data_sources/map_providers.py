@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from math import ceil
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 import httpx
 
@@ -12,7 +12,9 @@ from app.models.schemas import DataSourceMetadata, DataSourceType, GeoPoint, Mon
 
 
 class MapProviderError(RuntimeError):
-    pass
+    def __init__(self, message: str, error_code: str = "MAP_ROUTE_FAILED") -> None:
+        super().__init__(message)
+        self.error_code = error_code
 
 
 @dataclass(frozen=True)
@@ -41,10 +43,13 @@ class MapRouteProviderResult:
     fallback_used: bool = False
     fallback_source_id: str | None = None
     fallback_reason: str | None = None
+    query_status: Literal["PRIMARY_VERIFIED", "FALLBACK_VERIFIED", "UNAVAILABLE"] = "PRIMARY_VERIFIED"
+    error_code: str | None = None
 
 
 class MapRouteProvider(Protocol):
     source_id: str
+    supported_modes: frozenset[TransportMode]
 
     def estimate_route(self, request: MapRouteRequest) -> MapRouteEstimate:
         ...
@@ -65,6 +70,17 @@ def data_source_metadata(source_id: str, source_name: str) -> DataSourceMetadata
 
 class AmapRouteProvider:
     source_id = "amap_route"
+    supported_modes = frozenset(
+        {
+            TransportMode.TAXI,
+            TransportMode.RIDE_HAILING,
+            TransportMode.RAIL_STATION_TRANSFER,
+            TransportMode.AIRPORT_TRANSFER,
+            TransportMode.SUBWAY,
+            TransportMode.BUS,
+            TransportMode.WALK,
+        }
+    )
 
     def __init__(self, api_key: str, client: httpx.Client | None = None, base_url: str = "https://restapi.amap.com") -> None:
         self.api_key = api_key
@@ -102,7 +118,7 @@ class AmapRouteProvider:
         if request.mode in {TransportMode.SUBWAY, TransportMode.BUS}:
             transits = route.get("transits") or []
             if not transits:
-                raise MapProviderError("AMap transit response has no transits")
+                raise MapProviderError("AMap transit response has no transits", "MAP_ROUTE_EMPTY")
             first = transits[0]
             distance = _to_int(first.get("distance"))
             duration = ceil(_to_int(first.get("duration")) / 60)
@@ -110,7 +126,7 @@ class AmapRouteProvider:
             return MapRouteEstimate(distance, duration, cost, "高德公交/地铁路线规划", data_source_metadata(self.source_id, "AMap Route Planning API"))
         paths = route.get("paths") or []
         if not paths:
-            raise MapProviderError("AMap route response has no paths")
+            raise MapProviderError("AMap route response has no paths", "MAP_ROUTE_EMPTY")
         first = paths[0]
         distance = _to_int(first.get("distance"))
         duration = ceil(_to_int(first.get("duration")) / 60)
@@ -120,6 +136,7 @@ class AmapRouteProvider:
 
 class BaiduDirectionLiteProvider:
     source_id = "baidu_map_route"
+    supported_modes = AmapRouteProvider.supported_modes
 
     def __init__(self, api_key: str, client: httpx.Client | None = None, base_url: str = "https://api.map.baidu.com") -> None:
         self.api_key = api_key
@@ -141,7 +158,7 @@ class BaiduDirectionLiteProvider:
             raise MapProviderError(f"Baidu route failed: {payload.get('message') or payload.get('status')}")
         routes = (payload.get("result") or {}).get("routes") or []
         if not routes:
-            raise MapProviderError("Baidu route response has no routes")
+            raise MapProviderError("Baidu route response has no routes", "MAP_ROUTE_EMPTY")
         first = routes[0]
         return MapRouteEstimate(
             distance_meters=_to_int(first.get("distance")),
@@ -161,12 +178,22 @@ class BaiduDirectionLiteProvider:
 
 class OsrmRouteProvider:
     source_id = "osrm_route"
+    supported_modes = frozenset(
+        {
+            TransportMode.TAXI,
+            TransportMode.RIDE_HAILING,
+            TransportMode.RAIL_STATION_TRANSFER,
+            TransportMode.AIRPORT_TRANSFER,
+        }
+    )
 
     def __init__(self, client: httpx.Client | None = None, base_url: str | None = None) -> None:
         self.client = client or httpx.Client(timeout=8.0)
         self.base_url = (base_url or os.getenv("OSRM_ROUTE_BASE_URL") or "https://router.project-osrm.org").rstrip("/")
 
     def estimate_route(self, request: MapRouteRequest) -> MapRouteEstimate:
+        if request.mode not in self.supported_modes:
+            raise MapProviderError(f"OSRM driving does not support {request.mode.value}", "MAP_MODE_UNSUPPORTED")
         params = {"overview": "false", "alternatives": "false", "steps": "false"}
         response = self.client.get(
             f"{self.base_url}/route/v1/driving/{_osrm_coord(request.origin)};{_osrm_coord(request.destination)}",
@@ -178,7 +205,7 @@ class OsrmRouteProvider:
             raise MapProviderError(f"OSRM route failed: {payload.get('code')}")
         routes = payload.get("routes") or []
         if not routes:
-            raise MapProviderError("OSRM route response has no routes")
+            raise MapProviderError("OSRM route response has no routes", "MAP_ROUTE_EMPTY")
         first = routes[0]
         distance = _to_int(first.get("distance"))
         duration = ceil(_to_int(first.get("duration")) / 60)
@@ -213,7 +240,14 @@ def estimate_route_with_enabled_provider(request: MapRouteRequest, environment: 
 def estimate_route_with_enabled_provider_result(request: MapRouteRequest, environment: str | None = None) -> MapRouteProviderResult:
     attempted_source_ids: list[str] = []
     failure_messages: list[str] = []
-    for provider in build_enabled_map_providers(environment):
+    failure_codes: list[str] = []
+    enabled_providers = build_enabled_map_providers(environment)
+    compatible_providers = [
+        provider
+        for provider in enabled_providers
+        if request.mode in getattr(provider, "supported_modes", frozenset(TransportMode))
+    ]
+    for provider in compatible_providers:
         attempted_source_ids.append(provider.source_id)
         try:
             estimate = provider.estimate_route(request)
@@ -224,15 +258,42 @@ def estimate_route_with_enabled_provider_result(request: MapRouteRequest, enviro
                 fallback_used=fallback_used,
                 fallback_source_id=provider.source_id if fallback_used else None,
                 fallback_reason="; ".join(failure_messages) if fallback_used else None,
+                query_status="FALLBACK_VERIFIED" if fallback_used else "PRIMARY_VERIFIED",
             )
         except (httpx.HTTPError, MapProviderError, ValueError) as exc:
             failure_messages.append(f"{provider.source_id}: {exc}")
+            failure_codes.append(_map_error_code(exc))
             continue
+    if not enabled_providers:
+        error_code = "MAP_ROUTE_NOT_ENABLED"
+    elif not compatible_providers:
+        error_code = "MAP_MODE_UNSUPPORTED"
+    elif failure_codes:
+        error_code = _aggregate_failure_code(failure_codes)
+    else:
+        error_code = "MAP_ROUTE_UNAVAILABLE"
     return MapRouteProviderResult(
         estimate=None,
         attempted_source_ids=attempted_source_ids,
         failure_message="; ".join(failure_messages) or None,
+        query_status="UNAVAILABLE",
+        error_code=error_code,
     )
+
+
+def _map_error_code(exc: Exception) -> str:
+    if isinstance(exc, MapProviderError):
+        return exc.error_code
+    if isinstance(exc, httpx.TimeoutException):
+        return "MAP_ROUTE_TIMEOUT"
+    if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code == 429:
+        return "MAP_ROUTE_RATE_LIMITED"
+    return "MAP_ROUTE_FAILED"
+
+
+def _aggregate_failure_code(codes: list[str]) -> str:
+    priority = ["MAP_ROUTE_RATE_LIMITED", "MAP_ROUTE_TIMEOUT", "MAP_ROUTE_EMPTY", "MAP_ROUTE_FAILED"]
+    return next((code for code in priority if code in codes), codes[-1])
 
 
 def _first_env(*names: str) -> str:

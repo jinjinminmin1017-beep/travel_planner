@@ -30,7 +30,7 @@ def test_planner_marks_rule_based_transfer_fallback_when_real_map_provider_is_em
 
     assert plans
     assert "map_route" in missing
-    assert any("地图路线 Provider 不可用" in warning for warning in warnings)
+    assert any("该接驳路线暂未取得地图结果" in warning for warning in warnings)
     assert any(failure.source_id == "amap_route" and failure.fallback_used for failure in failures)
     transfer_segments = [segment for plan in plans for segment in plan.segments if getattr(segment, "segment_type", None) == "LOCAL_TRANSFER"]
     assert transfer_segments

@@ -52,7 +52,7 @@ export type AppEventType =
   | "PREFERENCE_UPDATED";
 
 export type ErrorResponse = {
-  schema_version: "1.16";
+  schema_version: "1.17";
   request_id: string;
   error_code: string;
   message: string;
@@ -63,7 +63,7 @@ export type ErrorResponse = {
 };
 
 export type TravelRequest = {
-  schema_version: "1.16";
+  schema_version: "1.17";
   request_id: string;
   raw_user_input: string;
   origin_text: string;
@@ -90,7 +90,7 @@ export type TravelRequest = {
 };
 
 export type LLMValidationResult = {
-  schema_version: "1.16";
+  schema_version: "1.17";
   schema_valid: boolean;
   semantic_valid: boolean;
   repair_attempted: boolean;
@@ -104,7 +104,7 @@ export type LLMValidationResult = {
 };
 
 export type ParseTravelRequestResponse = {
-  schema_version: "1.16";
+  schema_version: "1.17";
   request_id: string;
   trace_id: string;
   correlation_id: string;
@@ -175,6 +175,8 @@ export type LocalTransferOption = {
   egress_instruction: string;
   walking_distance_meters: number;
   data_source: DataSourceMetadata;
+  route_status: "PRIMARY_VERIFIED" | "FALLBACK_VERIFIED" | "RULE_ESTIMATED" | "UNAVAILABLE";
+  route_error_code: string | null;
 };
 
 export type Segment = {
@@ -202,6 +204,8 @@ export type Segment = {
   selected_cabin_option_id?: string;
   previous_flight_risk_available?: boolean;
   data_source: DataSourceMetadata;
+  route_status?: "PRIMARY_VERIFIED" | "FALLBACK_VERIFIED" | "RULE_ESTIMATED" | "UNAVAILABLE";
+  route_error_code?: string | null;
   redirect_info?: BookingRedirect | null;
 };
 
@@ -239,7 +243,7 @@ export type DataQuality = {
 };
 
 export type TravelPlan = {
-  schema_version: "1.16";
+  schema_version: "1.17";
   plan_id: string;
   plan_name: string;
   plan_type: string;
@@ -262,7 +266,7 @@ export type TravelPlan = {
 };
 
 export type RecommendationSlot = {
-  schema_version: "1.16";
+  schema_version: "1.17";
   recommendation_type: "CHEAPEST" | "MOST_COMFORTABLE" | "BALANCED";
   status: "AVAILABLE" | "NOT_AVAILABLE" | "BLOCKED";
   plan_id: string | null;
@@ -270,7 +274,7 @@ export type RecommendationSlot = {
 };
 
 export type DestinationPresentation = {
-  schema_version: "1.16";
+  schema_version: "1.17";
   destination_key: string;
   display_name: string;
   hero_image_url: string;
@@ -351,7 +355,7 @@ export type ConstraintAnalysis = {
 };
 
 export type TravelPlanResponse = {
-  schema_version: "1.16";
+  schema_version: "1.17";
   request_id: string;
   trace_id: string;
   correlation_id: string;
@@ -372,7 +376,7 @@ export type TravelPlanResponse = {
 };
 
 export type RecalculateResponse = {
-  schema_version: "1.16";
+  schema_version: "1.17";
   request_id: string;
   trace_id: string;
   correlation_id: string;
@@ -385,12 +389,21 @@ export type RecalculateResponse = {
     changed_fields: string[];
     message: string;
   };
+  updated_response: TravelPlanResponse | null;
+  preference_application: {
+    preference_type: "RAIL_SEAT";
+    canonical_value: string;
+    application_scope: "RESULT_SET";
+    applied_plan_ids: string[];
+    unsupported_plan_ids: string[];
+    message: string;
+  } | null;
   recommendation_result: { recommendations: RecommendationSlot[]; llm_validation_result: LLMValidationResult } | null;
   generated_at: TimePoint;
 };
 
 export type DataSourceStatusResponse = {
-  schema_version: "1.16";
+  schema_version: "1.17";
   sources: Array<{
     source_id: string;
     source_name: string;
@@ -406,7 +419,7 @@ export type DataSourceStatusResponse = {
 };
 
 export type FeedbackResponse = {
-  schema_version: "1.16";
+  schema_version: "1.17";
   feedback_id: string;
   request_id: string;
   trace_id: string;

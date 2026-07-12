@@ -38,8 +38,8 @@
   "additionalProperties": false,
   "properties": {
     "schema_version": {
-      "const": "1.16",
-      "default": "1.16",
+      "const": "1.17",
+      "default": "1.17",
       "title": "Schema Version",
       "type": "string"
     },
@@ -71,6 +71,15 @@
     "selected_option": {
       "$ref": "#/$defs/SelectedOption"
     },
+    "application_scope": {
+      "default": "TARGET_PLAN",
+      "enum": [
+        "TARGET_PLAN",
+        "RESULT_SET"
+      ],
+      "title": "Application Scope",
+      "type": "string"
+    },
     "recalculate_scope": {
       "default": "PLAN_ONLY",
       "enum": [
@@ -93,5 +102,5 @@
   "title": "RecalculateRequest",
   "type": "object",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "x-schema-version": "1.16"
+  "x-schema-version": "1.17"
 }

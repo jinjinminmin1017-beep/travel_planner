@@ -36,3 +36,14 @@ test("plan risks stay at plan level without text-based segment matching", async 
   assert.match(detail, /<PlanRiskNotice plan=\{plan\}/);
   assert.doesNotMatch(riskNotice, /segment_id|segmentTitle|includes\(/);
 });
+
+test("rail seat recalculation replaces the full result set while transfers stay plan-scoped", async () => {
+  const detail = await read("../src/components/results/RouteDetailScreen.tsx");
+  const app = await read("../src/App.tsx");
+  const client = await read("../src/api/client.ts");
+  assert.match(detail, /changeType === "SEAT_TYPE" \? "RESULT_SET" : "TARGET_PLAN"/);
+  assert.match(detail, /changeType === "SEAT_TYPE" \? "FULL_REEVALUATION"/);
+  assert.match(client, /application_scope: applicationScope/);
+  assert.match(app, /if \(updatedResponse\.updated_response\)/);
+  assert.match(app, /setResponse\(completeResponse\)/);
+});

@@ -28,6 +28,15 @@ def save_response(response: TravelPlanResponse) -> None:
     record_travel_response(response)
 
 
+def replace_response_snapshot(response: TravelPlanResponse) -> None:
+    """Persist a validated full snapshot before exposing it through in-memory indexes."""
+    save_travel_response(response)
+    _index_response(response)
+    if response.async_job is not None:
+        ASYNC_JOB_RESPONSES[response.async_job.job_id] = response
+        set_json(f"async_job:{response.async_job.job_id}", response.model_dump_json(), async_job_ttl_seconds())
+
+
 def save_async_job_response(response: TravelPlanResponse) -> None:
     if response.async_job is None:
         raise ValueError("async_job is required to save async job response")

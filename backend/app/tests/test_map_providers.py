@@ -195,6 +195,25 @@ def test_map_provider_result_falls_back_in_amap_baidu_osrm_order(monkeypatch):
     assert "baidu_map_route unavailable" in (result.fallback_reason or "")
 
 
+def test_osrm_driving_is_not_dispatched_for_transit_modes(monkeypatch):
+    provider = OsrmRouteProvider(client=_FakeClient({"code": "Ok", "routes": [{"distance": 1200, "duration": 480}]}), base_url="https://example.test")
+    monkeypatch.setattr("app.data_sources.map_providers.build_enabled_map_providers", lambda environment=None: [provider])
+
+    request = _route_request()
+    request = MapRouteRequest(
+        origin=request.origin,
+        destination=request.destination,
+        mode=TransportMode.SUBWAY,
+        origin_city=request.origin_city,
+        destination_city=request.destination_city,
+    )
+    result = estimate_route_with_enabled_provider_result(request, "DEV")
+
+    assert result.estimate is None
+    assert result.attempted_source_ids == []
+    assert result.error_code == "MAP_MODE_UNSUPPORTED"
+
+
 def test_planner_uses_real_map_estimate_when_provider_is_enabled(monkeypatch):
     def fake_estimate(request, environment=None):
         estimate = MapRouteEstimate(

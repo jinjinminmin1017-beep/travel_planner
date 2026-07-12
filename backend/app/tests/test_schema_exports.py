@@ -20,9 +20,9 @@ def test_exported_schema_files_are_full_pydantic_artifacts():
         payload = json.loads(path.read_text(encoding="utf-8"))
         expected = model.model_json_schema(ref_template="#/$defs/{model}")
         expected["$schema"] = "https://json-schema.org/draft/2020-12/schema"
-        expected["x-schema-version"] = "1.16"
+        expected["x-schema-version"] = "1.17"
         assert payload == expected
-        assert payload["x-schema-version"] == "1.16"
+        assert payload["x-schema-version"] == "1.17"
         assert payload["title"] == model.model_json_schema()["title"]
         if "$defs" in expected:
             assert "$defs" in payload
@@ -31,16 +31,17 @@ def test_exported_schema_files_are_full_pydantic_artifacts():
 def test_travel_request_schema_forbids_unknown_fields():
     payload = json.loads((ROOT / "schemas" / "travel-request.schema.json").read_text(encoding="utf-8"))
     assert payload["additionalProperties"] is False
-    assert payload["properties"]["schema_version"]["const"] == "1.16"
+    assert payload["properties"]["schema_version"]["const"] == "1.17"
 
 
-def test_p0_02_contract_enums_match_schema_v1_16():
+def test_p0_02_contract_enums_match_schema_v1_17():
     recalculate = json.loads((ROOT / "schemas" / "recalculate-request.schema.json").read_text(encoding="utf-8"))
     travel_plan = json.loads((ROOT / "schemas" / "travel-plan-response.schema.json").read_text(encoding="utf-8"))
     data_sources = json.loads((ROOT / "schemas" / "data-source-status.schema.json").read_text(encoding="utf-8"))
 
     assert recalculate["properties"]["change_type"]["enum"] == ["SEAT_TYPE", "CABIN_TYPE", "LOCAL_TRANSFER_MODE"]
     assert recalculate["properties"]["recalculate_scope"]["enum"] == ["PLAN_ONLY", "PLAN_AND_RECOMMENDATION", "FULL_REEVALUATION"]
+    assert recalculate["properties"]["application_scope"]["enum"] == ["TARGET_PLAN", "RESULT_SET"]
     assert recalculate["$defs"]["SelectedOption"]["properties"]["option_type"]["enum"] == ["SEAT", "CABIN", "TRANSFER_MODE"]
 
     plan_defs = travel_plan["$defs"]

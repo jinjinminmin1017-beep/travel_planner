@@ -33,7 +33,7 @@ const segment = (overrides) => ({
   ...overrides
 });
 const plan = (overrides = {}) => ({
-  schema_version: "1.16",
+  schema_version: "1.17",
   plan_id: "plan-a",
   plan_name: "方案 A",
   plan_type: "DIRECT_RAIL",
@@ -79,7 +79,7 @@ test("buildRouteTimeline marks only inferred times as estimated", () => {
 test("recommendation reason and comparison use response facts", () => {
   const selected = plan();
   const cheaper = plan({ plan_id: "plan-b", total_duration_minutes: 240, cost_breakdown: { total_cost: money(25000), items: [] } });
-  assert.equal(findRecommendationReason(selected, [{ schema_version: "1.16", recommendation_type: "BALANCED", status: "AVAILABLE", plan_id: "plan-a", reason: "价格与时间更均衡" }]), "价格与时间更均衡");
+  assert.equal(findRecommendationReason(selected, [{ schema_version: "1.17", recommendation_type: "BALANCED", status: "AVAILABLE", plan_id: "plan-a", reason: "价格与时间更均衡" }]), "价格与时间更均衡");
   assert.deepEqual(calculatePlanDifference(selected, cheaper), { comparedPlanId: "plan-b", costDeltaMinor: 5000, durationDeltaMinutes: -60 });
   assert.equal(moneyDelta(selected.cost_breakdown.total_cost, 5000).display_text, "¥50.00");
 });
@@ -88,7 +88,7 @@ test("confirmed relaxation updates the structured request before replanning", ()
   const requested = { datetime: "2026-07-11T18:00:00+08:00", timezone: "Asia/Shanghai", source_timezone: "Asia/Shanghai" };
   const actual = { datetime: "2026-07-11T19:12:00+08:00", timezone: "Asia/Shanghai", source_timezone: "Asia/Shanghai" };
   const request = {
-    schema_version: "1.16",
+    schema_version: "1.17",
     request_id: "req-a",
     raw_user_input: "18点前到达",
     origin_text: "温州",
@@ -109,5 +109,5 @@ test("confirmed relaxation updates the structured request before replanning", ()
   };
   const relaxed = applyRelaxationToRequest(request, alternative);
   assert.equal(relaxed.hard_constraints.latest_arrival_time.datetime, actual.datetime);
-  assert.equal(relaxed.schema_version, "1.16");
+  assert.equal(relaxed.schema_version, "1.17");
 });

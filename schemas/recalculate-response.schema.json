@@ -1,5 +1,56 @@
 {
   "$defs": {
+    "AsyncJob": {
+      "additionalProperties": false,
+      "properties": {
+        "job_id": {
+          "title": "Job Id",
+          "type": "string"
+        },
+        "job_status": {
+          "$ref": "#/$defs/AsyncJobStatus"
+        },
+        "created_at": {
+          "$ref": "#/$defs/TimePoint"
+        },
+        "updated_at": {
+          "$ref": "#/$defs/TimePoint"
+        },
+        "polling_url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Polling Url"
+        }
+      },
+      "required": [
+        "job_id",
+        "job_status",
+        "created_at",
+        "updated_at"
+      ],
+      "title": "AsyncJob",
+      "type": "object"
+    },
+    "AsyncJobStatus": {
+      "enum": [
+        "QUEUED",
+        "RUNNING",
+        "WAITING_SOURCE",
+        "PARTIAL_READY",
+        "COMPLETE",
+        "FAILED",
+        "CANCELLED"
+      ],
+      "title": "AsyncJobStatus",
+      "type": "string"
+    },
     "BookingRedirect": {
       "additionalProperties": false,
       "properties": {
@@ -147,6 +198,31 @@
       "title": "CacheMetadata",
       "type": "object"
     },
+    "CategoricalDeviation": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "CATEGORICAL",
+          "default": "CATEGORICAL",
+          "title": "Kind",
+          "type": "string"
+        },
+        "requested": {
+          "title": "Requested",
+          "type": "string"
+        },
+        "actual": {
+          "title": "Actual",
+          "type": "string"
+        }
+      },
+      "required": [
+        "requested",
+        "actual"
+      ],
+      "title": "CategoricalDeviation",
+      "type": "object"
+    },
     "ComfortScore": {
       "additionalProperties": false,
       "properties": {
@@ -192,6 +268,121 @@
       "title": "ComfortScore",
       "type": "object"
     },
+    "ConstraintAnalysis": {
+      "additionalProperties": false,
+      "properties": {
+        "result_type": {
+          "$ref": "#/$defs/ConstraintResultType"
+        },
+        "summary": {
+          "title": "Summary",
+          "type": "string"
+        },
+        "coverage": {
+          "items": {
+            "$ref": "#/$defs/CoverageItem"
+          },
+          "title": "Coverage",
+          "type": "array"
+        },
+        "alternatives": {
+          "items": {
+            "$ref": "#/$defs/RelaxationAlternative"
+          },
+          "maxItems": 3,
+          "title": "Alternatives",
+          "type": "array"
+        }
+      },
+      "required": [
+        "result_type",
+        "summary",
+        "coverage",
+        "alternatives"
+      ],
+      "title": "ConstraintAnalysis",
+      "type": "object"
+    },
+    "ConstraintResultType": {
+      "enum": [
+        "RELAXATION_AVAILABLE",
+        "NO_SAFE_ALTERNATIVE"
+      ],
+      "title": "ConstraintResultType",
+      "type": "string"
+    },
+    "ConstraintType": {
+      "enum": [
+        "LATEST_ARRIVAL",
+        "EARLIEST_DEPARTURE",
+        "ARRIVAL_TIME_WINDOW",
+        "DEPARTURE_TIME_WINDOW",
+        "MAX_TOTAL_COST",
+        "ALLOWED_TRANSPORT_MODES",
+        "EXCLUDED_TRANSPORT_MODES",
+        "PREFERRED_RAIL_SEAT",
+        "PREFERRED_FLIGHT_CABIN"
+      ],
+      "title": "ConstraintType",
+      "type": "string"
+    },
+    "ConstraintViolation": {
+      "additionalProperties": false,
+      "properties": {
+        "constraint_type": {
+          "$ref": "#/$defs/ConstraintType"
+        },
+        "relaxation_policy": {
+          "const": "USER_CONFIRMATION_REQUIRED",
+          "default": "USER_CONFIRMATION_REQUIRED",
+          "title": "Relaxation Policy",
+          "type": "string"
+        },
+        "requested_value": {
+          "title": "Requested Value",
+          "type": "object"
+        },
+        "actual_value": {
+          "title": "Actual Value",
+          "type": "object"
+        },
+        "deviation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DurationDeviation"
+            },
+            {
+              "$ref": "#/$defs/MoneyDeviation"
+            },
+            {
+              "$ref": "#/$defs/ModeSetDeviation"
+            },
+            {
+              "$ref": "#/$defs/CategoricalDeviation"
+            }
+          ],
+          "title": "Deviation"
+        },
+        "reason_code": {
+          "title": "Reason Code",
+          "type": "string"
+        },
+        "user_visible_message": {
+          "title": "User Visible Message",
+          "type": "string"
+        }
+      },
+      "required": [
+        "constraint_type",
+        "requested_value",
+        "actual_value",
+        "deviation",
+        "reason_code",
+        "user_visible_message"
+      ],
+      "title": "ConstraintViolation",
+      "type": "object"
+    },
     "CostBreakdown": {
       "additionalProperties": false,
       "properties": {
@@ -234,6 +425,39 @@
       ],
       "title": "CostItem",
       "type": "object"
+    },
+    "CoverageItem": {
+      "additionalProperties": false,
+      "properties": {
+        "transport_mode": {
+          "$ref": "#/$defs/TransportMode"
+        },
+        "status": {
+          "$ref": "#/$defs/CoverageStatus"
+        },
+        "message": {
+          "title": "Message",
+          "type": "string"
+        }
+      },
+      "required": [
+        "transport_mode",
+        "status",
+        "message"
+      ],
+      "title": "CoverageItem",
+      "type": "object"
+    },
+    "CoverageStatus": {
+      "enum": [
+        "VERIFIED",
+        "EMPTY",
+        "UNAVAILABLE",
+        "FAILED",
+        "TIMEOUT"
+      ],
+      "title": "CoverageStatus",
+      "type": "string"
     },
     "DataQuality": {
       "additionalProperties": false,
@@ -422,6 +646,111 @@
       "title": "DataSourceType",
       "type": "string"
     },
+    "DestinationPresentation": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "1.17",
+          "default": "1.17",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "destination_key": {
+          "title": "Destination Key",
+          "type": "string"
+        },
+        "display_name": {
+          "title": "Display Name",
+          "type": "string"
+        },
+        "hero_image_url": {
+          "title": "Hero Image Url",
+          "type": "string"
+        },
+        "image_alt": {
+          "title": "Image Alt",
+          "type": "string"
+        },
+        "image_credit": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Image Credit"
+        },
+        "image_source": {
+          "default": "LOCAL_STATIC",
+          "enum": [
+            "LOCAL_STATIC",
+            "CLOUD_CDN",
+            "REMOTE_URL"
+          ],
+          "title": "Image Source",
+          "type": "string"
+        },
+        "focal_point": {
+          "default": "center",
+          "title": "Focal Point",
+          "type": "string"
+        },
+        "tags": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Tags",
+          "type": "array"
+        }
+      },
+      "required": [
+        "destination_key",
+        "display_name",
+        "hero_image_url",
+        "image_alt"
+      ],
+      "title": "DestinationPresentation",
+      "type": "object"
+    },
+    "DurationDeviation": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "DURATION",
+          "default": "DURATION",
+          "title": "Kind",
+          "type": "string"
+        },
+        "value": {
+          "minimum": 0,
+          "title": "Value",
+          "type": "integer"
+        },
+        "unit": {
+          "const": "MINUTE",
+          "default": "MINUTE",
+          "title": "Unit",
+          "type": "string"
+        },
+        "direction": {
+          "enum": [
+            "EARLIER",
+            "LATER"
+          ],
+          "title": "Direction",
+          "type": "string"
+        }
+      },
+      "required": [
+        "value",
+        "direction"
+      ],
+      "title": "DurationDeviation",
+      "type": "object"
+    },
     "FlightSegment": {
       "additionalProperties": false,
       "properties": {
@@ -497,8 +826,8 @@
       "additionalProperties": false,
       "properties": {
         "schema_version": {
-          "const": "1.16",
-          "default": "1.16",
+          "const": "1.17",
+          "default": "1.17",
           "title": "Schema Version",
           "type": "string"
         },
@@ -676,6 +1005,29 @@
         },
         "data_source": {
           "$ref": "#/$defs/DataSourceMetadata"
+        },
+        "route_status": {
+          "default": "PRIMARY_VERIFIED",
+          "enum": [
+            "PRIMARY_VERIFIED",
+            "FALLBACK_VERIFIED",
+            "RULE_ESTIMATED",
+            "UNAVAILABLE"
+          ],
+          "title": "Route Status",
+          "type": "string"
+        },
+        "route_error_code": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Route Error Code"
         }
       },
       "required": [
@@ -778,6 +1130,29 @@
         "data_source": {
           "$ref": "#/$defs/DataSourceMetadata"
         },
+        "route_status": {
+          "default": "PRIMARY_VERIFIED",
+          "enum": [
+            "PRIMARY_VERIFIED",
+            "FALLBACK_VERIFIED",
+            "RULE_ESTIMATED",
+            "UNAVAILABLE"
+          ],
+          "title": "Route Status",
+          "type": "string"
+        },
+        "route_error_code": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Route Error Code"
+        },
         "redirect_info": {
           "anyOf": [
             {
@@ -804,6 +1179,56 @@
         "data_source"
       ],
       "title": "LocalTransferSegment",
+      "type": "object"
+    },
+    "MissingPlanExplanation": {
+      "additionalProperties": false,
+      "properties": {
+        "plan_type": {
+          "$ref": "#/$defs/PlanType"
+        },
+        "reason_code": {
+          "title": "Reason Code",
+          "type": "string"
+        },
+        "user_visible_message": {
+          "title": "User Visible Message",
+          "type": "string"
+        }
+      },
+      "required": [
+        "plan_type",
+        "reason_code",
+        "user_visible_message"
+      ],
+      "title": "MissingPlanExplanation",
+      "type": "object"
+    },
+    "ModeSetDeviation": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "MODE_SET",
+          "default": "MODE_SET",
+          "title": "Kind",
+          "type": "string"
+        },
+        "added_modes": {
+          "items": {
+            "$ref": "#/$defs/TransportMode"
+          },
+          "title": "Added Modes",
+          "type": "array"
+        },
+        "removed_modes": {
+          "items": {
+            "$ref": "#/$defs/TransportMode"
+          },
+          "title": "Removed Modes",
+          "type": "array"
+        }
+      },
+      "title": "ModeSetDeviation",
       "type": "object"
     },
     "Money": {
@@ -892,6 +1317,41 @@
       "title": "MoneyDelta",
       "type": "object"
     },
+    "MoneyDeviation": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "MONEY",
+          "default": "MONEY",
+          "title": "Kind",
+          "type": "string"
+        },
+        "amount_minor": {
+          "minimum": 0,
+          "title": "Amount Minor",
+          "type": "integer"
+        },
+        "currency": {
+          "maxLength": 3,
+          "minLength": 3,
+          "title": "Currency",
+          "type": "string"
+        },
+        "scale": {
+          "maximum": 6,
+          "minimum": 0,
+          "title": "Scale",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "amount_minor",
+        "currency",
+        "scale"
+      ],
+      "title": "MoneyDeviation",
+      "type": "object"
+    },
     "NormalizedScores": {
       "additionalProperties": false,
       "properties": {
@@ -956,6 +1416,65 @@
       ],
       "title": "PlanType",
       "type": "string"
+    },
+    "PlanningStatus": {
+      "enum": [
+        "PENDING",
+        "RUNNING",
+        "PARTIAL",
+        "COMPLETE",
+        "NO_MATCH",
+        "FAILED"
+      ],
+      "title": "PlanningStatus",
+      "type": "string"
+    },
+    "PreferenceApplication": {
+      "additionalProperties": false,
+      "properties": {
+        "preference_type": {
+          "const": "RAIL_SEAT",
+          "default": "RAIL_SEAT",
+          "title": "Preference Type",
+          "type": "string"
+        },
+        "canonical_value": {
+          "title": "Canonical Value",
+          "type": "string"
+        },
+        "application_scope": {
+          "const": "RESULT_SET",
+          "default": "RESULT_SET",
+          "title": "Application Scope",
+          "type": "string"
+        },
+        "applied_plan_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Applied Plan Ids",
+          "type": "array"
+        },
+        "unsupported_plan_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Unsupported Plan Ids",
+          "type": "array"
+        },
+        "message": {
+          "title": "Message",
+          "type": "string"
+        }
+      },
+      "required": [
+        "canonical_value",
+        "applied_plan_ids",
+        "unsupported_plan_ids",
+        "message"
+      ],
+      "title": "PreferenceApplication",
+      "type": "object"
     },
     "RailSegment": {
       "additionalProperties": false,
@@ -1080,8 +1599,8 @@
       "additionalProperties": false,
       "properties": {
         "schema_version": {
-          "const": "1.16",
-          "default": "1.16",
+          "const": "1.17",
+          "default": "1.17",
           "title": "Schema Version",
           "type": "string"
         },
@@ -1118,8 +1637,8 @@
       "additionalProperties": false,
       "properties": {
         "schema_version": {
-          "const": "1.16",
-          "default": "1.16",
+          "const": "1.17",
+          "default": "1.17",
           "title": "Schema Version",
           "type": "string"
         },
@@ -1177,6 +1696,59 @@
         "BALANCED"
       ],
       "title": "RecommendationType",
+      "type": "string"
+    },
+    "RelaxationAlternative": {
+      "additionalProperties": false,
+      "properties": {
+        "alternative_id": {
+          "title": "Alternative Id",
+          "type": "string"
+        },
+        "category": {
+          "$ref": "#/$defs/RelaxationCategory"
+        },
+        "plan": {
+          "$ref": "#/$defs/TravelPlan"
+        },
+        "violations": {
+          "items": {
+            "$ref": "#/$defs/ConstraintViolation"
+          },
+          "minItems": 1,
+          "title": "Violations",
+          "type": "array"
+        },
+        "preserved_constraints": {
+          "items": {
+            "$ref": "#/$defs/ConstraintType"
+          },
+          "title": "Preserved Constraints",
+          "type": "array"
+        },
+        "user_confirmation_required": {
+          "const": true,
+          "default": true,
+          "title": "User Confirmation Required",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "alternative_id",
+        "category",
+        "plan",
+        "violations"
+      ],
+      "title": "RelaxationAlternative",
+      "type": "object"
+    },
+    "RelaxationCategory": {
+      "enum": [
+        "CLOSEST_TO_TIME",
+        "CLOSEST_TO_BUDGET",
+        "LEAST_BEHAVIOR_CHANGE"
+      ],
+      "title": "RelaxationCategory",
       "type": "string"
     },
     "RiskAssessment": {
@@ -1283,6 +1855,161 @@
       ],
       "title": "SeatOption",
       "type": "object"
+    },
+    "SourceFailure": {
+      "additionalProperties": false,
+      "properties": {
+        "failure_id": {
+          "title": "Failure Id",
+          "type": "string"
+        },
+        "request_id": {
+          "title": "Request Id",
+          "type": "string"
+        },
+        "trace_id": {
+          "title": "Trace Id",
+          "type": "string"
+        },
+        "correlation_id": {
+          "title": "Correlation Id",
+          "type": "string"
+        },
+        "source_id": {
+          "title": "Source Id",
+          "type": "string"
+        },
+        "adapter_name": {
+          "title": "Adapter Name",
+          "type": "string"
+        },
+        "handling_strategy": {
+          "$ref": "#/$defs/SourceFailureHandlingStrategy"
+        },
+        "error_code": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Error Code"
+        },
+        "retry_count": {
+          "minimum": 0,
+          "title": "Retry Count",
+          "type": "integer"
+        },
+        "source_used_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Source Used Id"
+        },
+        "fallback_source_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Fallback Source Id"
+        },
+        "fallback_reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Fallback Reason"
+        },
+        "fallback_used": {
+          "title": "Fallback Used",
+          "type": "boolean"
+        },
+        "failure_class": {
+          "$ref": "#/$defs/SourceFailureClass"
+        },
+        "message": {
+          "title": "Message",
+          "type": "string"
+        },
+        "final_handling_strategy": {
+          "$ref": "#/$defs/SourceFailureHandlingStrategy"
+        },
+        "impacted_plan_types": {
+          "items": {
+            "$ref": "#/$defs/PlanType"
+          },
+          "title": "Impacted Plan Types",
+          "type": "array"
+        },
+        "user_visible_message": {
+          "title": "User Visible Message",
+          "type": "string"
+        },
+        "occurred_at": {
+          "$ref": "#/$defs/TimePoint"
+        }
+      },
+      "required": [
+        "failure_id",
+        "request_id",
+        "trace_id",
+        "correlation_id",
+        "source_id",
+        "adapter_name",
+        "handling_strategy",
+        "error_code",
+        "retry_count",
+        "source_used_id",
+        "fallback_source_id",
+        "fallback_reason",
+        "fallback_used",
+        "failure_class",
+        "message",
+        "final_handling_strategy",
+        "impacted_plan_types",
+        "user_visible_message",
+        "occurred_at"
+      ],
+      "title": "SourceFailure",
+      "type": "object"
+    },
+    "SourceFailureClass": {
+      "enum": [
+        "AUXILIARY_DATA_FAILURE",
+        "FALLBACK_AVAILABLE_FAILURE",
+        "CORE_FACT_FAILURE",
+        "SAFETY_CRITICAL_FAILURE"
+      ],
+      "title": "SourceFailureClass",
+      "type": "string"
+    },
+    "SourceFailureHandlingStrategy": {
+      "enum": [
+        "RETRY",
+        "FALLBACK",
+        "PARTIAL_RESULT",
+        "DEGRADE_CONFIDENCE",
+        "BLOCK_PLAN",
+        "EXPLAIN_ONLY",
+        "LOG_ONLY"
+      ],
+      "title": "SourceFailureHandlingStrategy",
+      "type": "string"
     },
     "TicketEnhancement": {
       "additionalProperties": false,
@@ -1429,12 +2156,66 @@
       "title": "TransportMode",
       "type": "string"
     },
+    "TravelHardConstraints": {
+      "additionalProperties": false,
+      "properties": {
+        "latest_arrival_time": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TimePoint"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "earliest_departure_time": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TimePoint"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "max_total_cost": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Money"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "allowed_transport_modes": {
+          "items": {
+            "$ref": "#/$defs/TransportMode"
+          },
+          "title": "Allowed Transport Modes",
+          "type": "array"
+        },
+        "excluded_transport_modes": {
+          "items": {
+            "$ref": "#/$defs/TransportMode"
+          },
+          "title": "Excluded Transport Modes",
+          "type": "array"
+        }
+      },
+      "title": "TravelHardConstraints",
+      "type": "object"
+    },
     "TravelPlan": {
       "additionalProperties": false,
       "properties": {
         "schema_version": {
-          "const": "1.16",
-          "default": "1.16",
+          "const": "1.17",
+          "default": "1.17",
           "title": "Schema Version",
           "type": "string"
         },
@@ -1582,13 +2363,358 @@
       ],
       "title": "TravelPlan",
       "type": "object"
+    },
+    "TravelPlanResponse": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "1.17",
+          "default": "1.17",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "request_id": {
+          "title": "Request Id",
+          "type": "string"
+        },
+        "trace_id": {
+          "title": "Trace Id",
+          "type": "string"
+        },
+        "correlation_id": {
+          "title": "Correlation Id",
+          "type": "string"
+        },
+        "idempotency_key": {
+          "title": "Idempotency Key",
+          "type": "string"
+        },
+        "planning_status": {
+          "$ref": "#/$defs/PlanningStatus"
+        },
+        "progress": {
+          "maximum": 100,
+          "minimum": 0,
+          "title": "Progress",
+          "type": "integer"
+        },
+        "travel_request": {
+          "$ref": "#/$defs/TravelRequest"
+        },
+        "destination_presentation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DestinationPresentation"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "plans": {
+          "items": {
+            "$ref": "#/$defs/TravelPlan"
+          },
+          "title": "Plans",
+          "type": "array"
+        },
+        "recommendation_result": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RecommendationResult"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "constraint_analysis": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ConstraintAnalysis"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "source_failures": {
+          "items": {
+            "$ref": "#/$defs/SourceFailure"
+          },
+          "title": "Source Failures",
+          "type": "array"
+        },
+        "missing_components": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Missing Components",
+          "type": "array"
+        },
+        "blocked_plan_types": {
+          "items": {
+            "$ref": "#/$defs/PlanType"
+          },
+          "title": "Blocked Plan Types",
+          "type": "array"
+        },
+        "missing_plan_explanations": {
+          "items": {
+            "$ref": "#/$defs/MissingPlanExplanation"
+          },
+          "title": "Missing Plan Explanations",
+          "type": "array"
+        },
+        "user_visible_warnings": {
+          "items": {
+            "type": "string"
+          },
+          "title": "User Visible Warnings",
+          "type": "array"
+        },
+        "async_job": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AsyncJob"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "generated_at": {
+          "$ref": "#/$defs/TimePoint"
+        }
+      },
+      "required": [
+        "request_id",
+        "trace_id",
+        "correlation_id",
+        "idempotency_key",
+        "planning_status",
+        "progress",
+        "travel_request",
+        "plans",
+        "recommendation_result",
+        "source_failures",
+        "missing_components",
+        "blocked_plan_types",
+        "missing_plan_explanations",
+        "user_visible_warnings",
+        "generated_at"
+      ],
+      "title": "TravelPlanResponse",
+      "type": "object"
+    },
+    "TravelRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "1.17",
+          "default": "1.17",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "request_id": {
+          "title": "Request Id",
+          "type": "string"
+        },
+        "raw_user_input": {
+          "title": "Raw User Input",
+          "type": "string"
+        },
+        "origin_text": {
+          "title": "Origin Text",
+          "type": "string"
+        },
+        "destination_text": {
+          "title": "Destination Text",
+          "type": "string"
+        },
+        "travel_date": {
+          "format": "date",
+          "title": "Travel Date",
+          "type": "string"
+        },
+        "time_anchor_type": {
+          "default": "DEPARTURE",
+          "enum": [
+            "DEPARTURE",
+            "ARRIVAL",
+            "AMBIGUOUS"
+          ],
+          "title": "Time Anchor Type",
+          "type": "string"
+        },
+        "time_window_start": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TimePoint"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "time_window_end": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TimePoint"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "earliest_departure_time": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TimePoint"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "latest_arrival_time": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TimePoint"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "preferred_departure_time": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TimePoint"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "preferences": {
+          "items": {
+            "$ref": "#/$defs/RecommendationType"
+          },
+          "title": "Preferences",
+          "type": "array"
+        },
+        "preference_source": {
+          "default": "SYSTEM_DEFAULT",
+          "enum": [
+            "SYSTEM_DEFAULT",
+            "USER_EXPLICIT"
+          ],
+          "title": "Preference Source",
+          "type": "string"
+        },
+        "hard_constraints": {
+          "$ref": "#/$defs/TravelHardConstraints"
+        },
+        "soft_preferences": {
+          "$ref": "#/$defs/TravelSoftPreferences"
+        },
+        "preferred_rail_seat": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Preferred Rail Seat"
+        },
+        "preferred_flight_cabin": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Preferred Flight Cabin"
+        }
+      },
+      "required": [
+        "request_id",
+        "raw_user_input",
+        "origin_text",
+        "destination_text",
+        "travel_date",
+        "preferences",
+        "hard_constraints",
+        "soft_preferences"
+      ],
+      "title": "TravelRequest",
+      "type": "object"
+    },
+    "TravelSoftPreferences": {
+      "additionalProperties": false,
+      "properties": {
+        "prefer_low_cost": {
+          "default": false,
+          "title": "Prefer Low Cost",
+          "type": "boolean"
+        },
+        "prefer_comfort": {
+          "default": false,
+          "title": "Prefer Comfort",
+          "type": "boolean"
+        },
+        "accept_rail_transfer": {
+          "default": true,
+          "title": "Accept Rail Transfer",
+          "type": "boolean"
+        },
+        "accept_flight_transfer": {
+          "default": true,
+          "title": "Accept Flight Transfer",
+          "type": "boolean"
+        },
+        "accept_mixed_transport": {
+          "default": true,
+          "title": "Accept Mixed Transport",
+          "type": "boolean"
+        },
+        "accept_ticket_enhancement": {
+          "default": true,
+          "title": "Accept Ticket Enhancement",
+          "type": "boolean"
+        },
+        "passenger_notes": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Passenger Notes",
+          "type": "array"
+        }
+      },
+      "title": "TravelSoftPreferences",
+      "type": "object"
     }
   },
   "additionalProperties": false,
   "properties": {
     "schema_version": {
-      "const": "1.16",
-      "default": "1.16",
+      "const": "1.17",
+      "default": "1.17",
       "title": "Schema Version",
       "type": "string"
     },
@@ -1613,6 +2739,28 @@
     },
     "change_summary": {
       "$ref": "#/$defs/RecalculateChangeSummary"
+    },
+    "updated_response": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/TravelPlanResponse"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "preference_application": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/PreferenceApplication"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     },
     "recommendation_result": {
       "anyOf": [
@@ -1641,5 +2789,5 @@
   "title": "RecalculateResponse",
   "type": "object",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "x-schema-version": "1.16"
+  "x-schema-version": "1.17"
 }

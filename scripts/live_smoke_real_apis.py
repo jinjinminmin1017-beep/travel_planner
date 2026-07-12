@@ -25,7 +25,7 @@ from app.data_sources.flight_providers import (  # noqa: E402
     search_flight_offers_with_enabled_provider_result,
 )
 from app.data_sources.geocoding_providers import GeocodeRequest, geocode_with_enabled_provider_result  # noqa: E402
-from app.data_sources.map_providers import MapRouteRequest, estimate_route_with_enabled_provider  # noqa: E402
+from app.data_sources.map_providers import MapRouteRequest, estimate_route_with_enabled_provider_result  # noqa: E402
 from app.data_sources.rail_providers import (  # noqa: E402
     RailSearchRequest,
     search_rail_offers_with_enabled_provider_result,
@@ -101,21 +101,26 @@ def smoke_map() -> bool:
     if not (_enabled_ok("amap_route") or _enabled_ok("baidu_map_route") or _enabled_ok("osrm_route")):
         print("- SKIP/FAIL: amap_route / baidu_map_route / osrm_route 均未处于 OK 状态")
         return False
-    estimate = estimate_route_with_enabled_provider(
-        MapRouteRequest(
+    modes = [TransportMode.TAXI]
+    if _enabled_ok("amap_route"):
+        modes.extend([TransportMode.WALK, TransportMode.SUBWAY, TransportMode.BUS])
+    ok = True
+    for mode in modes:
+        result = estimate_route_with_enabled_provider_result(MapRouteRequest(
             origin=GeoPoint(name="上海嘉定南翔格林公馆", latitude=31.295500, longitude=121.323200),
             destination=GeoPoint(name="上海虹桥站", latitude=31.200000, longitude=121.326900),
-            mode=TransportMode.TAXI,
+            mode=mode,
             origin_city="上海",
             destination_city="上海",
-        )
-    )
-    if estimate is None:
-        print("- FAIL: 已启用地图 Provider，但未返回可用路线")
-        return False
-    cost = estimate.estimated_cost.display_text if estimate.estimated_cost else "无费用字段"
-    print(f"- OK: {estimate.data_source.source_id}, {estimate.distance_meters}m, {estimate.duration_minutes}分钟, {cost}")
-    return True
+        ))
+        estimate = result.estimate
+        if estimate is None:
+            print(f"- FAIL: mode={mode.value}, code={result.error_code}, attempted={result.attempted_source_ids}, reason={result.failure_message}")
+            ok = False
+            continue
+        cost = estimate.estimated_cost.display_text if estimate.estimated_cost else "无费用字段"
+        print(f"- OK: mode={mode.value}, status={result.query_status}, source={estimate.data_source.source_id}, {estimate.distance_meters}m, {estimate.duration_minutes}分钟, {cost}")
+    return ok
 
 
 def smoke_geocode() -> bool:

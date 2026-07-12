@@ -686,6 +686,18 @@ export default function App() {
   }
 
   function replacePlan(updatedResponse: RecalculateResponse) {
+    if (updatedResponse.updated_response) {
+      const completeResponse = updatedResponse.updated_response;
+      setResponse(completeResponse);
+      const currentStillRecommended = completeResponse.recommendation_result?.recommendations.some(
+        (slot) => slot.status === "AVAILABLE" && slot.plan_id === updatedResponse.plan.plan_id
+      );
+      const firstRecommendedId = completeResponse.recommendation_result?.recommendations.find(
+        (slot) => slot.status === "AVAILABLE" && slot.plan_id
+      )?.plan_id;
+      setSelectedPlanId(currentStillRecommended ? updatedResponse.plan.plan_id : firstRecommendedId ?? updatedResponse.plan.plan_id);
+      return;
+    }
     setResponse((current) => {
       if (!current) return current;
       return {

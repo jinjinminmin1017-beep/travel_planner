@@ -44,7 +44,7 @@ from app.services.intent_parser import IntentParserError, parse_travel_request_w
 from app.services.observability import metrics_snapshot, record_app_event
 from app.services.persistence import init_persistence
 from app.services.planner import plan_trip, recalculate_plan
-from app.services.store import get_async_job_by_idempotency, get_async_job_response, get_plan, get_recalculate_response, save_async_job_response, save_feedback, save_recalculate_response, save_response
+from app.services.store import get_async_job_by_idempotency, get_async_job_response, get_plan, get_recalculate_response, replace_response_snapshot, save_async_job_response, save_feedback, save_recalculate_response, save_response
 
 configure_logging()
 logger = logging.getLogger("app.api")
@@ -467,6 +467,8 @@ def recalculate(body: RecalculateRequest, request: Request) -> RecalculateRespon
         raise HTTPException(status_code=404, detail="方案不存在，无法重算。")
     try:
         response = recalculate_plan(plan, body, ctx)
+        if response.updated_response is not None:
+            replace_response_snapshot(response.updated_response)
         save_recalculate_response(response)
         return response
     except ValueError as exc:
