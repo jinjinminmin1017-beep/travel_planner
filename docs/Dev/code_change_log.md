@@ -140,3 +140,21 @@
   - `npm run typecheck`：通过。
   - `npm run build`：通过，Expo iOS / Android / Web 导出成功。
   - 本地浏览器 390×844：扫光亮芯、柔光扩散和地图揭示边缘位置与高保真稿一致。
+
+## 2026-07-12 20:28:06 +08:00
+
+- 任务：以 Approved HTML 高保真稿为唯一视觉验收标准，重新实现规划中页面。
+- 代码提交：`79d9b83`。
+- 根因：上一版为了避免新增依赖，以三层半透明 View 近似 CSS 渐变，无法形成与 HTML `linear-gradient()` 一致的连续透明度；同时地图尺寸、背景、阶段卡、进度区和全屏结构仍存在数值偏差。
+- 修改内容：
+  - 引入 Expo SDK 54 兼容的 `react-native-svg`，将 HTML 的线性渐变、径向背景渐变和扫光三个色标直接转换为跨 Web/iOS/Android 的 SVG 渲染。
+  - 精确映射 42px 扫光宽度、`rgba(126, 233, 212, 0.22)` 中心色、32% 至 92% 位移、5 秒 `cubic-bezier(0.2, 0.8, 0.2, 1)` 节奏。
+  - 校准 214px 地图高度、`#183c42` 底色、0.94 地图透明度、31px 标题、阶段卡间距与状态色、白色进度面板和 4px 进度条。
+  - 规划等待期间使用全屏内容布局并隐藏底部主导航，与 Approved 规划中页面结构保持一致；实际业务进度与 reduced motion 行为继续保留。
+  - 更新设计 Token、UI 合同测试和 390×844 视觉回归图。
+- 验证：
+  - `npm run test:helpers`：通过，11 passed。
+  - `npm run typecheck`：通过。
+  - `npm run build`：通过，Expo iOS / Android / Web 导出成功。
+  - 本地浏览器验证 SVG 渐变节点、42px 扫光尺寸、移动边界与页面结构均已生效。
+- 依赖审计：`npm audit --omit=dev` 报告 Expo 依赖树内 12 个 moderate、1 个 high 已知问题；自动强制修复会升级至 Expo 57，属于破坏性架构升级，本任务未执行。
