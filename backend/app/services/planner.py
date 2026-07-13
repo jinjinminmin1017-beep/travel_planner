@@ -9,7 +9,7 @@ from uuid import uuid4
 
 from app.core.context import RequestContext
 from app.data_sources.flight_providers import FlightOffer, FlightSearchRequest, search_flight_offers_with_enabled_provider_result
-from app.data_sources.map_providers import MapRouteRequest, estimate_route_with_enabled_provider_result
+from app.data_sources.map_providers import estimate_route_with_enabled_provider_result
 from app.data_sources.rail_providers import RailOffer, RailSearchRequest, search_rail_offers_with_enabled_provider_result
 from app.models.schemas import (
     AirportCandidate,
@@ -17,9 +17,7 @@ from app.models.schemas import (
     DataSourceMetadata,
     DataSourceType,
     FlightSegment,
-    GeoPoint,
     LLMRecommendationInput,
-    LocalTransferOption,
     LocalTransferSegment,
     MissingPlanExplanation,
     PlanLifecycleStatus,
@@ -38,7 +36,6 @@ from app.models.schemas import (
     StationCandidate,
     TicketEnhancement,
     TimePoint,
-    TransportMode,
     TravelPlan,
     TravelPlanResponse,
     TravelRequest,
@@ -58,14 +55,12 @@ from app.services.constraints.relaxation_selector import build_constraint_analys
 from app.services.destination_assets import resolve_destination_presentation
 from app.services.flight_planning_engine import FlightPlanSpec
 from app.services.intent_parser import parse_travel_request
-from app.services.local_transfer_engine import build_local_transfer_segment
+from app.services.local_transfer_engine import LocalTransferUnavailable, build_local_transfer_segment
 from app.services.location_resolver import (
     airport_candidates_for_city,
     airport_iata_for_candidate,
-    nearby_transit_stop,
     planning_nodes_for_request,
     resolve_location_city,
-    resolve_location_point,
     transfer_station_candidates_between,
 )
 from app.services.planning_rules import assert_option_available
@@ -147,6 +142,13 @@ class PlanningIssueCollector:
         fallback_reason: str | None,
         fallback_used: bool,
     ) -> None:
+        if any(
+            failure.source_id == source_id
+            and failure.error_code == error_code
+            and failure.message == message
+            for failure in self.failures
+        ):
+            return
         self.failures.append(
             SourceFailure(
                 failure_id=f"fail_{uuid4().hex[:8]}",
@@ -170,147 +172,6 @@ class PlanningIssueCollector:
                 occurred_at=now_timepoint(),
             )
         )
-
-def _nearby_station(place: str, mode: TransportMode, side: str) -> str:
-    return nearby_transit_stop(place, mode, side)
-
-
-def _place_point(place: str) -> GeoPoint | None:
-    return resolve_location_point(place)
-
-
-def _place_city(place: str) -> str | None:
-    return resolve_location_city(place)
-
-
-def _real_route_estimate(origin: str, destination: str, mode: TransportMode, collector: PlanningIssueCollector | None = None):
-    origin_point = _place_point(origin)
-    destination_point = _place_point(destination)
-    if not origin_point or not destination_point:
-        if collector:
-            collector.add_missing("map_route")
-            collector.add_warning("地图路线坐标不完整，相关接驳段使用规则估算并标记为降级。")
-            collector.add_source_failure(
-                source_id="map_route",
-                adapter_name="MapRouteProvider",
-                failure_class=SourceFailureClass.FALLBACK_AVAILABLE_FAILURE,
-                handling_strategy=SourceFailureHandlingStrategy.FALLBACK,
-                error_code="MAP_COORDINATES_MISSING",
-                message=f"missing coordinates for real route estimate: {origin} -> {destination}",
-                user_visible_message="地图路线坐标不完整，已使用规则估算接驳耗时和费用。",
-                impacted_plan_types=[PlanType.DIRECT_RAIL, PlanType.TRANSFER_RAIL, PlanType.DIRECT_FLIGHT, PlanType.TRANSFER_FLIGHT, PlanType.FLIGHT_RAIL_MIXED],
-                source_used_id=INTERNAL_SOURCE.source_id,
-                fallback_source_id=INTERNAL_SOURCE.source_id,
-                fallback_reason="missing coordinates for map route estimate",
-                fallback_used=True,
-            )
-            return None
-        raise ValueError(f"missing coordinates for real route estimate: {origin} -> {destination}")
-    result = estimate_route_with_enabled_provider_result(
-        MapRouteRequest(
-            origin=origin_point,
-            destination=destination_point,
-            mode=mode,
-            origin_city=_place_city(origin),
-            destination_city=_place_city(destination),
-        )
-    )
-    if result.estimate is None:
-        if collector:
-            source_id = result.attempted_source_ids[-1] if result.attempted_source_ids else "map_route"
-            collector.add_missing("map_route")
-            collector.add_warning("地图路线 Provider 不可用，相关接驳段使用规则估算并标记为降级。")
-            collector.add_source_failure(
-                source_id=source_id,
-                adapter_name="MapRouteProvider",
-                failure_class=SourceFailureClass.FALLBACK_AVAILABLE_FAILURE,
-                handling_strategy=SourceFailureHandlingStrategy.FALLBACK,
-                error_code="MAP_ROUTE_UNAVAILABLE",
-                message=result.failure_message or f"real map route provider unavailable for {mode}: {origin} -> {destination}",
-                user_visible_message="地图路线 Provider 暂不可用，已使用规则估算接驳耗时和费用。",
-                impacted_plan_types=[PlanType.DIRECT_RAIL, PlanType.TRANSFER_RAIL, PlanType.DIRECT_FLIGHT, PlanType.TRANSFER_FLIGHT, PlanType.FLIGHT_RAIL_MIXED],
-                source_used_id=INTERNAL_SOURCE.source_id,
-                fallback_source_id=INTERNAL_SOURCE.source_id,
-                fallback_reason=result.failure_message or "map provider returned no route estimate",
-                fallback_used=True,
-            )
-            return None
-        raise ValueError(f"real map route provider unavailable for {mode}: {origin} -> {destination}")
-    if collector and result.fallback_used:
-        collector.add_source_failure(
-            source_id=result.attempted_source_ids[0],
-            adapter_name="MapRouteProvider",
-            failure_class=SourceFailureClass.FALLBACK_AVAILABLE_FAILURE,
-            handling_strategy=SourceFailureHandlingStrategy.FALLBACK,
-            error_code="MAP_ROUTE_FALLBACK_USED",
-            message=result.fallback_reason or "map route fallback provider used",
-            user_visible_message="首选地图 Provider 不可用，已使用备用地图数据源估算接驳。",
-            impacted_plan_types=[PlanType.DIRECT_RAIL, PlanType.TRANSFER_RAIL, PlanType.DIRECT_FLIGHT, PlanType.TRANSFER_FLIGHT, PlanType.FLIGHT_RAIL_MIXED],
-            source_used_id=result.fallback_source_id,
-            fallback_source_id=result.fallback_source_id,
-            fallback_reason=result.fallback_reason,
-            fallback_used=True,
-        )
-    return result.estimate
-
-
-def _transfer_options(origin: str, destination: str, minutes: int, cost_minor: int, collector: PlanningIssueCollector | None = None) -> list[LocalTransferOption]:
-    subway_origin = _nearby_station(origin, TransportMode.SUBWAY, "origin")
-    subway_destination = _nearby_station(destination, TransportMode.SUBWAY, "destination")
-    bus_origin = _nearby_station(origin, TransportMode.BUS, "origin")
-    bus_destination = _nearby_station(destination, TransportMode.BUS, "destination")
-    taxi_estimate = _real_route_estimate(origin, destination, TransportMode.TAXI, collector)
-    subway_estimate = _real_route_estimate(origin, destination, TransportMode.SUBWAY, collector)
-    bus_estimate = _real_route_estimate(origin, destination, TransportMode.BUS, collector)
-    taxi_minutes = taxi_estimate.duration_minutes if taxi_estimate else minutes
-    taxi_cost = taxi_estimate.estimated_cost if taxi_estimate and taxi_estimate.estimated_cost else money(cost_minor, estimated=True)
-    subway_minutes = subway_estimate.duration_minutes if subway_estimate else minutes + 18
-    subway_cost = subway_estimate.estimated_cost if subway_estimate and subway_estimate.estimated_cost else money(900, estimated=True)
-    bus_minutes = bus_estimate.duration_minutes if bus_estimate else minutes + 28
-    bus_cost = bus_estimate.estimated_cost if bus_estimate and bus_estimate.estimated_cost else money(500, estimated=True)
-    return [
-        LocalTransferOption(
-            option_id="transfer_taxi",
-            transfer_mode=TransportMode.TAXI,
-            label="打车",
-            estimated_cost=taxi_cost,
-            duration_minutes=taxi_minutes,
-            access_instruction=f"从 {origin} 上车，直达 {destination}。",
-            ride_instruction=f"按 {taxi_estimate.summary} 估算行驶。" if taxi_estimate else "地图 Provider 暂不可用，本段按规则估算行驶时间和费用。",
-            egress_instruction=f"在 {destination} 下车。",
-            walking_distance_meters=120,
-            data_source=taxi_estimate.data_source if taxi_estimate else INTERNAL_SOURCE,
-        ),
-        LocalTransferOption(
-            option_id="transfer_subway",
-            transfer_mode=TransportMode.SUBWAY,
-            label="地铁",
-            estimated_cost=subway_cost,
-            duration_minutes=subway_minutes,
-            access_station=subway_origin,
-            egress_station=subway_destination,
-            access_instruction=f"从 {origin} 步行/短驳至 {subway_origin}。",
-            ride_instruction=f"按 {subway_estimate.summary} 前往 {subway_destination}。" if subway_estimate else f"地图 Provider 暂不可用，本段按规则估算乘坐地铁至 {subway_destination}。",
-            egress_instruction=f"从 {subway_destination} 步行/短驳至 {destination}。",
-            walking_distance_meters=780,
-            data_source=subway_estimate.data_source if subway_estimate else INTERNAL_SOURCE,
-        ),
-        LocalTransferOption(
-            option_id="transfer_bus",
-            transfer_mode=TransportMode.BUS,
-            label="公交",
-            estimated_cost=bus_cost,
-            duration_minutes=bus_minutes,
-            access_station=bus_origin,
-            egress_station=bus_destination,
-            access_instruction=f"从 {origin} 步行至 {bus_origin}。",
-            ride_instruction=f"按 {bus_estimate.summary} 前往 {bus_destination}。" if bus_estimate else f"地图 Provider 暂不可用，本段按规则估算乘坐公交至 {bus_destination}。",
-            egress_instruction=f"从 {bus_destination} 步行/短驳至 {destination}。",
-            walking_distance_meters=980,
-            data_source=bus_estimate.data_source if bus_estimate else INTERNAL_SOURCE,
-        ),
-    ]
-
 
 def _taxi(segment_id: str, origin: str, destination: str, minutes: int, cost_minor: int, option_id: str = "transfer_taxi", collector: PlanningIssueCollector | None = None) -> LocalTransferSegment:
     return build_local_transfer_segment(
@@ -988,11 +849,19 @@ def _build_dynamic_direct_rail_plans(
         for offer_index, offer in enumerate(result.offers[: max(1, max_plans - len(plans))], start=1):
             plan_index = len(plans) + 1
             rail_segment = _rail_segment_from_offer(f"seg_rail_dynamic_direct_{plan_index}", offer)
-            segments = [
-                taxi(f"seg_origin_station_dynamic_{plan_index}", origin_text, f"{offer.origin_station}站", 38, 7800),
-                rail_segment,
-                taxi(f"seg_station_dest_dynamic_{plan_index}", f"{offer.destination_station}站", destination_text, 32, 6200),
-            ]
+            try:
+                segments = [
+                    taxi(f"seg_origin_station_dynamic_{plan_index}", origin_text, f"{offer.origin_station}站", 38, 7800),
+                    rail_segment,
+                    taxi(f"seg_station_dest_dynamic_{plan_index}", f"{offer.destination_station}站", destination_text, 32, 6200),
+                ]
+            except LocalTransferUnavailable:
+                logger.info(
+                    "rail_direct_plan_blocked_by_local_transfer request_id=%s train_number=%s",
+                    travel_request.request_id,
+                    offer.train_number,
+                )
+                continue
             plans.append(
                 _plan(
                     f"plan_rail_direct_dynamic_{plan_index}",
@@ -1002,7 +871,7 @@ def _build_dynamic_direct_rail_plans(
                     8.0 if pair_index == 1 and offer_index == 1 else 7.6,
                     RiskLevel.LOW,
                     "12306 公开查询返回",
-                    "车次、时间、票价和席别来自 12306 公开匿名查询；接驳段由地图 Provider 或明确降级估算生成。",
+                    "车次、时间、票价和席别来自 12306 公开匿名查询；接驳段仅使用地图 Provider 验证结果。",
                 )
             )
             logger.info(
@@ -1016,7 +885,7 @@ def _build_dynamic_direct_rail_plans(
                 logger.info("rail_direct_planner_complete request_id=%s plan_count=%s reason=max_plans", travel_request.request_id, len(plans))
                 return plans
 
-    if not plans:
+    if not plans and failure_messages:
         _record_rail_provider_block(
             collector,
             failure_messages=failure_messages,
@@ -1083,11 +952,14 @@ def _build_dynamic_flight_plans(
                 continue
             plan_index = len(plans) + 1
             is_transfer = len(flight_segments) > 1
-            segments = [
-                taxi(f"seg_origin_airport_dynamic_{plan_index}", origin_text, origin_airport.airport_name, 52, 11800),
-                *flight_segments,
-                taxi(f"seg_airport_dest_dynamic_{plan_index}", destination_airport.airport_name, destination_text, 54, 13600),
-            ]
+            try:
+                segments = [
+                    taxi(f"seg_origin_airport_dynamic_{plan_index}", origin_text, origin_airport.airport_name, 52, 11800),
+                    *flight_segments,
+                    taxi(f"seg_airport_dest_dynamic_{plan_index}", destination_airport.airport_name, destination_text, 54, 13600),
+                ]
+            except LocalTransferUnavailable:
+                continue
             plans.append(
                 _plan(
                     f"plan_flight_dynamic_{plan_index}",
@@ -1097,7 +969,7 @@ def _build_dynamic_flight_plans(
                     7.8 if pair_index == 1 and offer_index == 1 else 7.4,
                     RiskLevel.MEDIUM if is_transfer else RiskLevel.LOW,
                     "Verified flight provider offer",
-                    "Flight times and fare come from the enabled flight provider; local transfers are map-backed or explicitly estimated.",
+                    "Flight times and fare come from the enabled flight provider; local transfers use verified map routes only.",
                 )
             )
             if len(plans) >= max_plans:
@@ -1236,13 +1108,16 @@ def _build_dynamic_transfer_rail_plans(
                         if not _has_connection(first_segment, second_segment, 45):
                             continue
                         plan_index = len(plans) + 1
-                        segments = [
-                            taxi(f"seg_origin_station_transfer_dynamic_{plan_index}", origin_text, f"{first_offer.origin_station}", 38, 7800),
-                            first_segment,
-                            taxi(f"seg_transfer_station_dynamic_{plan_index}", f"{first_offer.destination_station}", f"{second_offer.origin_station}", 20, 0),
-                            second_segment,
-                            taxi(f"seg_station_dest_transfer_dynamic_{plan_index}", f"{second_offer.destination_station}", destination_text, 32, 6200),
-                        ]
+                        try:
+                            segments = [
+                                taxi(f"seg_origin_station_transfer_dynamic_{plan_index}", origin_text, f"{first_offer.origin_station}", 38, 7800),
+                                first_segment,
+                                taxi(f"seg_transfer_station_dynamic_{plan_index}", f"{first_offer.destination_station}", f"{second_offer.origin_station}", 20, 0),
+                                second_segment,
+                                taxi(f"seg_station_dest_transfer_dynamic_{plan_index}", f"{second_offer.destination_station}", destination_text, 32, 6200),
+                            ]
+                        except LocalTransferUnavailable:
+                            continue
                         plans.append(
                             _plan(
                                 f"plan_rail_transfer_dynamic_{plan_index}",
@@ -1267,7 +1142,7 @@ def _build_dynamic_transfer_rail_plans(
                             logger.info("rail_transfer_planner_complete request_id=%s plan_count=%s reason=max_plans", travel_request.request_id, len(plans))
                             return plans
 
-    if not plans:
+    if not plans and failure_messages:
         _record_rail_provider_block(
             collector,
             failure_messages=failure_messages,
@@ -1354,18 +1229,22 @@ def _build_dynamic_flight_rail_mixed_plans(
                     rail_segment = _rail_segment_from_offer(f"seg_mixed_rail_second_{len(plans) + 1}", rail_result.offers[0])
                     if flight_segments and _has_connection(flight_segments[-1], rail_segment, 90):
                         plan_index = len(plans) + 1
+                        try:
+                            segments = [
+                                taxi(f"seg_mixed_origin_airport_{plan_index}", origin_text, origin_airport.airport_name, 52, 11800),
+                                *flight_segments,
+                                taxi(f"seg_mixed_airport_station_{plan_index}", hub_airport.airport_name, transfer_station.station_name, 50, 9000),
+                                rail_segment,
+                                taxi(f"seg_mixed_station_dest_{plan_index}", rail_segment.destination_station, destination_text, 32, 6200),
+                            ]
+                        except LocalTransferUnavailable:
+                            continue
                         plans.append(
                             _plan(
                                 f"plan_flight_rail_mixed_dynamic_{plan_index}",
                                 f"Dynamic flight-rail via {transfer_station.city_name}",
                                 PlanType.FLIGHT_RAIL_MIXED,
-                                [
-                                    taxi(f"seg_mixed_origin_airport_{plan_index}", origin_text, origin_airport.airport_name, 52, 11800),
-                                    *flight_segments,
-                                    taxi(f"seg_mixed_airport_station_{plan_index}", hub_airport.airport_name, transfer_station.station_name, 50, 9000),
-                                    rail_segment,
-                                    taxi(f"seg_mixed_station_dest_{plan_index}", rail_segment.destination_station, destination_text, 32, 6200),
-                                ],
+                                segments,
                                 7.0,
                                 RiskLevel.MEDIUM,
                                 "Verified flight and rail provider offers",
@@ -1425,18 +1304,22 @@ def _build_dynamic_flight_rail_mixed_plans(
                     )
                     if flight_segments and _has_connection(rail_segment, flight_segments[0], 120):
                         plan_index = len(plans) + 1
+                        try:
+                            segments = [
+                                taxi(f"seg_mixed_origin_station_{plan_index}", origin_text, rail_segment.origin_station, 38, 7800),
+                                rail_segment,
+                                taxi(f"seg_mixed_station_airport_{plan_index}", transfer_station.station_name, hub_airport.airport_name, 50, 9000),
+                                *flight_segments,
+                                taxi(f"seg_mixed_airport_dest_{plan_index}", destination_airport.airport_name, destination_text, 54, 13600),
+                            ]
+                        except LocalTransferUnavailable:
+                            continue
                         plans.append(
                             _plan(
                                 f"plan_flight_rail_mixed_dynamic_{plan_index}",
                                 f"Dynamic rail-flight via {transfer_station.city_name}",
                                 PlanType.FLIGHT_RAIL_MIXED,
-                                [
-                                    taxi(f"seg_mixed_origin_station_{plan_index}", origin_text, rail_segment.origin_station, 38, 7800),
-                                    rail_segment,
-                                    taxi(f"seg_mixed_station_airport_{plan_index}", transfer_station.station_name, hub_airport.airport_name, 50, 9000),
-                                    *flight_segments,
-                                    taxi(f"seg_mixed_airport_dest_{plan_index}", destination_airport.airport_name, destination_text, 54, 13600),
-                                ],
+                                segments,
                                 7.0,
                                 RiskLevel.MEDIUM,
                                 "Verified rail and flight provider offers",
@@ -1891,6 +1774,15 @@ def plan_trip(raw_or_request: str | TravelRequest, ctx: RequestContext) -> Trave
 
 
 def recalculate_plan(existing: TravelPlan, request: RecalculateRequest, ctx: RequestContext) -> RecalculateResponse:
+    if any(
+        isinstance(segment, LocalTransferSegment)
+        and (
+            segment.route_status in {"RULE_ESTIMATED", "UNAVAILABLE"}
+            or any(option.route_status in {"RULE_ESTIMATED", "UNAVAILABLE"} for option in segment.transfer_options)
+        )
+        for segment in existing.segments
+    ):
+        raise ValueError("local transfer facts are unverifiable; create a new plan before recalculating")
     if (
         request.change_type == "SEAT_TYPE"
         and request.application_scope == "RESULT_SET"
@@ -1962,7 +1854,8 @@ def recalculate_plan(existing: TravelPlan, request: RecalculateRequest, ctx: Req
         elif request.selected_option.option_id == "transfer_bus":
             plan.comfort_score.total_score = max(0, plan.comfort_score.total_score - 0.9)
         elif request.selected_option.option_id == "transfer_walk":
-            plan.comfort_score.total_score = max(0, plan.comfort_score.total_score - (0.2 if target.walking_distance_meters <= 1200 else 1.1))
+            walking_distance = target.walking_distance_meters or 0
+            plan.comfort_score.total_score = max(0, plan.comfort_score.total_score - (0.2 if walking_distance <= 1200 else 1.1))
 
     _refresh_plan_schedule(plan)
     refresh_plan_cost_and_quality(plan)

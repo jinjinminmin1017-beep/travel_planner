@@ -1,1 +1,30 @@
-[]
+[
+  {
+    "source_id": "amap_geocode",
+    "source_name": "AMap Address Geocoding API",
+    "source_type": "MAP",
+    "authority_level": "A",
+    "environment": "PROD",
+    "license_status": "PENDING_REVIEW",
+    "commercial_allowed": false,
+    "enabled": false,
+    "qps_limit": 0,
+    "sla_level": "PENDING_REVIEW",
+    "fallback_source_id": "amap_place_search",
+    "last_checked_at": null
+  },
+  {
+    "source_id": "amap_place_search",
+    "source_name": "AMap Place Search API",
+    "source_type": "MAP",
+    "authority_level": "A",
+    "environment": "PROD",
+    "license_status": "PENDING_REVIEW",
+    "commercial_allowed": false,
+    "enabled": false,
+    "qps_limit": 0,
+    "sla_level": "PENDING_REVIEW",
+    "fallback_source_id": null,
+    "last_checked_at": null
+  }
+]

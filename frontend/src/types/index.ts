@@ -173,7 +173,7 @@ export type LocalTransferOption = {
   access_instruction: string;
   ride_instruction: string;
   egress_instruction: string;
-  walking_distance_meters: number;
+  walking_distance_meters: number | null;
   data_source: DataSourceMetadata;
   route_status: "PRIMARY_VERIFIED" | "FALLBACK_VERIFIED" | "RULE_ESTIMATED" | "UNAVAILABLE";
   route_error_code: string | null;

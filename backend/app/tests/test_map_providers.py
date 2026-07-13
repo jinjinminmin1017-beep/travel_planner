@@ -130,7 +130,7 @@ def test_osrm_route_maps_real_response():
     assert client.calls[0][1]["overview"] == "false"
     assert estimate.distance_meters == 15474
     assert estimate.duration_minutes == 17
-    assert estimate.estimated_cost.amount_minor == 38538
+    assert estimate.estimated_cost is None
     assert estimate.data_source.source_id == "osrm_route"
 
 

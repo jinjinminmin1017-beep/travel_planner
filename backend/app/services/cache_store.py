@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 
 DEFAULT_ASYNC_JOB_TTL_SECONDS = 1800
 DEFAULT_RECALCULATE_TTL_SECONDS = 900
+DEFAULT_LOCATION_RESOLUTION_TTL_SECONDS = 86400
 
 _CACHE: dict[str, tuple[datetime, str]] = {}
 
@@ -15,6 +16,10 @@ def async_job_ttl_seconds() -> int:
 
 def recalculate_ttl_seconds() -> int:
     return int(os.getenv("TRAVEL_CACHE_RECALCULATE_TTL_SECONDS", str(DEFAULT_RECALCULATE_TTL_SECONDS)))
+
+
+def location_resolution_ttl_seconds() -> int:
+    return int(os.getenv("TRAVEL_CACHE_LOCATION_RESOLUTION_TTL_SECONDS", str(DEFAULT_LOCATION_RESOLUTION_TTL_SECONDS)))
 
 
 def set_json(key: str, value: str, ttl_seconds: int) -> None:

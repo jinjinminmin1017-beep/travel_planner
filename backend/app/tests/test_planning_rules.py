@@ -178,7 +178,6 @@ def test_dynamic_transfer_rail_planner_builds_connectable_two_leg_plan(monkeypat
     monkeypatch.setattr("app.services.planner.transfer_station_candidates_between", lambda origin_city, destination_city, limit=6: [_station("HubStation", "HubCity")])
     monkeypatch.setattr("app.services.local_transfer_engine.resolve_location_point", lambda place: GeoPoint(name=place, latitude=30.0, longitude=120.0))
     monkeypatch.setattr("app.services.local_transfer_engine.resolve_location_city", lambda place: "TestCity")
-    monkeypatch.setattr("app.services.local_transfer_engine.nearby_transit_stop", lambda place, mode, side: f"{place}_{mode}_stop")
 
     def fake_rail(request, environment=None):
         if request.origin_station == "OriginStation" and request.destination_station == "HubStation":
@@ -229,7 +228,6 @@ def test_dynamic_flight_rail_mixed_planner_builds_connectable_plan(monkeypatch):
     monkeypatch.setattr("app.services.planner.airport_candidates_for_city", lambda place, limit=2: [hub_airport] if place == "HubCity" else [])
     monkeypatch.setattr("app.services.local_transfer_engine.resolve_location_point", lambda place: GeoPoint(name=place, latitude=30.0, longitude=120.0))
     monkeypatch.setattr("app.services.local_transfer_engine.resolve_location_city", lambda place: "TestCity")
-    monkeypatch.setattr("app.services.local_transfer_engine.nearby_transit_stop", lambda place, mode, side: f"{place}_{mode}_stop")
     monkeypatch.setattr(
         "app.services.planner.airport_iata_for_candidate",
         lambda candidate: {"OriginAirport": "OOO", "HubAirport": "HHH", "DestAirport": "DDD"}.get(candidate.airport_name),

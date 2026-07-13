@@ -102,12 +102,108 @@ def test_poi_and_station_points_are_not_overridden_by_city_aliases():
     chengdu_east = resolve_location_point("成都东站")
     taikoo = resolve_location_point("成都太古里")
 
-    assert pearl and pearl.name == "上海东方明珠塔"
-    assert hongqiao and hongqiao.name == "上海虹桥站"
-    assert chengdu_east and chengdu_east.name == "成都东站"
-    assert taikoo and taikoo.name == "成都太古里"
-    assert round(pearl.longitude or 0, 3) == 121.500
-    assert round(taikoo.longitude or 0, 3) == 104.083
+    assert pearl.point and pearl.point.name == "上海东方明珠塔"
+    assert hongqiao.point and hongqiao.point.name == "上海虹桥站"
+    assert chengdu_east.point and chengdu_east.point.name == "成都东站"
+    assert taikoo.point and taikoo.point.name == "成都太古里"
+    assert round(pearl.point.longitude or 0, 3) == 121.500
+    assert round(taikoo.point.longitude or 0, 3) == 104.083
+
+
+def test_provider_aware_point_resolution_reuses_cached_search(monkeypatch):
+    calls = []
+
+    def _fake_geocode(request, environment=None):
+        calls.append(request)
+        return GeocodeProviderSearchResult(
+            candidates=[
+                GeocodeCandidate(
+                    place_id="amap_poi_1",
+                    display_name="测试新天地，武汉市江岸区",
+                    point=GeoPoint(name="测试新天地", latitude=30.61, longitude=114.31),
+                    address={"city": "武汉市", "district": "江岸区"},
+                    category="商务住宅",
+                    place_type="120000",
+                    importance=None,
+                    osm_type=None,
+                    osm_id=None,
+                    data_source=geocoding_data_source_metadata("amap_place_search", "AMap Place Search API", authority_level="A"),
+                )
+            ],
+            attempted_source_ids=["amap_geocode", "amap_place_search"],
+        )
+
+    monkeypatch.setattr("app.services.location_resolver.geocode_with_enabled_provider_result", _fake_geocode)
+
+    first = resolve_location_point("武汉测试新天地-缓存用例", city_context="武汉")
+    second = resolve_location_point("武汉测试新天地-缓存用例", city_context="武汉")
+
+    assert first.status == "RESOLVED"
+    assert first.source_id == "amap_place_search"
+    assert second.point == first.point
+    assert len(calls) == 1
+
+
+def test_catalog_node_without_coordinates_continues_to_online_resolution(monkeypatch):
+    calls = []
+
+    def _fake_geocode(request, environment=None):
+        calls.append(request)
+        return GeocodeProviderSearchResult(
+            candidates=[
+                GeocodeCandidate(
+                    place_id="amap_station_1",
+                    display_name="温州南站，温州市瓯海区",
+                    point=GeoPoint(name="温州南站", latitude=27.9803, longitude=120.5856),
+                    address={"city": "温州市", "district": "瓯海区"},
+                    category="交通设施服务",
+                    place_type="150200",
+                    importance=None,
+                    osm_type=None,
+                    osm_id=None,
+                    data_source=geocoding_data_source_metadata("amap_place_search", "AMap Place Search API", authority_level="A"),
+                )
+            ],
+            attempted_source_ids=["amap_geocode", "amap_place_search"],
+        )
+
+    monkeypatch.setattr("app.services.location_resolver.geocode_with_enabled_provider_result", _fake_geocode)
+
+    resolution = resolve_location_point("温州南站", city_context="温州")
+
+    assert resolution.status == "RESOLVED"
+    assert resolution.point and resolution.point.latitude == 27.9803
+    assert resolution.source_id == "amap_place_search"
+    assert len(calls) == 1
+
+
+def test_provider_aware_point_resolution_does_not_pick_first_ambiguous_candidate(monkeypatch):
+    def _fake_geocode(request, environment=None):
+        candidates = [
+            GeocodeCandidate(
+                place_id=f"poi_{index}",
+                display_name=f"同名广场，武汉市{district}",
+                point=GeoPoint(name="同名广场", latitude=30.60 + index / 100, longitude=114.30 + index / 100),
+                address={"city": "武汉市", "district": district},
+                category=None,
+                place_type=None,
+                importance=None,
+                osm_type=None,
+                osm_id=None,
+                data_source=geocoding_data_source_metadata("amap_place_search", "AMap Place Search API", authority_level="A"),
+            )
+            for index, district in enumerate(("江岸区", "洪山区"), start=1)
+        ]
+        return GeocodeProviderSearchResult(candidates=candidates, attempted_source_ids=["amap_geocode", "amap_place_search"], error_code="MAP_LOCATION_AMBIGUOUS")
+
+    monkeypatch.setattr("app.services.location_resolver.geocode_with_enabled_provider_result", _fake_geocode)
+
+    resolution = resolve_location_point("武汉同名广场-歧义用例", city_context="武汉")
+
+    assert resolution.status == "AMBIGUOUS"
+    assert resolution.point is None
+    assert resolution.error_code == "MAP_LOCATION_AMBIGUOUS"
+    assert len(resolution.candidates) == 2
 
 
 def test_city_aliases_do_not_match_inside_specific_poi_queries():

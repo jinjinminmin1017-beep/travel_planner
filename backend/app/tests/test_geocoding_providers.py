@@ -1,4 +1,6 @@
 from app.data_sources.geocoding_providers import (
+    AmapAddressGeocodingProvider,
+    AmapPlaceSearchProvider,
     GeocodeRequest,
     NominatimGeocodingProvider,
     build_enabled_geocoding_providers,
@@ -76,6 +78,112 @@ def test_nominatim_empty_response_reports_failure(monkeypatch):
     assert result.candidates == []
     assert result.attempted_source_ids == ["nominatim_geocode"]
     assert result.failure_message == "nominatim_geocode: empty response"
+
+
+def test_amap_address_geocoding_maps_coordinates_and_city():
+    client = _FakeNominatimClient(
+        {
+            "status": "1",
+            "info": "OK",
+            "infocode": "10000",
+            "geocodes": [
+                {
+                    "formatted_address": "浙江省温州市永嘉县桥头镇梨村",
+                    "province": "浙江省",
+                    "city": "温州市",
+                    "district": "永嘉县",
+                    "township": "桥头镇",
+                    "adcode": "330324",
+                    "location": "120.482100,28.168200",
+                }
+            ],
+        }
+    )
+    provider = AmapAddressGeocodingProvider("test-key", client=client, base_url="https://example.test")
+
+    candidates = provider.geocode(GeocodeRequest(query="温州永嘉桥头梨村", city="温州", limit=5))
+
+    assert client.calls[0][0] == "https://example.test/v3/geocode/geo"
+    assert client.calls[0][1]["params"]["address"] == "温州永嘉桥头梨村"
+    assert client.calls[0][1]["params"]["city"] == "温州"
+    assert candidates[0].point.longitude == 120.4821
+    assert candidates[0].address["city"] == "温州市"
+    assert candidates[0].data_source.source_id == "amap_geocode"
+
+
+def test_amap_place_search_uses_city_limit_and_maps_poi():
+    client = _FakeNominatimClient(
+        {
+            "status": "1",
+            "info": "OK",
+            "infocode": "10000",
+            "pois": [
+                {
+                    "id": "B001",
+                    "name": "武汉新天地",
+                    "type": "商务住宅;住宅区",
+                    "typecode": "120300",
+                    "pname": "湖北省",
+                    "cityname": "武汉市",
+                    "adname": "江岸区",
+                    "address": "卢沟桥路",
+                    "adcode": "420102",
+                    "location": "114.311500,30.610500",
+                }
+            ],
+        }
+    )
+    provider = AmapPlaceSearchProvider("test-key", client=client, base_url="https://example.test")
+
+    candidates = provider.geocode(GeocodeRequest(query="武汉新天地", city="武汉", limit=5))
+
+    assert client.calls[0][0] == "https://example.test/v3/place/text"
+    assert client.calls[0][1]["params"]["keywords"] == "武汉新天地"
+    assert client.calls[0][1]["params"]["citylimit"] == "true"
+    assert candidates[0].place_id == "B001"
+    assert candidates[0].point.latitude == 30.6105
+    assert candidates[0].data_source.source_id == "amap_place_search"
+
+
+def test_geocoding_chain_uses_poi_search_after_empty_address_result(monkeypatch):
+    class _EmptyAddressProvider:
+        source_id = "amap_geocode"
+
+        def geocode(self, request):
+            return []
+
+    class _WorkingPoiProvider:
+        source_id = "amap_place_search"
+
+        def geocode(self, request):
+            return AmapPlaceSearchProvider(
+                "test-key",
+                client=_FakeNominatimClient(
+                    {
+                        "status": "1",
+                        "pois": [
+                            {
+                                "id": "B002",
+                                "name": "武汉新天地",
+                                "cityname": "武汉市",
+                                "adname": "江岸区",
+                                "location": "114.311500,30.610500",
+                            }
+                        ],
+                    }
+                ),
+                base_url="https://example.test",
+            ).geocode(request)
+
+    monkeypatch.setattr(
+        "app.data_sources.geocoding_providers.build_enabled_geocoding_providers",
+        lambda environment=None: [_EmptyAddressProvider(), _WorkingPoiProvider()],
+    )
+
+    result = geocode_with_enabled_provider_result(GeocodeRequest(query="武汉新天地", city="武汉", limit=5), "DEV")
+
+    assert result.candidates[0].data_source.source_id == "amap_place_search"
+    assert result.attempted_source_ids == ["amap_geocode", "amap_place_search"]
 
 
 def _nominatim_payload():

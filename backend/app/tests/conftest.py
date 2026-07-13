@@ -7,7 +7,8 @@ import pytest
 from app.data_sources.flight_providers import FlightOffer, FlightOfferCabinOption, FlightOfferSegment, FlightProviderSearchResult, flight_data_source_metadata
 from app.data_sources.map_providers import MapRouteEstimate, MapRouteProviderResult, data_source_metadata
 from app.data_sources.rail_providers import RailOffer, RailProviderSearchResult, rail_data_source_metadata
-from app.models.schemas import SeatOption, money
+from app.models.schemas import GeoPoint, SeatOption, money
+from app.services.location_resolver import LocationPointResolution
 
 SHANGHAI_TZ = timezone(timedelta(hours=8))
 
@@ -92,6 +93,24 @@ def fake_real_map_provider_for_planner(monkeypatch):
         return MapRouteProviderResult(estimate=estimate, attempted_source_ids=["amap_route"])
 
     monkeypatch.setattr("app.services.planner.estimate_route_with_enabled_provider_result", fake_estimate)
+
+
+@pytest.fixture(autouse=True)
+def fake_verified_location_resolution_for_planner(monkeypatch):
+    def fake_resolve(place, city_context=None, environment=None):
+        city = city_context or ("上海" if "上海" in place else "武汉" if "武汉" in place or place in {"武汉", "汉口"} else "测试城市")
+        point = GeoPoint(name=place, latitude=30.0, longitude=120.0)
+        return LocationPointResolution(
+            query=place,
+            city_context=city,
+            status="RESOLVED",
+            point=point,
+            source_id="test_verified_location",
+            candidates=[],
+            attempted_source_ids=["test_verified_location"],
+        )
+
+    monkeypatch.setattr("app.services.local_transfer_engine.resolve_location_point", fake_resolve)
 
 
 @pytest.fixture(autouse=True)

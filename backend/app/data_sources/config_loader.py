@@ -13,6 +13,8 @@ _ENV_LOADED = False
 
 REQUIRED_SECRET_ENVS = {
     "amap_route": ("AMAP_WEB_SERVICE_KEY", "AMAP_API_KEY"),
+    "amap_geocode": ("AMAP_WEB_SERVICE_KEY", "AMAP_API_KEY"),
+    "amap_place_search": ("AMAP_WEB_SERVICE_KEY", "AMAP_API_KEY"),
     "baidu_map_route": ("BAIDU_MAP_AK", "BAIDU_MAP_API_KEY"),
     "osrm_route": (),
     "nominatim_geocode": (),

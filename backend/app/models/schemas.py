@@ -430,7 +430,7 @@ class LocalTransferOption(StrictModel):
     access_instruction: str
     ride_instruction: str
     egress_instruction: str
-    walking_distance_meters: int
+    walking_distance_meters: int | None = None
     data_source: DataSourceMetadata
     route_status: Literal["PRIMARY_VERIFIED", "FALLBACK_VERIFIED", "RULE_ESTIMATED", "UNAVAILABLE"] = "PRIMARY_VERIFIED"
     route_error_code: str | None = None
@@ -446,7 +446,7 @@ class LocalTransferSegment(StrictModel):
     duration_minutes: int
     estimated_cost: Money
     traffic_risk: RiskLevel
-    walking_distance_meters: int
+    walking_distance_meters: int | None = None
     option_id: str
     available_options: list[str] = Field(default_factory=list)
     transfer_options: list[LocalTransferOption] = Field(default_factory=list)

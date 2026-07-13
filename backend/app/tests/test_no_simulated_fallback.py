@@ -5,7 +5,7 @@ from app.models.schemas import RecommendationType, TravelHardConstraints, Travel
 from app.services.planner import build_plans
 
 
-def test_planner_marks_rule_based_transfer_fallback_when_real_map_provider_is_empty(monkeypatch):
+def test_planner_blocks_plans_instead_of_simulating_transfer_when_map_provider_is_empty(monkeypatch):
     monkeypatch.setattr(
         "app.services.planner.estimate_route_with_enabled_provider_result",
         lambda request, environment=None: MapRouteProviderResult(
@@ -28,10 +28,12 @@ def test_planner_marks_rule_based_transfer_fallback_when_real_map_provider_is_em
 
     plans, failures, missing, _, _, warnings = build_plans(travel_request)
 
-    assert plans
+    assert plans == []
     assert "map_route" in missing
-    assert any("该接驳路线暂未取得地图结果" in warning for warning in warnings)
-    assert any(failure.source_id == "amap_route" and failure.fallback_used for failure in failures)
-    transfer_segments = [segment for plan in plans for segment in plan.segments if getattr(segment, "segment_type", None) == "LOCAL_TRANSFER"]
-    assert transfer_segments
-    assert all(segment.data_source.source_id == "internal_calc" for segment in transfer_segments)
+    assert any("无法形成完整门到门方案" in warning for warning in warnings)
+    assert any(failure.error_code == "MAP_TRANSFER_UNAVAILABLE" and not failure.fallback_used for failure in failures)
+    assert all(
+        getattr(segment, "route_status", None) != "RULE_ESTIMATED"
+        for plan in plans
+        for segment in plan.segments
+    )

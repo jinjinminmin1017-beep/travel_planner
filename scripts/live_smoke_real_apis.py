@@ -24,7 +24,6 @@ from app.data_sources.flight_providers import (  # noqa: E402
     get_flight_states_with_enabled_provider,
     search_flight_offers_with_enabled_provider_result,
 )
-from app.data_sources.geocoding_providers import GeocodeRequest, geocode_with_enabled_provider_result  # noqa: E402
 from app.data_sources.map_providers import MapRouteRequest, estimate_route_with_enabled_provider_result  # noqa: E402
 from app.data_sources.rail_providers import (  # noqa: E402
     RailSearchRequest,
@@ -41,9 +40,12 @@ from app.models.schemas import (  # noqa: E402
     TimePoint,
     TransportMode,
 )
+from app.services.location_resolver import resolve_location_point  # noqa: E402
 
 RELEVANT_SOURCE_IDS = [
     "amap_route",
+    "amap_geocode",
+    "amap_place_search",
     "baidu_map_route",
     "osrm_route",
     "nominatim_geocode",
@@ -124,22 +126,44 @@ def smoke_map() -> bool:
 
 
 def smoke_geocode() -> bool:
-    print("地点解析 Provider live smoke:")
-    if not _enabled_ok("nominatim_geocode"):
-        print("- SKIP/FAIL: nominatim_geocode 未处于 OK 状态")
+    print("高德地点解析与接驳路线 live smoke:")
+    if not (_enabled_ok("amap_geocode") and _enabled_ok("amap_place_search") and _enabled_ok("amap_route")):
+        print("- SKIP/FAIL: amap_geocode / amap_place_search / amap_route 未全部处于 OK 状态")
         return False
-    request = GeocodeRequest(
-        query=_env("LIVE_SMOKE_GEOCODE_QUERY", "青岛栈桥"),
-        country_codes=_env("LIVE_SMOKE_GEOCODE_COUNTRY_CODES", "cn"),
-        limit=int(_env("LIVE_SMOKE_GEOCODE_LIMIT", "1")),
-    )
-    result = geocode_with_enabled_provider_result(request)
-    if not result.candidates:
-        print(f"- FAIL: 未返回地点解析结果。attempted={result.attempted_source_ids}, reason={result.failure_message}")
-        return False
-    first = result.candidates[0]
-    print(f"- OK: {first.data_source.source_id}, {first.display_name}, lat={first.point.latitude}, lon={first.point.longitude}")
-    return True
+    cases = [
+        ("温州永嘉桥头梨村", "温州南站", "温州"),
+        ("武汉站", "武汉新天地", "武汉"),
+        ("武汉东站", "武汉新天地", "武汉"),
+        ("汉口站", "武汉新天地", "武汉"),
+    ]
+    ok = True
+    for origin_text, destination_text, city in cases:
+        origin = resolve_location_point(origin_text, city_context=city)
+        destination = resolve_location_point(destination_text, city_context=city)
+        if not origin.point or not destination.point:
+            failed = origin if not origin.point else destination
+            print(f"- FAIL: {failed.query} 解析失败, code={failed.error_code}, attempted={failed.attempted_source_ids}, reason={failed.failure_message}")
+            ok = False
+            continue
+        if origin.source_id not in {"amap_geocode", "amap_place_search", "internal_seed", "rail_12306_station_catalog"} or destination.source_id not in {"amap_geocode", "amap_place_search", "internal_seed", "rail_12306_station_catalog"}:
+            print(f"- FAIL: 地点未使用高德搜索或已验证节点目录: {origin_text}({origin.source_id}) -> {destination_text}({destination.source_id})")
+            ok = False
+            continue
+        route = estimate_route_with_enabled_provider_result(
+            MapRouteRequest(
+                origin=origin.point,
+                destination=destination.point,
+                mode=TransportMode.TAXI,
+                origin_city=origin.city_context or city,
+                destination_city=destination.city_context or city,
+            )
+        )
+        if route.estimate is None or route.estimate.data_source.source_id != "amap_route":
+            print(f"- FAIL: {origin_text} -> {destination_text} 高德驾车路线失败, code={route.error_code}, attempted={route.attempted_source_ids}, reason={route.failure_message}")
+            ok = False
+            continue
+        print(f"- OK: {origin_text} -> {destination_text}, geocode={origin.source_id}/{destination.source_id}, {route.estimate.distance_meters}m, {route.estimate.duration_minutes}分钟")
+    return ok
 
 
 def smoke_flight() -> bool:

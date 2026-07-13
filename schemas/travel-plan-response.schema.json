@@ -1000,8 +1000,16 @@
           "type": "string"
         },
         "walking_distance_meters": {
-          "title": "Walking Distance Meters",
-          "type": "integer"
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Walking Distance Meters"
         },
         "data_source": {
           "$ref": "#/$defs/DataSourceMetadata"
@@ -1039,7 +1047,6 @@
         "access_instruction",
         "ride_instruction",
         "egress_instruction",
-        "walking_distance_meters",
         "data_source"
       ],
       "title": "LocalTransferOption",
@@ -1084,8 +1091,16 @@
           "$ref": "#/$defs/RiskLevel"
         },
         "walking_distance_meters": {
-          "title": "Walking Distance Meters",
-          "type": "integer"
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Walking Distance Meters"
         },
         "option_id": {
           "title": "Option Id",
@@ -1174,7 +1189,6 @@
         "duration_minutes",
         "estimated_cost",
         "traffic_risk",
-        "walking_distance_meters",
         "option_id",
         "data_source"
       ],

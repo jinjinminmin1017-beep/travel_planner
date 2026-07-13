@@ -2,7 +2,9 @@ from dataclasses import dataclass, field
 
 from app.data_sources.map_providers import MapRouteEstimate, MapRouteProviderResult, data_source_metadata
 from app.models.schemas import PlanType, SourceFailure, TransportMode, money
-from app.services.local_transfer_engine import build_local_transfer_segment
+import pytest
+
+from app.services.local_transfer_engine import LocalTransferUnavailable, build_local_transfer_segment
 
 
 @dataclass
@@ -64,7 +66,7 @@ def test_local_transfer_engine_exposes_walk_for_short_non_airport_routes():
     assert walk.transfer_mode == "WALK"
     assert walk.estimated_cost.amount_minor == 0
     assert walk.walking_distance_meters == 900
-    assert "步行" in walk.ride_instruction
+    assert "real walk route" in walk.ride_instruction
 
 
 def test_local_transfer_engine_hides_walk_for_airport_routes():
@@ -80,27 +82,28 @@ def test_local_transfer_engine_hides_walk_for_airport_routes():
     assert "transfer_walk" not in {option.option_id for option in segment.transfer_options}
 
 
-def test_local_transfer_engine_records_rule_fallback_when_map_provider_empty():
+def test_local_transfer_engine_blocks_segment_when_all_map_routes_are_empty():
     sink = _IssueSink()
 
     def empty_estimate(request, environment=None):
         return MapRouteProviderResult(estimate=None, attempted_source_ids=["amap_route"], failure_message="empty route result")
 
-    segment = build_local_transfer_segment(
-        segment_id="seg_fallback",
-        origin="上海嘉定南翔格林公馆",
-        destination="上海虹桥站",
-        default_minutes=38,
-        default_cost_minor=7800,
-        route_estimator=empty_estimate,
-        issue_sink=sink,
-    )
+    with pytest.raises(LocalTransferUnavailable):
+        build_local_transfer_segment(
+            segment_id="seg_fallback",
+            origin="上海嘉定南翔格林公馆",
+            destination="上海虹桥站",
+            default_minutes=38,
+            default_cost_minor=7800,
+            route_estimator=empty_estimate,
+            issue_sink=sink,
+        )
 
-    assert segment.data_source.source_id == "internal_calc"
     assert "map_route" in sink.missing
     assert sink.failures
-    assert all(failure["fallback_used"] for failure in sink.failures)
-    assert any("该接驳路线暂未取得地图结果" in warning for warning in sink.warnings)
+    assert all(not failure["fallback_used"] for failure in sink.failures)
+    assert any(failure["error_code"] == "MAP_TRANSFER_UNAVAILABLE" for failure in sink.failures)
+    assert any("无法形成完整门到门方案" in warning for warning in sink.warnings)
 
 
 def test_unselected_transfer_failure_does_not_mark_selected_route_partial():

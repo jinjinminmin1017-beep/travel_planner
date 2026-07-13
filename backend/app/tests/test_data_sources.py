@@ -237,8 +237,11 @@ def test_project_env_loader_reads_local_env_file_without_overriding_existing_val
     assert os.getenv("EXISTING_VALUE") == "from-shell"
 
 
-def test_prod_has_no_sources_until_explicit_approval():
-    assert load_data_source_configs("PROD") == []
+def test_prod_geocoding_sources_remain_disabled_until_explicit_approval():
+    configs = load_data_source_configs("PROD")
+
+    assert {config.source_id for config in configs} == {"amap_geocode", "amap_place_search"}
+    assert all(not config.enabled and config.license_status == "PENDING_REVIEW" for config in configs)
 
 
 def test_env_example_is_synced_with_dev_data_source_config():

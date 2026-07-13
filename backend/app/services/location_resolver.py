@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import json
 import math
+from hashlib import sha256
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from app.data_sources.geocoding_providers import GeocodeCandidate, GeocodeRequest, geocode_with_enabled_provider_result
 from app.models.schemas import AirportCandidate, DataSourceMetadata, DataSourceType, GeoPoint, StationCandidate, TransportMode, money, now_timepoint
+from app.services.cache_store import get_json, location_resolution_ttl_seconds, set_json
 
 
 @dataclass(frozen=True)
@@ -43,6 +45,28 @@ class LocationResolution:
     primary: LocationRecord | None
     candidates: list[LocationRecord]
     attempted_source_ids: list[str]
+    failure_message: str | None = None
+
+
+@dataclass(frozen=True)
+class LocationPointCandidate:
+    display_name: str
+    city_name: str
+    point: GeoPoint
+    address: dict[str, str]
+    source_id: str
+
+
+@dataclass(frozen=True)
+class LocationPointResolution:
+    query: str
+    city_context: str | None
+    status: str
+    point: GeoPoint | None
+    source_id: str | None
+    candidates: list[LocationPointCandidate]
+    attempted_source_ids: list[str]
+    error_code: str | None = None
     failure_message: str | None = None
 
 
@@ -156,23 +180,110 @@ def resolve_location(query: str, environment: str | None = None) -> LocationReso
     if len(matches) > 1:
         return LocationResolution(query=query, status="AMBIGUOUS", primary=None, candidates=matches, attempted_source_ids=["internal_calc"])
 
-    geocode_result = geocode_with_enabled_provider_result(GeocodeRequest(query=query, country_codes="cn", limit=3), environment)
-    if geocode_result.candidates:
-        candidates = [
-            LocationRecord(candidate.display_name, _city_from_geocode_candidate(candidate), candidate.point, ())
-            for candidate in geocode_result.candidates
-        ]
-        status = "RESOLVED" if len(candidates) == 1 else "AMBIGUOUS"
-        return LocationResolution(query=query, status=status, primary=candidates[0] if status == "RESOLVED" else None, candidates=candidates, attempted_source_ids=geocode_result.attempted_source_ids)
-    return LocationResolution(query=query, status="UNSUPPORTED", primary=None, candidates=[], attempted_source_ids=geocode_result.attempted_source_ids or ["internal_calc"], failure_message=geocode_result.failure_message)
+    point_resolution = resolve_location_point(query, environment=environment)
+    candidates = [LocationRecord(candidate.display_name, candidate.city_name, candidate.point, ()) for candidate in point_resolution.candidates]
+    primary = None
+    if point_resolution.status == "RESOLVED" and point_resolution.point:
+        primary = next((candidate for candidate in candidates if candidate.point == point_resolution.point), None)
+        if primary is None:
+            primary = LocationRecord(point_resolution.point.name, point_resolution.city_context or "", point_resolution.point, ())
+            candidates = [primary, *candidates]
+    return LocationResolution(
+        query=query,
+        status="UNSUPPORTED" if point_resolution.status == "UNAVAILABLE" else point_resolution.status,
+        primary=primary,
+        candidates=candidates,
+        attempted_source_ids=point_resolution.attempted_source_ids or ["internal_calc"],
+        failure_message=point_resolution.failure_message,
+    )
 
 
-def resolve_location_point(place: str) -> GeoPoint | None:
+def resolve_location_point(
+    place: str,
+    city_context: str | None = None,
+    environment: str | None = None,
+) -> LocationPointResolution:
     node = _find_node(place)
-    if node:
-        return node.point
+    if node and _has_coordinates(node.point):
+        return LocationPointResolution(
+            query=place,
+            city_context=node.city_name,
+            status="RESOLVED",
+            point=node.point,
+            source_id=node.source_id,
+            candidates=[LocationPointCandidate(node.point.name, node.city_name, node.point, {"city": node.city_name}, node.source_id)],
+            attempted_source_ids=[node.source_id],
+        )
     record = _find_location_record(place)
-    return record.point if record else None
+    if record:
+        return LocationPointResolution(
+            query=place,
+            city_context=record.city_name,
+            status="RESOLVED",
+            point=record.point,
+            source_id="internal_calc",
+            candidates=[LocationPointCandidate(record.name, record.city_name, record.point, {"city": record.city_name}, "internal_calc")],
+            attempted_source_ids=["internal_calc"],
+        )
+
+    normalized_city = _normalize_city_name(city_context or (node.city_name if node else None) or _infer_city_from_text(place) or "") or None
+    cache_key = _location_cache_key(place, normalized_city, environment)
+    cached = get_json(cache_key)
+    if cached:
+        return _point_resolution_from_json(cached)
+
+    geocode_result = geocode_with_enabled_provider_result(
+        GeocodeRequest(query=place, city=normalized_city, country_codes="cn", limit=5),
+        environment,
+    )
+    candidates = [
+        LocationPointCandidate(
+            display_name=candidate.display_name,
+            city_name=_city_from_geocode_candidate(candidate),
+            point=candidate.point,
+            address=candidate.address,
+            source_id=candidate.data_source.source_id,
+        )
+        for candidate in geocode_result.candidates
+        if _has_coordinates(candidate.point)
+    ]
+    selected = _select_location_point_candidate(place, normalized_city, candidates)
+    if selected:
+        resolution = LocationPointResolution(
+            query=place,
+            city_context=selected.city_name or normalized_city,
+            status="RESOLVED",
+            point=selected.point,
+            source_id=selected.source_id,
+            candidates=candidates,
+            attempted_source_ids=geocode_result.attempted_source_ids,
+        )
+    elif candidates:
+        resolution = LocationPointResolution(
+            query=place,
+            city_context=normalized_city,
+            status="AMBIGUOUS",
+            point=None,
+            source_id=None,
+            candidates=candidates,
+            attempted_source_ids=geocode_result.attempted_source_ids,
+            error_code="MAP_LOCATION_AMBIGUOUS",
+            failure_message=geocode_result.failure_message or f"multiple location candidates for {place}",
+        )
+    else:
+        resolution = LocationPointResolution(
+            query=place,
+            city_context=normalized_city,
+            status="UNAVAILABLE",
+            point=None,
+            source_id=None,
+            candidates=[],
+            attempted_source_ids=geocode_result.attempted_source_ids,
+            error_code=geocode_result.error_code or "MAP_COORDINATES_MISSING",
+            failure_message=geocode_result.failure_message or f"no verified coordinates for {place}",
+        )
+    set_json(cache_key, _point_resolution_to_json(resolution), location_resolution_ttl_seconds())
+    return resolution
 
 
 def resolve_location_city(place: str, environment: str | None = None) -> str | None:
@@ -192,6 +303,105 @@ def resolve_location_city(place: str, environment: str | None = None) -> str | N
     if len(cities) == 1:
         return next(iter(cities))
     return None
+
+
+def _select_location_point_candidate(
+    query: str,
+    city_context: str | None,
+    candidates: list[LocationPointCandidate],
+) -> LocationPointCandidate | None:
+    if not candidates:
+        return None
+    deduped: list[LocationPointCandidate] = []
+    seen_coordinates: set[tuple[float | None, float | None]] = set()
+    for candidate in candidates:
+        coordinates = (candidate.point.latitude, candidate.point.longitude)
+        if coordinates in seen_coordinates:
+            continue
+        seen_coordinates.add(coordinates)
+        deduped.append(candidate)
+    if len(deduped) == 1:
+        return deduped[0]
+
+    normalized_query = _normalize(query)
+    normalized_city = _normalize(city_context or "")
+    query_without_city = normalized_query.removeprefix(normalized_city) if normalized_city else normalized_query
+    scored: list[tuple[int, LocationPointCandidate]] = []
+    for candidate in deduped:
+        display = _normalize(candidate.display_name)
+        point_name = _normalize(candidate.point.name)
+        address = _normalize("".join(candidate.address.values()))
+        score = 0
+        if normalized_query and normalized_query in {display, point_name}:
+            score = 4
+        elif query_without_city and query_without_city in {display, point_name}:
+            score = 3
+        elif query_without_city and (query_without_city in display or query_without_city in point_name):
+            score = 2
+        elif normalized_query and normalized_query in address:
+            score = 1
+        if city_context and _normalize_city_name(candidate.city_name) != _normalize_city_name(city_context):
+            score = -1
+        scored.append((score, candidate))
+    best_score = max(score for score, _ in scored)
+    best = [candidate for score, candidate in scored if score == best_score]
+    return best[0] if best_score > 0 and len(best) == 1 else None
+
+
+def _location_cache_key(place: str, city_context: str | None, environment: str | None) -> str:
+    raw = "|".join((_normalize(place), city_context or "", (environment or "").upper()))
+    return f"location-resolution:{sha256(raw.encode('utf-8')).hexdigest()}"
+
+
+def _point_resolution_to_json(resolution: LocationPointResolution) -> str:
+    return json.dumps(
+        {
+            "query": resolution.query,
+            "city_context": resolution.city_context,
+            "status": resolution.status,
+            "point": resolution.point.model_dump(mode="json") if resolution.point else None,
+            "source_id": resolution.source_id,
+            "candidates": [
+                {
+                    "display_name": candidate.display_name,
+                    "city_name": candidate.city_name,
+                    "point": candidate.point.model_dump(mode="json"),
+                    "address": candidate.address,
+                    "source_id": candidate.source_id,
+                }
+                for candidate in resolution.candidates
+            ],
+            "attempted_source_ids": resolution.attempted_source_ids,
+            "error_code": resolution.error_code,
+            "failure_message": resolution.failure_message,
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+
+
+def _point_resolution_from_json(raw: str) -> LocationPointResolution:
+    payload = json.loads(raw)
+    return LocationPointResolution(
+        query=str(payload["query"]),
+        city_context=payload.get("city_context"),
+        status=str(payload["status"]),
+        point=GeoPoint.model_validate(payload["point"]) if payload.get("point") else None,
+        source_id=payload.get("source_id"),
+        candidates=[
+            LocationPointCandidate(
+                display_name=str(item["display_name"]),
+                city_name=str(item.get("city_name") or ""),
+                point=GeoPoint.model_validate(item["point"]),
+                address={str(key): str(value) for key, value in item.get("address", {}).items()},
+                source_id=str(item["source_id"]),
+            )
+            for item in payload.get("candidates", [])
+        ],
+        attempted_source_ids=[str(source_id) for source_id in payload.get("attempted_source_ids", [])],
+        error_code=payload.get("error_code"),
+        failure_message=payload.get("failure_message"),
+    )
 
 
 def station_candidates_for_location(place: str, limit: int = 3, environment: str | None = None) -> list[StationCandidate]:

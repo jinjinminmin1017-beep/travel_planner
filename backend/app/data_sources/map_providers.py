@@ -33,6 +33,7 @@ class MapRouteEstimate:
     estimated_cost: Money | None
     summary: str
     data_source: DataSourceMetadata
+    walking_distance_meters: int | None = None
 
 
 @dataclass(frozen=True)
@@ -123,7 +124,14 @@ class AmapRouteProvider:
             distance = _to_int(first.get("distance"))
             duration = ceil(_to_int(first.get("duration")) / 60)
             cost = _yuan_to_money(first.get("cost"))
-            return MapRouteEstimate(distance, duration, cost, "高德公交/地铁路线规划", data_source_metadata(self.source_id, "AMap Route Planning API"))
+            return MapRouteEstimate(
+                distance,
+                duration,
+                cost,
+                "高德公交/地铁路线规划",
+                data_source_metadata(self.source_id, "AMap Route Planning API"),
+                walking_distance_meters=_to_optional_int(first.get("walking_distance")),
+            )
         paths = route.get("paths") or []
         if not paths:
             raise MapProviderError("AMap route response has no paths", "MAP_ROUTE_EMPTY")
@@ -131,7 +139,14 @@ class AmapRouteProvider:
         distance = _to_int(first.get("distance"))
         duration = ceil(_to_int(first.get("duration")) / 60)
         taxi_cost = _yuan_to_money(route.get("taxi_cost")) if request.mode == TransportMode.TAXI else None
-        return MapRouteEstimate(distance, duration, taxi_cost, "高德路线规划", data_source_metadata(self.source_id, "AMap Route Planning API"))
+        return MapRouteEstimate(
+            distance,
+            duration,
+            taxi_cost,
+            "高德路线规划",
+            data_source_metadata(self.source_id, "AMap Route Planning API"),
+            walking_distance_meters=distance if request.mode == TransportMode.WALK else 0,
+        )
 
 
 class BaiduDirectionLiteProvider:
@@ -212,7 +227,7 @@ class OsrmRouteProvider:
         return MapRouteEstimate(
             distance_meters=distance,
             duration_minutes=duration,
-            estimated_cost=_estimated_transfer_cost(request.mode, distance),
+            estimated_cost=None,
             summary="OSRM OpenStreetMap 路线规划",
             data_source=data_source_metadata(self.source_id, "OSRM Route Service"),
         )
@@ -316,19 +331,15 @@ def _osrm_coord(point: GeoPoint) -> str:
     return f"{point.longitude:.6f},{point.latitude:.6f}"
 
 
-def _estimated_transfer_cost(mode: TransportMode, distance_meters: int) -> Money | None:
-    if mode in {TransportMode.TAXI, TransportMode.RAIL_STATION_TRANSFER, TransportMode.AIRPORT_TRANSFER}:
-        return money(max(1400, int(round(1400 + distance_meters * 2.4))), estimated=True)
-    if mode == TransportMode.SUBWAY:
-        return money(max(300, min(1200, int(round(distance_meters / 5000)) * 100 + 300)), estimated=True)
-    if mode == TransportMode.BUS:
-        return money(200 if distance_meters < 12000 else 400, estimated=True)
-    return None
-
-
 def _to_int(value: Any) -> int:
     if value is None or value == "":
         return 0
+    return int(float(value))
+
+
+def _to_optional_int(value: Any) -> int | None:
+    if value is None or value == "":
+        return None
     return int(float(value))
 
 

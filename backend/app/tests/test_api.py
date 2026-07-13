@@ -538,13 +538,11 @@ def test_plan_degrades_when_map_provider_returns_empty_result(monkeypatch):
     response = client.post("/api/travel/plan", json={"raw_user_input": RAW_INPUT})
     assert response.status_code == 200
     body = response.json()
-    assert body["planning_status"] == "PARTIAL"
-    assert body["plans"]
+    assert body["planning_status"] == "FAILED"
+    assert body["plans"] == []
     assert "map_route" in body["missing_components"]
-    assert any(failure["source_id"] == "amap_route" and failure["fallback_used"] is True for failure in body["source_failures"])
-    assert any("该接驳路线暂未取得地图结果" in warning for warning in body["user_visible_warnings"])
-    first_transfer = next(segment for segment in body["plans"][0]["segments"] if segment["segment_type"] == "LOCAL_TRANSFER")
-    assert first_transfer["data_source"]["source_type"] == "INTERNAL_CALCULATION"
+    assert any(failure["error_code"] == "MAP_TRANSFER_UNAVAILABLE" and failure["fallback_used"] is False for failure in body["source_failures"])
+    assert any("无法形成完整门到门方案" in warning for warning in body["user_visible_warnings"])
 
 
 def test_plan_returns_failed_business_response_when_core_providers_return_empty(monkeypatch):
@@ -774,12 +772,6 @@ def test_recalculate_local_transfer_consistency_on_dynamic_rail_plan():
     transfer_before_total = plan["cost_breakdown"]["total_cost"]["amount_minor"]
     transfer_before_duration = plan["total_duration_minutes"]
     subway_option = next(option for option in transfer_segment["transfer_options"] if option["option_id"] == "transfer_subway")
-    stored_plan = store.PLANS[plan["plan_id"]]
-    stored_transfer = next(segment for segment in stored_plan.segments if segment.segment_id == transfer_segment["segment_id"])
-    stored_subway = next(option for option in stored_transfer.transfer_options if option.option_id == "transfer_subway")
-    stored_subway.route_status = "RULE_ESTIMATED"
-    stored_subway.route_error_code = "MAP_ROUTE_EMPTY"
-
     transfer_recalc = client.post(
         "/api/travel/recalculate",
         json={
@@ -810,8 +802,8 @@ def test_recalculate_local_transfer_consistency_on_dynamic_rail_plan():
     assert transfer_plan["total_duration_minutes"] == transfer_before_duration + expected_duration_delta
     assert updated_transfer["option_id"] == "transfer_subway"
     assert updated_transfer["transfer_mode"] == "SUBWAY"
-    assert transfer_body["updated_response"]["planning_status"] == "PARTIAL"
-    assert "map_route" in transfer_body["updated_response"]["missing_components"]
+    assert transfer_body["updated_response"]["planning_status"] == plan_response["planning_status"]
+    assert "map_route" not in transfer_body["updated_response"]["missing_components"]
 
     walk_option = next((option for option in updated_transfer["transfer_options"] if option["option_id"] == "transfer_walk"), None)
     if walk_option:
@@ -837,6 +829,36 @@ def test_recalculate_local_transfer_consistency_on_dynamic_rail_plan():
         walked = next(seg for seg in walk_recalc.json()["plan"]["segments"] if seg["segment_id"] == updated_transfer["segment_id"])
         assert walked["transfer_mode"] == "WALK"
         assert walked["estimated_cost"]["amount_minor"] == 0
+
+
+def test_recalculate_rejects_historical_rule_estimated_transfer_options():
+    plan_response = client.post("/api/travel/plan", json={"raw_user_input": RAW_INPUT}).json()
+    plan = _first_dynamic_rail_plan(plan_response["plans"])
+    stored_plan = store.PLANS[plan["plan_id"]]
+    stored_transfer = next(segment for segment in stored_plan.segments if segment.segment_type == "LOCAL_TRANSFER")
+    stored_transfer.transfer_options[0].route_status = "RULE_ESTIMATED"
+
+    response = client.post(
+        "/api/travel/recalculate",
+        json={
+            "schema_version": "1.17",
+            "request_id": "req_historical_transfer",
+            "idempotency_key": "idem_historical_transfer",
+            "plan_id": plan["plan_id"],
+            "change_type": "LOCAL_TRANSFER_MODE",
+            "target_segment_id": stored_transfer.segment_id,
+            "selected_option": {
+                "option_type": "TRANSFER_MODE",
+                "option_id": stored_transfer.option_id,
+                "option_value": stored_transfer.transfer_mode,
+                "source_option_version": "historical_rule_estimated",
+            },
+            "recalculate_scope": "PLAN_ONLY",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "unverifiable" in response.json()["message"]
 
 def test_recalculate_is_idempotent_and_can_refresh_recommendation(monkeypatch):
     class _ValidLLMProvider:
