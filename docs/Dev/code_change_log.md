@@ -176,3 +176,18 @@
   - `npm run test:helpers`：通过，11 passed。
   - `npm run build`：通过，Expo iOS / Android / Web 导出成功。
   - 临时启用已获批的新增高德能力开关执行 `scripts/live_smoke_real_apis.py --provider geocode`：4 条真实路线全部通过；未修改或提交 `.env` 与真实 key。
+
+## 2026-07-13 23:14:33 +08:00
+
+- 任务：移除规划中页面底部“当前进度”加载面板。
+- 代码提交：`92b18b3`。
+- 修改内容：
+  - 删除“当前进度”标题、动态状态文案和进度轨道，避免与四阶段状态卡重复表达。
+  - 移除不再使用的 `statusText` 组件参数、调用方传值、进度样式及设计 Token。
+  - 保留真实规划进度驱动的地图揭示动画、扫光和四阶段状态映射。
+  - 补充 UI 合同断言，防止进度面板重新出现。
+- 验证：
+  - `npm run test:helpers`：通过，11 passed。
+  - `npm run typecheck`：通过。
+  - `npm run build`：通过，Expo iOS / Android / Web 导出成功。
+  - 本地浏览器规划状态：`当前进度` 不再渲染，地图和四阶段状态正常存在。
