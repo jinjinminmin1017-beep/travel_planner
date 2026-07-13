@@ -187,3 +187,64 @@
 - 风险：历史数据中的 `timezone` 若为非法值，加载时会从静默接受变成明确失败；应返回可诊断错误，不可猜测时区。
 - 风险：时区规范化应在模型边界完成，避免只修约束计算而让其他模块继续接收 naive datetime。
 - 回滚：如模型级规范化造成未预期兼容问题，可暂时在 Intent/API 输入边界使用同一规范化函数；不得回滚为直接比较 naive/aware datetime。
+
+---
+
+# ARC-20260712-04 接入高德地点搜索并移除接驳规则估算
+
+来源：用户确认的架构决策，2026-07-12。
+
+完成状态：已完成（2026-07-13，代码提交 `7603cf3`）。
+
+## 目标
+
+- 任意高德可搜索地点先解析真实坐标，再调用高德路线规划。
+- 删除接驳距离、耗时和费用的规则估算路径。
+- 地点或路线不可验证时让对应门到门计划退出正常推荐，不生成看似完整的假数据。
+
+## 开发任务
+
+1. 在 `geocoding_providers.py` 新增高德地点解析 Provider，支持地址地理编码和 POI 关键字搜索，复用现有高德 Web Service key，但使用独立 `source_id`、能力和可观测性记录。
+2. 在 `data_sources.dev/test/prod.json`、`config_loader.py`、`.env.example` 增加高德地理编码配置；不得提交真实 key。
+3. 将 `resolve_location_point()` 升级为 Provider-aware 解析：本地缓存/节点目录 → 高德地理编码 → 高德 POI 搜索；接收城市上下文并返回来源、状态和候选，而不是只返回裸 `GeoPoint | None`。
+4. 对多候选按城市、规范化名称和完整地址消歧；仍不唯一时返回 `MAP_LOCATION_AMBIGUOUS`，不默认取第一条。
+5. 在一次规划任务内批量解析并缓存唯一地点；同一地点不得因多个计划和多个接驳方式重复请求高德。
+6. 删除 `local_transfer_engine.py` 的固定分钟、固定距离、固定费用 fallback；不得再构造 `RULE_ESTIMATED` option/segment。
+7. 只保留地图 Provider 验证成功的接驳 option。选中方式失败但其他方式成功时，选择可用方式并明确来源；全部失败时返回接驳不可用结果。
+8. `planner.py` 在必需首程/末程接驳无任何验证方式时移除该门到门计划的推荐资格，并写结构化 `SourceFailure`、`missing_plan_explanations`。
+9. 聚合同一地点对的重复失败，前端主 warning 只显示一次；详细 Provider 尝试保留在数据来源页和日志。
+10. V1.17 暂时保留 `RULE_ESTIMATED` 枚举供旧响应解析，但新规划、重算和重试结果均不得生成该状态。
+11. 前端不得为 UNAVAILABLE 接驳自行填充默认时间、距离或费用；只展示已验证方式或明确的“无法形成完整门到门路线”。
+12. 扩展真实 API smoke，至少验证“温州永嘉桥头梨村 → 温州南站”和“武汉站/武汉东站/汉口站 → 武汉新天地”的地点解析及驾车路线。
+
+## 主要文件
+
+- `backend/app/data_sources/geocoding_providers.py`
+- `backend/app/data_sources/config_loader.py`
+- `backend/app/data_sources/data_sources.*.json`
+- `.env.example`
+- `backend/app/services/location_resolver.py`
+- `backend/app/services/local_transfer_engine.py`
+- `backend/app/services/planner.py`
+- `backend/app/services/candidate_generator.py`
+- `backend/app/services/cache_store.py`
+- `backend/app/models/schemas.py`
+- `frontend/src/types/index.ts`
+- `frontend/src/components/results/RouteDetailScreen.tsx`
+- `frontend/src/components/results/ResultsOverview.tsx`
+- `scripts/live_smoke_real_apis.py`
+
+## 验收标准
+
+- 本次真实输入不再出现“尚未搜索高德就坐标不完整”。
+- 高德成功搜索地点后，接驳段使用高德路线返回的真实距离和耗时。
+- 新响应中 `RULE_ESTIMATED` 出现次数为 0。
+- 高德返回歧义、空结果、超时或限流时，不生成估算数字；对应门到门计划退出正常推荐并给出准确原因。
+- 同一地点在单次规划中最多执行一次有效搜索链路，缓存命中可复用。
+- 后端全量测试、前端 typecheck/helper tests、schema export/diff 和真实地图 smoke 全部通过。
+
+## 风险与回滚
+
+- 真实地点搜索增加外部调用时延，必须使用任务级去重、TTL 缓存和 Provider QPS 控制。
+- 同名 POI 可能产生歧义，必须要求城市一致或用户补充地址。
+- 回滚只能关闭新高德搜索 Provider并将接驳标为不可用；禁止恢复规则估算。

@@ -158,3 +158,21 @@
   - `npm run build`：通过，Expo iOS / Android / Web 导出成功。
   - 本地浏览器验证 SVG 渐变节点、42px 扫光尺寸、移动边界与页面结构均已生效。
 - 依赖审计：`npm audit --omit=dev` 报告 Expo 依赖树内 12 个 moderate、1 个 high 已知问题；自动强制修复会升级至 Expo 57，属于破坏性架构升级，本任务未执行。
+
+## 2026-07-13 22:32:50 +08:00
+
+- 任务：ARC-20260712-04 接入高德地点搜索并移除接驳规则估算。
+- 代码提交：`7603cf3f`。
+- 修改内容：
+  - 新增独立的 `amap_geocode` 与 `amap_place_search` Provider，复用既有高德 Web Service key，并同步 DEV/TEST/PROD 配置和环境变量模板。
+  - `resolve_location_point()` 改为结构化解析，支持城市上下文、本地已验证坐标、高德地址解析、高德 POI 搜索、精确候选消歧和 TTL 缓存；目录节点缺坐标时继续在线解析。
+  - 接驳引擎只保留地图 Provider 返回且通过距离、耗时、费用校验的方式；删除固定分钟、距离、费用和 OSRM 规则费用估算，新结果不再生成 `RULE_ESTIMATED`。
+  - 必需接驳没有可验证方式时阻断对应门到门候选，聚合重复失败并返回结构化 `SourceFailure`；历史规则估算方案禁止直接重算。
+  - 前端过滤 `UNAVAILABLE` 接驳选项，不补默认数字；同步 nullable 步行距离类型和 JSON Schema。
+  - 真实 API smoke 覆盖“温州永嘉桥头梨村 → 温州南站”及“武汉站/武汉东站/汉口站 → 武汉新天地”的地点解析和高德驾车路线。
+- 验证：
+  - `.\.venv\Scripts\python.exe -m pytest backend/app/tests -q`：通过，177 passed。
+  - `npm run typecheck`：通过。
+  - `npm run test:helpers`：通过，11 passed。
+  - `npm run build`：通过，Expo iOS / Android / Web 导出成功。
+  - 临时启用已获批的新增高德能力开关执行 `scripts/live_smoke_real_apis.py --provider geocode`：4 条真实路线全部通过；未修改或提交 `.env` 与真实 key。

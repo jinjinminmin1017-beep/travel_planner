@@ -427,3 +427,27 @@ PLANNING_NO_MATCH
 - V1.16 为前后端同步升级；`PlanningStatus` 新枚举会影响穷举判断，不能只部署后端。
 - 功能开关关闭时沿用现有 `FAILED + missing_plan_explanations` 行为，不返回 `constraint_analysis`。
 - 回滚不得改变现有 `COMPLETE/PARTIAL` 正常方案结构。
+
+## 接驳地点解析与路线事实契约（V1.17，已实现）
+
+适用于 `POST /api/travel/plan`、`POST /api/travel/plan/async`、`GET /api/travel/jobs/{job_id}` 和重试接口，Request、Query Params 与 HTTP Error Response 保持现有定义。
+
+### 服务端生成规则
+
+- 地点文本必须先通过本地已验证坐标、高德地理编码或高德 POI 搜索取得坐标，再调用地图路线 Provider。
+- `LocalTransferOption` 的距离、耗时、费用和路径信息只能来自通过校验的 Provider 结果。
+- 服务端不得为新响应生成 `route_status=RULE_ESTIMATED`；该枚举值在 V1.17 仅用于旧响应/旧客户端兼容。
+- 某种接驳方式查询失败时，不得返回带虚构数字的可选项。
+- 必需接驳段没有任何已验证方式时，该门到门计划不得进入正常 `plans` 或 AVAILABLE 推荐；失败通过 `SourceFailure` 和 `missing_plan_explanations` 表达。
+- `MAP_COORDINATES_MISSING` 表示所有地点解析来源均未获得唯一完整坐标；不得在尚未调用高德搜索前返回该错误。
+- 地点存在多个候选且无法按城市唯一消歧时，使用独立错误码 `MAP_LOCATION_AMBIGUOUS`，不得静默选择第一条。
+- 高德地理编码/POI 搜索失败、超时、限流和空结果必须保留独立 Provider 失败信息。
+- `walking_distance_meters` 在地图 Provider 未返回可验证步行距离时为 `null`，前端不得自行补默认值。
+- 历史响应中的 `RULE_ESTIMATED/UNAVAILABLE` 仍可解析，但包含此类接驳事实的旧方案必须重新规划，不允许直接重算并生成新快照。
+
+### Loading 与 Empty 行为
+
+- 地点解析和路线查询属于异步规划阶段，前端继续显示 `RUNNING/WAITING_SOURCE`，不展示临时估算数字。
+- 至少一种接驳方式验证成功时，只展示验证成功的方式。
+- 没有完整门到门候选时，按现有 FAILED/NO_MATCH 业务规则返回可解释结果；不得展示只有干线事实、接驳数字为估算值的正常推荐卡。
+- 前端遇到历史 `RULE_ESTIMATED` 可继续兼容展示，但新任务验收不得产生该状态。
