@@ -10,7 +10,6 @@ type Props = {
   progress: number;
   originText?: string;
   destinationText?: string;
-  statusText?: string;
   onCancel?: () => void;
 };
 
@@ -50,7 +49,7 @@ function MapSweep() {
   );
 }
 
-export function PlanningProgressScreen({ progress, originText, destinationText, statusText, onCancel }: Props) {
+export function PlanningProgressScreen({ progress, originText, destinationText, onCancel }: Props) {
   const normalizedProgress = Math.max(0, Math.min(100, Math.round(progress)));
   const [reduceMotion, setReduceMotion] = useState(false);
   const [mapWidth, setMapWidth] = useState(0);
@@ -105,13 +104,6 @@ export function PlanningProgressScreen({ progress, originText, destinationText, 
         </View>
         <PlanningStageList progress={normalizedProgress} />
       </View>
-      <View style={styles.footer}>
-        <View accessible accessibilityLabel={`当前实际进度百分之${normalizedProgress}`} style={styles.progressHeader}>
-          <Text style={styles.progressLabel}>当前进度</Text>
-          <Text style={styles.progressText}>{statusText || "正在汇总可用路线与数据来源"}</Text>
-        </View>
-        <View style={styles.track}><View style={[styles.fill, { width: `${normalizedProgress}%` }]} /></View>
-      </View>
     </View>
   );
 }
@@ -131,11 +123,5 @@ const styles = StyleSheet.create({
   mapBase: { opacity: 0.94 },
   flowClip: { bottom: 0, left: 0, overflow: "hidden", position: "absolute", top: 0 },
   flowImage: { height: "100%", left: 0, position: "absolute", top: 0, width: "100%" },
-  glowSweep: { bottom: 0, marginLeft: -21, position: "absolute", top: 0, width: 42 },
-  footer: { backgroundColor: ui.colors.surface, borderRadius: 14, paddingHorizontal: 14, paddingVertical: 13 },
-  progressHeader: { alignItems: "center", flexDirection: "row" },
-  progressLabel: { color: ui.colors.text, fontSize: 12, marginRight: 10 },
-  progressText: { color: ui.colors.primaryDeep, flex: 1, fontSize: 12, fontWeight: "800", lineHeight: 16 },
-  track: { backgroundColor: ui.colors.planningProgressTrack, borderRadius: ui.radius.pill, height: 4, marginTop: 10, overflow: "hidden" },
-  fill: { backgroundColor: ui.colors.primary, borderRadius: ui.radius.pill, height: "100%" }
+  glowSweep: { bottom: 0, marginLeft: -21, position: "absolute", top: 0, width: 42 }
 });

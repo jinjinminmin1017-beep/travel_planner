@@ -17,7 +17,6 @@ export const ui = {
     planningStageText: "#617174",
     planningStageStrong: "#29484c",
     planningCancelText: "#42595c",
-    planningProgressTrack: "#dce7e4",
     mapGlow: "#7ee9d4",
     warning: "#8a5a18",
     warningSurface: "#fff4de",

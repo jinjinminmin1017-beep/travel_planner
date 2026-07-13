@@ -791,7 +791,6 @@ export default function App() {
                 onCancel={response?.async_job ? cancelCurrentJob : undefined}
                 originText={response?.travel_request.origin_text}
                 progress={response?.progress ?? 0}
-                statusText={response?.async_job?.job_status === "WAITING_SOURCE" ? "正在等待外部数据来源返回" : undefined}
               />
             ) : error && !response ? (
               <ErrorState message={error} onRetry={submit} onEdit={() => setActiveTab("input")} />

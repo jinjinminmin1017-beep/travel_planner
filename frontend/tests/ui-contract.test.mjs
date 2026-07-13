@@ -62,4 +62,5 @@ test("planning map keeps the approved progress glow aligned to the reveal edge",
   assert.match(app, /!planningFullScreen \? <View style=\{styles\.bottomTabs\}>/);
   assert.match(app, /planningFullScreen && styles\.planningContent/);
   assert.doesNotMatch(planning, /glowOuter|glowMiddle|glowCore/);
+  assert.doesNotMatch(planning, /当前进度|progressHeader|styles\.track|statusText/);
 });
