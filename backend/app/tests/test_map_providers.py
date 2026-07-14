@@ -1,7 +1,12 @@
+from decimal import Decimal
+
+import pytest
+
 from app.core.context import RequestContext
 from app.data_sources.map_providers import (
     AmapRouteProvider,
     BaiduDirectionLiteProvider,
+    MapProviderError,
     MapRouteEstimate,
     MapRouteProviderResult,
     MapRouteRequest,
@@ -9,6 +14,7 @@ from app.data_sources.map_providers import (
     build_enabled_map_providers,
     data_source_metadata,
     estimate_route_with_enabled_provider_result,
+    _yuan_to_money,
 )
 from app.models.schemas import GeoPoint, TransportMode, money
 from app.services.intent_parser import parse_travel_request
@@ -88,6 +94,85 @@ def test_amap_transit_route_maps_real_response():
     assert estimate.distance_meters == 8600
     assert estimate.duration_minutes == 40
     assert estimate.estimated_cost.amount_minor == 500
+
+
+@pytest.mark.parametrize("value", [None, "", "   ", []])
+def test_money_parser_preserves_missing_values_as_unknown(value):
+    assert _yuan_to_money(value, field_path="route.transits[0].cost") is None
+
+
+@pytest.mark.parametrize(
+    ("value", "expected_amount_minor"),
+    [(5, 500), ("5", 500), ("5.25", 525), (Decimal("0.015"), 2)],
+)
+def test_money_parser_converts_legal_values_with_decimal(value, expected_amount_minor):
+    parsed = _yuan_to_money(value, field_path="route.transits[0].cost")
+
+    assert parsed is not None
+    assert parsed.amount_minor == expected_amount_minor
+
+
+@pytest.mark.parametrize("value", [["5"], {}, True, -1, "NaN", "Infinity", "invalid"])
+def test_money_parser_rejects_illegal_values_with_structured_error(value):
+    with pytest.raises(MapProviderError) as exc_info:
+        _yuan_to_money(value, field_path="route.transits[0].cost")
+
+    assert exc_info.value.error_code == "MAP_ROUTE_RESPONSE_INVALID"
+    assert exc_info.value.field_path == "route.transits[0].cost"
+    assert exc_info.value.actual_type == type(value).__name__
+
+
+def test_amap_transit_empty_cost_keeps_route_facts_and_unknown_cost():
+    client = _FakeClient(
+        {
+            "status": "1",
+            "info": "OK",
+            "route": {
+                "transits": [
+                    {
+                        "distance": "8600",
+                        "duration": "2400",
+                        "cost": [],
+                        "walking_distance": "650",
+                    }
+                ],
+            },
+        }
+    )
+    provider = AmapRouteProvider("test-key", client=client, base_url="https://example.test")
+
+    estimate = provider.estimate_route(_route_request(TransportMode.BUS))
+
+    assert estimate.distance_meters == 8600
+    assert estimate.duration_minutes == 40
+    assert estimate.walking_distance_meters == 650
+    assert estimate.estimated_cost is None
+
+
+def test_dispatcher_returns_structured_invalid_response_without_leaking_payload(monkeypatch, caplog):
+    client = _FakeClient(
+        {
+            "status": "1",
+            "route": {
+                "transits": [
+                    {"distance": "8600", "duration": "2400", "cost": {"secret": "raw-payload-marker"}}
+                ]
+            },
+        }
+    )
+    provider = AmapRouteProvider("test-key", client=client, base_url="https://example.test")
+    monkeypatch.setattr("app.data_sources.map_providers.build_enabled_map_providers", lambda environment=None: [provider])
+
+    result = estimate_route_with_enabled_provider_result(_route_request(TransportMode.SUBWAY), "DEV")
+
+    assert result.estimate is None
+    assert result.error_code == "MAP_ROUTE_RESPONSE_INVALID"
+    assert result.attempted_source_ids == ["amap_route"]
+    assert "raw-payload-marker" not in (result.failure_message or "")
+    assert "raw-payload-marker" not in caplog.text
+    assert "test-key" not in caplog.text
+    assert "field_path=route.transits[0].cost" in caplog.text
+    assert "actual_type=dict" in caplog.text
 
 
 def test_baidu_direction_lite_maps_real_response():
@@ -191,8 +276,41 @@ def test_map_provider_result_falls_back_in_amap_baidu_osrm_order(monkeypatch):
     assert result.attempted_source_ids == ["amap_route", "baidu_map_route", "osrm_route"]
     assert result.fallback_used is True
     assert result.fallback_source_id == "osrm_route"
-    assert "amap_route unavailable" in (result.fallback_reason or "")
-    assert "baidu_map_route unavailable" in (result.fallback_reason or "")
+    assert "amap_route: map provider response has an invalid field structure" in (result.fallback_reason or "")
+    assert "baidu_map_route: map provider response has an invalid field structure" in (result.fallback_reason or "")
+
+
+def test_map_dispatcher_wraps_type_error_and_continues_fallback(monkeypatch):
+    class _BrokenProvider:
+        source_id = "amap_route"
+
+        def estimate_route(self, request):
+            raise TypeError("raw provider value must not escape")
+
+    class _FallbackProvider:
+        source_id = "osrm_route"
+
+        def estimate_route(self, request):
+            return MapRouteEstimate(
+                distance_meters=1200,
+                duration_minutes=8,
+                estimated_cost=money(1600, estimated=True),
+                summary="OSRM fallback route",
+                data_source=data_source_metadata("osrm_route", "OSRM Route Service"),
+            )
+
+    monkeypatch.setattr(
+        "app.data_sources.map_providers.build_enabled_map_providers",
+        lambda environment=None: [_BrokenProvider(), _FallbackProvider()],
+    )
+
+    result = estimate_route_with_enabled_provider_result(_route_request(), "DEV")
+
+    assert result.estimate is not None
+    assert result.estimate.data_source.source_id == "osrm_route"
+    assert result.fallback_used is True
+    assert result.attempted_source_ids == ["amap_route", "osrm_route"]
+    assert "raw provider value" not in (result.fallback_reason or "")
 
 
 def test_osrm_driving_is_not_dispatched_for_transit_modes(monkeypatch):

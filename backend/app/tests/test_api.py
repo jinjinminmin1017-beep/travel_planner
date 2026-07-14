@@ -2,7 +2,7 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 from app.data_sources.flight_providers import FlightProviderSearchResult
-from app.data_sources.map_providers import MapRouteProviderResult
+from app.data_sources.map_providers import AmapRouteProvider, MapRouteProviderResult
 from app.data_sources.rail_providers import RailProviderSearchResult
 from app.models.schemas import LLMRecommendationOutput, RecommendationSlot, RecommendationSlotStatus, RecommendationType
 from app.core import security
@@ -331,6 +331,72 @@ def test_async_plan_returns_running_job_then_pollable_result():
     assert poll_body["async_job"]["job_status"] in {"PARTIAL_READY", "COMPLETE", "FAILED"}
     if poll_body["planning_status"] not in {"FAILED", "NO_MATCH"}:
         assert poll_body["plans"]
+
+
+def test_async_plan_survives_amap_transit_empty_cost(monkeypatch):
+    class _AmapResponse:
+        def __init__(self, payload):
+            self.payload = payload
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self.payload
+
+    class _AmapClient:
+        def get(self, url, params):
+            if url.endswith("/v3/direction/transit/integrated"):
+                return _AmapResponse(
+                    {
+                        "status": "1",
+                        "route": {
+                            "transits": [
+                                {
+                                    "distance": "8600",
+                                    "duration": "2400",
+                                    "walking_distance": "650",
+                                    "cost": [],
+                                }
+                            ]
+                        },
+                    }
+                )
+            if url.endswith("/v3/direction/walking"):
+                return _AmapResponse(
+                    {"status": "1", "route": {"paths": [{"distance": "900", "duration": "660"}]}}
+                )
+            return _AmapResponse(
+                {
+                    "status": "1",
+                    "route": {
+                        "taxi_cost": "18.50",
+                        "paths": [{"distance": "6200", "duration": "1200"}],
+                    },
+                }
+            )
+
+    provider = AmapRouteProvider("test-key", client=_AmapClient(), base_url="https://example.test")
+
+    def amap_estimate(request, environment=None):
+        return MapRouteProviderResult(estimate=provider.estimate_route(request), attempted_source_ids=["amap_route"])
+
+    monkeypatch.setattr("app.services.planner.estimate_route_with_enabled_provider_result", amap_estimate)
+
+    response = client.post(
+        "/api/travel/plan/async",
+        json={"raw_user_input": RAW_INPUT},
+        headers={"idempotency-key": "idem_async_amap_empty_transit_cost"},
+    )
+    poll = client.get(response.json()["async_job"]["polling_url"])
+    body = poll.json()
+
+    assert response.status_code == 200
+    assert poll.status_code == 200
+    assert body["planning_status"] in {"COMPLETE", "PARTIAL", "NO_MATCH"}
+    assert body["async_job"]["job_status"] in {"COMPLETE", "PARTIAL_READY"}
+    assert body["planning_status"] != "FAILED"
+    assert body["async_job"]["job_status"] != "FAILED"
 
 
 def test_async_no_match_is_a_completed_business_job():

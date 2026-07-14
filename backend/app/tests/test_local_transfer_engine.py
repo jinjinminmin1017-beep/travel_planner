@@ -135,3 +135,37 @@ def test_unselected_transfer_failure_does_not_mark_selected_route_partial():
     assert sink.missing == []
     assert sink.warnings == []
     assert sink.failures
+
+
+def test_invalid_bus_response_does_not_block_other_local_transfer_modes():
+    sink = _IssueSink()
+
+    def isolated_estimate(request, environment=None):
+        if request.mode == TransportMode.BUS:
+            return MapRouteProviderResult(
+                estimate=None,
+                attempted_source_ids=["amap_route"],
+                failure_message="amap_route: invalid bus cost field",
+                error_code="MAP_ROUTE_RESPONSE_INVALID",
+                query_status="UNAVAILABLE",
+            )
+        return _estimate_for_mode(request, environment)
+
+    segment = build_local_transfer_segment(
+        segment_id="seg_bus_invalid_cost",
+        origin="上海虹桥站",
+        destination="上海站",
+        default_minutes=38,
+        default_cost_minor=7800,
+        selected_option_id="transfer_taxi",
+        route_estimator=isolated_estimate,
+        issue_sink=sink,
+    )
+
+    option_ids = {option.option_id for option in segment.transfer_options}
+    assert {"transfer_taxi", "transfer_subway", "transfer_walk"}.issubset(option_ids)
+    assert "transfer_bus" not in option_ids
+    assert segment.route_status == "PRIMARY_VERIFIED"
+    assert sink.missing == []
+    assert sink.warnings == []
+    assert any(failure["error_code"] == "MAP_ROUTE_RESPONSE_INVALID" for failure in sink.failures)

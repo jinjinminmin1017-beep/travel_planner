@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from math import ceil
 from typing import Any, Literal, Protocol
 
@@ -10,11 +12,22 @@ import httpx
 from app.data_sources.config_loader import has_required_secret, load_data_source_configs
 from app.models.schemas import DataSourceMetadata, DataSourceType, GeoPoint, Money, TransportMode, money, now_timepoint
 
+logger = logging.getLogger("app.map")
+
 
 class MapProviderError(RuntimeError):
-    def __init__(self, message: str, error_code: str = "MAP_ROUTE_FAILED") -> None:
+    def __init__(
+        self,
+        message: str,
+        error_code: str = "MAP_ROUTE_FAILED",
+        *,
+        field_path: str | None = None,
+        actual_type: str | None = None,
+    ) -> None:
         super().__init__(message)
         self.error_code = error_code
+        self.field_path = field_path
+        self.actual_type = actual_type
 
 
 @dataclass(frozen=True)
@@ -123,7 +136,7 @@ class AmapRouteProvider:
             first = transits[0]
             distance = _to_int(first.get("distance"))
             duration = ceil(_to_int(first.get("duration")) / 60)
-            cost = _yuan_to_money(first.get("cost"))
+            cost = _yuan_to_money(first.get("cost"), field_path="route.transits[0].cost")
             return MapRouteEstimate(
                 distance,
                 duration,
@@ -138,7 +151,11 @@ class AmapRouteProvider:
         first = paths[0]
         distance = _to_int(first.get("distance"))
         duration = ceil(_to_int(first.get("duration")) / 60)
-        taxi_cost = _yuan_to_money(route.get("taxi_cost")) if request.mode == TransportMode.TAXI else None
+        taxi_cost = (
+            _yuan_to_money(route.get("taxi_cost"), field_path="route.taxi_cost")
+            if request.mode == TransportMode.TAXI
+            else None
+        )
         return MapRouteEstimate(
             distance,
             duration,
@@ -275,9 +292,25 @@ def estimate_route_with_enabled_provider_result(request: MapRouteRequest, enviro
                 fallback_reason="; ".join(failure_messages) if fallback_used else None,
                 query_status="FALLBACK_VERIFIED" if fallback_used else "PRIMARY_VERIFIED",
             )
-        except (httpx.HTTPError, MapProviderError, ValueError) as exc:
+        except (httpx.HTTPError, MapProviderError, ValueError, TypeError, KeyError) as exc:
+            if isinstance(exc, (ValueError, TypeError, KeyError)):
+                exc = MapProviderError(
+                    "map provider response has an invalid field structure",
+                    "MAP_ROUTE_RESPONSE_INVALID",
+                    field_path="unknown",
+                    actual_type=type(exc).__name__,
+                )
+            error_code = _map_error_code(exc)
+            if error_code == "MAP_ROUTE_RESPONSE_INVALID":
+                logger.warning(
+                    "map_provider_response_invalid source_id=%s field_path=%s actual_type=%s error_code=%s",
+                    provider.source_id,
+                    getattr(exc, "field_path", None) or "unknown",
+                    getattr(exc, "actual_type", None) or type(exc).__name__,
+                    error_code,
+                )
             failure_messages.append(f"{provider.source_id}: {exc}")
-            failure_codes.append(_map_error_code(exc))
+            failure_codes.append(error_code)
             continue
     if not enabled_providers:
         error_code = "MAP_ROUTE_NOT_ENABLED"
@@ -303,11 +336,19 @@ def _map_error_code(exc: Exception) -> str:
         return "MAP_ROUTE_TIMEOUT"
     if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code == 429:
         return "MAP_ROUTE_RATE_LIMITED"
+    if isinstance(exc, (TypeError, KeyError, ValueError)):
+        return "MAP_ROUTE_RESPONSE_INVALID"
     return "MAP_ROUTE_FAILED"
 
 
 def _aggregate_failure_code(codes: list[str]) -> str:
-    priority = ["MAP_ROUTE_RATE_LIMITED", "MAP_ROUTE_TIMEOUT", "MAP_ROUTE_EMPTY", "MAP_ROUTE_FAILED"]
+    priority = [
+        "MAP_ROUTE_RATE_LIMITED",
+        "MAP_ROUTE_TIMEOUT",
+        "MAP_ROUTE_RESPONSE_INVALID",
+        "MAP_ROUTE_EMPTY",
+        "MAP_ROUTE_FAILED",
+    ]
     return next((code for code in priority if code in codes), codes[-1])
 
 
@@ -343,7 +384,27 @@ def _to_optional_int(value: Any) -> int | None:
     return int(float(value))
 
 
-def _yuan_to_money(value: Any) -> Money | None:
-    if value is None or value == "":
+def _yuan_to_money(value: Any, *, field_path: str = "cost") -> Money | None:
+    if value is None or value == "" or value == []:
         return None
-    return money(int(round(float(value) * 100)), estimated=True)
+    if isinstance(value, bool) or isinstance(value, (list, dict)):
+        raise _invalid_money_field(field_path, value)
+    if isinstance(value, str) and not value.strip():
+        return None
+    try:
+        yuan = Decimal(str(value).strip())
+    except (InvalidOperation, ValueError):
+        raise _invalid_money_field(field_path, value) from None
+    if not yuan.is_finite() or yuan < 0:
+        raise _invalid_money_field(field_path, value)
+    amount_minor = int((yuan * Decimal("100")).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+    return money(amount_minor, estimated=True)
+
+
+def _invalid_money_field(field_path: str, value: Any) -> MapProviderError:
+    return MapProviderError(
+        f"map provider response field {field_path} has an invalid monetary value",
+        "MAP_ROUTE_RESPONSE_INVALID",
+        field_path=field_path,
+        actual_type=type(value).__name__,
+    )
