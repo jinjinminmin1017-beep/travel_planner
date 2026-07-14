@@ -224,3 +224,21 @@
   - 标准 TEST 配置下 `\.venv\Scripts\python -m pytest backend\app\tests -q`：通过，207 passed。
   - `\.venv\Scripts\python scripts\export_schemas.py`：通过，`schemas/` 无差异。
   - `git diff --check`：通过。
+
+## 2026-07-14 22:50:22 +08:00
+
+- 任务：ARC-20260714-02 将结果集席别传播修正为同车次同步。
+- 代码提交：`a8c9c91a786e12969eb177926beb1a0df8e92ccd`。
+- 修改内容：
+  - 以规范化 `train_number` 为席别同步键，只更新结果集中包含目标车次的铁路段；同一方案内其他车次和不包含目标车次的方案保持不变。
+  - 同车次跨方案分别匹配各自合法 seat option，独立刷新价格、费用、舒适度和数据质量。
+  - 仅同车次缺少目标席别的方案进入 `unsupported_plan_ids`；成功重新选择后恢复旧逻辑误标的推荐资格。
+  - 移除车次级操作对全局 `TravelRequest.preferred_rail_seat` 和 `preference_source` 的改写，更新成功提示为具体车次同步结果。
+  - 更新 API 契约、架构、开发任务和测试任务，并增加同车次、不同车次及 G834 + K597 中转回归覆盖。
+- 验证：
+  - `backend/app/tests/test_api.py`：47 passed。
+  - 同车次与不同车次专项回归：2 passed。
+  - `npm run typecheck`：通过。
+  - `npm run test:helpers`：11 passed。
+  - `python scripts/export_schemas.py`：通过，`schemas/` 无差异。
+  - 后端全量：205 passed、3 failed；失败为本机高德地理编码启用状态与既有默认禁用断言冲突，与本次席别改动无关。
