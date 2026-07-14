@@ -51,6 +51,7 @@ from app.services.cost_comfort_risk_engine import (
     calculate_cost_breakdown,
     refresh_plan_cost_and_quality,
 )
+from app.services.constraints.evaluator import evaluate_plan_constraints
 from app.services.constraints.relaxation_selector import build_constraint_analysis
 from app.services.destination_assets import resolve_destination_presentation
 from app.services.flight_planning_engine import FlightPlanSpec
@@ -64,6 +65,13 @@ from app.services.location_resolver import (
     transfer_station_candidates_between,
 )
 from app.services.planning_rules import assert_option_available
+from app.services.rail_connection_matcher import (
+    RailConnectionCandidate,
+    RailConnectionMetrics,
+    match_rail_connections,
+    rail_connection_matcher_v2_enabled,
+    rail_connection_policy_from_env,
+)
 from app.services.rail_planning_engine import RailPlanSpec, TicketEnhancementSpec
 from app.services.recommendation import recommend_with_validation
 from app.services.result_set_preferences import apply_rail_seat_to_result_set
@@ -172,6 +180,16 @@ class PlanningIssueCollector:
                 occurred_at=now_timepoint(),
             )
         )
+
+
+@dataclass(frozen=True)
+class RailConnectionBatch:
+    origin_station: str
+    transfer_station: str
+    destination_station: str
+    candidates: list[RailConnectionCandidate]
+    metrics: RailConnectionMetrics
+
 
 def _taxi(segment_id: str, origin: str, destination: str, minutes: int, cost_minor: int, option_id: str = "transfer_taxi", collector: PlanningIssueCollector | None = None) -> LocalTransferSegment:
     return build_local_transfer_segment(
@@ -762,6 +780,36 @@ def _record_rail_provider_block(
     )
 
 
+def _record_rail_connection_not_found(collector: PlanningIssueCollector) -> None:
+    user_visible_message = "铁路两段均有可验证班次，但当前没有满足安全换乘时间与接驳要求的连接。"
+    collector.add_missing("rail_transfer_connection")
+    collector.add_warning(user_visible_message)
+    collector.add_source_failure(
+        source_id="rail_connection_matcher",
+        adapter_name="RailConnectionMatcher",
+        failure_class=SourceFailureClass.CORE_FACT_FAILURE,
+        handling_strategy=SourceFailureHandlingStrategy.BLOCK_PLAN,
+        error_code="RAIL_CONNECTION_NOT_FOUND",
+        message="provider offers were available for both rail legs but no safe connection passed deterministic validation",
+        user_visible_message=user_visible_message,
+        impacted_plan_types=[PlanType.TRANSFER_RAIL],
+        source_used_id="rail_12306_public_query",
+        fallback_source_id=None,
+        fallback_reason=None,
+        fallback_used=False,
+    )
+
+
+def _transfer_rail_block_explanation(collector: PlanningIssueCollector) -> tuple[str, str]:
+    connection_failure = next(
+        (failure for failure in collector.failures if failure.error_code == "RAIL_CONNECTION_NOT_FOUND"),
+        None,
+    )
+    if connection_failure:
+        return connection_failure.error_code, connection_failure.user_visible_message
+    return "CORE_FACT_UNAVAILABLE", "Dynamic rail transfer planner attempted provider-verified legs but found no connectable two-leg plan in this run."
+
+
 def _direct_rail_block_message(collector: PlanningIssueCollector) -> str:
     for failure in collector.failures:
         if failure.source_id == "rail_12306_public_query" and failure.error_code != "RAIL_PROVIDER_EMPTY":
@@ -1015,12 +1063,17 @@ def _build_dynamic_transfer_rail_plans(
     origin_stations = _dynamic_station_names(route_nodes, origin_city, limit=2)
     destination_stations = _dynamic_station_names(route_nodes, destination_city, limit=2)
     transfer_stations = transfer_station_candidates_between(origin_city, destination_city, limit=max_hubs)
+    matcher_v2_enabled = rail_connection_matcher_v2_enabled()
+    policy = rail_connection_policy_from_env()
     logger.info(
-        "rail_transfer_planner_start request_id=%s origin_station_count=%s destination_station_count=%s transfer_station_count=%s",
+        "rail_transfer_planner_start request_id=%s origin_station_count=%s destination_station_count=%s transfer_station_count=%s matcher_v2_enabled=%s min_transfer_minutes=%s max_wait_minutes=%s",
         travel_request.request_id,
         len(origin_stations),
         len(destination_stations),
         len(transfer_stations),
+        matcher_v2_enabled,
+        policy.min_same_station_transfer_minutes,
+        policy.max_transfer_wait_minutes,
     )
     if not origin_stations or not destination_stations or not transfer_stations:
         logger.warning(
@@ -1033,9 +1086,24 @@ def _build_dynamic_transfer_rail_plans(
         collector.add_missing("rail_transfer_candidates")
         return []
 
-    plans: list[TravelPlan] = []
+    batches: list[RailConnectionBatch] = []
     failure_messages: list[str] = []
     rail_rate_limited = False
+    provider_fact_pair_count = 0
+    transfer_cache: dict[tuple[str, str], LocalTransferSegment | None] = {}
+
+    def cached_transfer(origin: str, destination: str) -> LocalTransferSegment | None:
+        cache_key = (origin.strip(), destination.strip())
+        if cache_key not in transfer_cache:
+            try:
+                transfer_cache[cache_key] = taxi("seg_rail_transfer_candidate", origin, destination, 0, 0)
+            except LocalTransferUnavailable:
+                transfer_cache[cache_key] = None
+        return transfer_cache[cache_key]
+
+    def resolve_cross_station_transfer(first_offer: RailOffer, second_offer: RailOffer) -> LocalTransferSegment | None:
+        return cached_transfer(first_offer.destination_station, second_offer.origin_station)
+
     for origin_station in origin_stations:
         if rail_rate_limited:
             break
@@ -1101,54 +1169,154 @@ def _build_dynamic_transfer_rail_plans(
                         rail_rate_limited = True
                         break
                     continue
-                for first_offer in first_result.offers[:2]:
-                    first_segment = _rail_segment_from_offer(f"seg_rail_transfer_{len(plans) + 1}_1", first_offer)
-                    for second_offer in second_result.offers[:2]:
-                        second_segment = _rail_segment_from_offer(f"seg_rail_transfer_{len(plans) + 1}_2", second_offer)
-                        if not _has_connection(first_segment, second_segment, 45):
-                            continue
-                        plan_index = len(plans) + 1
-                        try:
-                            segments = [
-                                taxi(f"seg_origin_station_transfer_dynamic_{plan_index}", origin_text, f"{first_offer.origin_station}", 38, 7800),
-                                first_segment,
-                                taxi(f"seg_transfer_station_dynamic_{plan_index}", f"{first_offer.destination_station}", f"{second_offer.origin_station}", 20, 0),
-                                second_segment,
-                                taxi(f"seg_station_dest_transfer_dynamic_{plan_index}", f"{second_offer.destination_station}", destination_text, 32, 6200),
-                            ]
-                        except LocalTransferUnavailable:
-                            continue
-                        plans.append(
-                            _plan(
-                                f"plan_rail_transfer_dynamic_{plan_index}",
-                                f"Dynamic rail transfer via {transfer_station.station_name}",
-                                PlanType.TRANSFER_RAIL,
-                                segments,
-                                7.2,
-                                RiskLevel.MEDIUM,
-                                "Verified two-leg rail provider offers",
-                                "Both rail legs come from the enabled rail provider and pass a minimum transfer-time check.",
-                            )
-                        )
-                        logger.info(
-                            "rail_transfer_plan_created request_id=%s plan_id=%s transfer_station=%s first_train=%s second_train=%s",
-                            travel_request.request_id,
-                            f"plan_rail_transfer_dynamic_{plan_index}",
-                            transfer_station.station_name,
-                            first_offer.train_number,
-                            second_offer.train_number,
-                        )
-                        if len(plans) >= max_plans:
-                            logger.info("rail_transfer_planner_complete request_id=%s plan_count=%s reason=max_plans", travel_request.request_id, len(plans))
-                            return plans
+                provider_fact_pair_count += 1
+                first_offers = first_result.offers if matcher_v2_enabled else first_result.offers[:2]
+                second_offers = second_result.offers if matcher_v2_enabled else second_result.offers[:2]
+                candidates, metrics = match_rail_connections(
+                    first_offers,
+                    second_offers,
+                    policy=policy,
+                    resolve_cross_station_transfer=resolve_cross_station_transfer,
+                )
+                batches.append(
+                    RailConnectionBatch(
+                        origin_station=origin_station,
+                        transfer_station=transfer_station.station_name,
+                        destination_station=destination_station,
+                        candidates=candidates,
+                        metrics=metrics,
+                    )
+                )
 
-    if not plans and failure_messages:
+    candidate_batches: dict[str, tuple[RailConnectionCandidate, int]] = {}
+    for batch_index, batch in enumerate(batches):
+        for candidate in batch.candidates:
+            candidate_batches.setdefault(candidate.stable_key, (candidate, batch_index))
+
+    ordered_candidates = sorted(
+        candidate_batches.values(),
+        key=lambda item: (
+            _as_shanghai_datetime(item[0].second_offer.arrival_at),
+            int(
+                (
+                    _as_shanghai_datetime(item[0].second_offer.arrival_at)
+                    - _as_shanghai_datetime(item[0].first_offer.departure_at)
+                ).total_seconds()
+                // 60
+            ),
+            item[0].wait_minutes,
+            item[0].stable_key,
+        ),
+    )
+    plan_candidates: list[tuple[TravelPlan, RailConnectionCandidate, int]] = []
+    for candidate, batch_index in ordered_candidates:
+        plan_index = len(plan_candidates) + 1
+        origin_transfer = cached_transfer(origin_text, candidate.first_offer.origin_station)
+        destination_transfer = cached_transfer(candidate.second_offer.destination_station, destination_text)
+        if origin_transfer is None or destination_transfer is None:
+            continue
+        first_segment = _rail_segment_from_offer(f"seg_rail_transfer_{plan_index}_1", candidate.first_offer)
+        second_segment = _rail_segment_from_offer(f"seg_rail_transfer_{plan_index}_2", candidate.second_offer)
+        segments = [
+            origin_transfer.model_copy(update={"segment_id": f"seg_origin_station_transfer_dynamic_{plan_index}"}),
+            first_segment,
+        ]
+        if candidate.cross_station_transfer is not None:
+            segments.append(
+                candidate.cross_station_transfer.model_copy(
+                    update={"segment_id": f"seg_transfer_station_dynamic_{plan_index}"}
+                )
+            )
+        segments.extend(
+            [
+                second_segment,
+                destination_transfer.model_copy(update={"segment_id": f"seg_station_dest_transfer_dynamic_{plan_index}"}),
+            ]
+        )
+        transfer_description = (
+            "The rail legs use the same verified station identity; no map transfer is required."
+            if candidate.same_station
+            else "The rail legs use different or unconfirmed station identities and include a verified map transfer."
+        )
+        plan = _plan(
+            f"plan_rail_transfer_dynamic_{plan_index}",
+            f"Dynamic rail transfer via {batches[batch_index].transfer_station}",
+            PlanType.TRANSFER_RAIL,
+            segments,
+            7.2,
+            RiskLevel.MEDIUM,
+            "Verified two-leg rail provider offers",
+            f"Both rail legs are provider facts and pass the required transfer-time check. {transfer_description}",
+        )
+        plan_candidates.append((plan, candidate, batch_index))
+
+    def plan_sort_key(item: tuple[TravelPlan, RailConnectionCandidate, int]) -> tuple[int, int, int, datetime, int, int, int, int, str]:
+        plan, candidate, _ = item
+        evaluation = evaluate_plan_constraints(plan, travel_request)
+        risk_order = {
+            RiskLevel.LOW: 0,
+            RiskLevel.MEDIUM: 1,
+            RiskLevel.HIGH: 2,
+            RiskLevel.BLOCKED: 3,
+        }
+        return (
+            0 if evaluation.safe_for_relaxation else 1,
+            0 if evaluation.satisfies_all else 1,
+            len(evaluation.violations),
+            _as_shanghai_datetime(candidate.second_offer.arrival_at),
+            plan.total_duration_minutes,
+            candidate.wait_minutes,
+            plan.cost_breakdown.total_cost.amount_minor,
+            risk_order.get(plan.risk_assessment.overall_risk_level, 4),
+            candidate.stable_key,
+        )
+
+    selected = sorted(plan_candidates, key=plan_sort_key)[:max_plans]
+    selected_keys = {candidate.stable_key for _, candidate, _ in selected}
+    for batch in batches:
+        logger.info(
+            "rail_connection_match_complete request_id=%s origin_station=%s transfer_station=%s destination_station=%s first_offer_count=%s second_offer_count=%s pairs_examined=%s rejected_departed_before_arrival=%s rejected_transfer_buffer=%s rejected_max_wait=%s rejected_cross_station_route=%s rejected_invalid_fact=%s rejected_overnight=%s valid_connection_count=%s selected_connection_count=%s matcher_v2_enabled=%s",
+            travel_request.request_id,
+            batch.origin_station,
+            batch.transfer_station,
+            batch.destination_station,
+            batch.metrics.first_offer_count,
+            batch.metrics.second_offer_count,
+            batch.metrics.pairs_examined,
+            batch.metrics.rejected_departed_before_arrival,
+            batch.metrics.rejected_transfer_buffer,
+            batch.metrics.rejected_max_wait,
+            batch.metrics.rejected_cross_station_route,
+            batch.metrics.rejected_invalid_fact,
+            batch.metrics.rejected_overnight,
+            batch.metrics.valid_connection_count,
+            sum(candidate.stable_key in selected_keys for candidate in batch.candidates),
+            matcher_v2_enabled,
+        )
+
+    plans = [plan for plan, _, _ in selected]
+    for plan, candidate, batch_index in selected:
+        logger.info(
+            "rail_transfer_plan_created request_id=%s plan_id=%s transfer_station=%s first_train=%s second_train=%s same_station=%s wait_minutes=%s required_transfer_minutes=%s",
+            travel_request.request_id,
+            plan.plan_id,
+            batches[batch_index].transfer_station,
+            candidate.first_offer.train_number,
+            candidate.second_offer.train_number,
+            candidate.same_station,
+            candidate.wait_minutes,
+            candidate.required_transfer_minutes,
+        )
+
+    if not plans and provider_fact_pair_count == 0 and failure_messages:
         _record_rail_provider_block(
             collector,
             failure_messages=failure_messages,
             missing_component="rail_transfer_core_fact",
             impacted_plan_types=[PlanType.TRANSFER_RAIL],
         )
+    if not plans and provider_fact_pair_count > 0 and not candidate_batches:
+        _record_rail_connection_not_found(collector)
     logger.info("rail_transfer_planner_complete request_id=%s plan_count=%s rail_rate_limited=%s", travel_request.request_id, len(plans), rail_rate_limited)
     return plans
 
@@ -1598,7 +1766,8 @@ def build_plans(travel_request: TravelRequest) -> tuple[list[TravelPlan], list[S
     if PlanType.DIRECT_RAIL not in generated_types:
         explanations.append(MissingPlanExplanation(plan_type=PlanType.DIRECT_RAIL, reason_code="CORE_FACT_UNAVAILABLE", user_visible_message=_direct_rail_block_message(collector)))
     if PlanType.TRANSFER_RAIL not in generated_types:
-        explanations.append(MissingPlanExplanation(plan_type=PlanType.TRANSFER_RAIL, reason_code="CORE_FACT_UNAVAILABLE", user_visible_message="Dynamic rail transfer planner attempted provider-verified legs but found no connectable two-leg plan in this run."))
+        transfer_reason_code, transfer_message = _transfer_rail_block_explanation(collector)
+        explanations.append(MissingPlanExplanation(plan_type=PlanType.TRANSFER_RAIL, reason_code=transfer_reason_code, user_visible_message=transfer_message))
     explanations.extend(
         [
             MissingPlanExplanation(plan_type=PlanType.MULTI_TRANSFER_RAIL, reason_code="DYNAMIC_PLANNER_CAPABILITY_GAP", user_visible_message="Multi-transfer rail still needs stricter station-order and ticket-risk validation before it can be recommended."),

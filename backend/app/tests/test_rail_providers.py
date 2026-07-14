@@ -70,6 +70,8 @@ def test_12306_public_query_maps_ticket_response_shape():
     assert offer.train_number == "G532"
     assert offer.origin_station == "上海虹桥"
     assert offer.destination_station == "北京南"
+    assert offer.origin_station_code == "AOH"
+    assert offer.destination_station_code == "VNP"
     assert offer.departure_at.isoformat() == "2026-07-10T06:31:00+08:00"
     assert offer.arrival_at.isoformat() == "2026-07-10T12:18:00+08:00"
     assert offer.duration_minutes == 347

@@ -68,12 +68,24 @@ def _airport(name: str, city: str) -> AirportCandidate:
     )
 
 
-def _rail_offer(origin: str, destination: str, day: date, dep_h: int, arr_h: int) -> RailOffer:
+def _rail_offer(
+    origin: str,
+    destination: str,
+    day: date,
+    dep_h: int,
+    arr_h: int,
+    *,
+    dep_m: int = 0,
+    arr_m: int = 0,
+    train_number: str | None = None,
+    origin_code: str | None = None,
+    destination_code: str | None = None,
+) -> RailOffer:
     source = rail_data_source_metadata("rail_12306_public_query", "12306 Public Ticket Query")
-    departure = datetime.combine(day, datetime.min.time()).replace(hour=dep_h)
-    arrival = datetime.combine(day, datetime.min.time()).replace(hour=arr_h)
+    departure = datetime.combine(day, datetime.min.time()).replace(hour=dep_h, minute=dep_m)
+    arrival = datetime.combine(day, datetime.min.time()).replace(hour=arr_h, minute=arr_m)
     return RailOffer(
-        train_number=f"G{dep_h}{arr_h}",
+        train_number=train_number or f"G{dep_h}{arr_h}",
         origin_station=origin,
         destination_station=destination,
         departure_at=departure,
@@ -82,6 +94,8 @@ def _rail_offer(origin: str, destination: str, day: date, dep_h: int, arr_h: int
         stop_sequence=[origin, destination],
         seat_options=[SeatOption(option_id="seat_second", seat_type="Second", price=money(30000), availability="AVAILABLE", source_option_version="test", data_source=source)],
         data_source=source,
+        origin_station_code=origin_code,
+        destination_station_code=destination_code,
     )
 
 
@@ -201,6 +215,102 @@ def test_dynamic_transfer_rail_planner_builds_connectable_two_leg_plan(monkeypat
     plans, *_ = build_plans(request)
 
     assert any(plan.plan_type == PlanType.TRANSFER_RAIL for plan in plans)
+
+
+def _configure_complete_transfer_offer_scenario(monkeypatch, second_offers: list[RailOffer]) -> tuple[date, TravelRequest]:
+    day = date(2026, 7, 15)
+    route_nodes = PlanningRouteNodes(
+        route_key="岳阳_张家口",
+        supported=False,
+        city_origin="岳阳",
+        city_destination="张家口",
+        start_station="岳阳东",
+        end_station="张家口",
+        start_airport="",
+        end_airport="",
+        rail_train="",
+        flight_no="",
+        station_candidates=[_station("岳阳东", "岳阳"), _station("张家口", "张家口")],
+        airport_candidates=[],
+    )
+    monkeypatch.setattr("app.services.planner.planning_nodes_for_request", lambda origin, destination: route_nodes)
+    monkeypatch.setattr("app.services.planner.resolve_location_city", lambda place: "岳阳" if place == "岳阳" else "张家口")
+    monkeypatch.setattr(
+        "app.services.planner.transfer_station_candidates_between",
+        lambda origin_city, destination_city, limit=6: [_station("北京西", "北京")],
+    )
+    first_offer = _rail_offer(
+        "岳阳东",
+        "北京西",
+        day,
+        7,
+        14,
+        arr_m=12,
+        train_number="G502",
+        origin_code="YIQ",
+        destination_code="BXP",
+    )
+
+    def fake_rail(request, environment=None):
+        if request.origin_station == "岳阳东" and request.destination_station == "北京西":
+            return RailProviderSearchResult(offers=[first_offer], attempted_source_ids=["rail_12306_public_query"])
+        if request.origin_station == "北京西" and request.destination_station == "张家口":
+            return RailProviderSearchResult(offers=second_offers, attempted_source_ids=["rail_12306_public_query"])
+        return RailProviderSearchResult(
+            offers=[],
+            attempted_source_ids=["rail_12306_public_query"],
+            failure_message="rail_12306_public_query: empty response",
+        )
+
+    monkeypatch.setattr("app.services.planner.search_rail_offers_with_enabled_provider_result", fake_rail)
+    request = TravelRequest(
+        request_id="req_yueyang_zhangjiakou",
+        raw_user_input="岳阳到张家口",
+        origin_text="岳阳",
+        destination_text="张家口",
+        travel_date=day,
+        preferences=[RecommendationType.BALANCED],
+        hard_constraints=TravelHardConstraints(),
+        soft_preferences=TravelSoftPreferences(),
+    )
+    return day, request
+
+
+def test_dynamic_transfer_uses_complete_offers_and_skips_same_station_map_transfer(monkeypatch):
+    day = date(2026, 7, 15)
+    second_offers = [
+        _rail_offer("北京西站", "张家口", day, 13, 14, dep_m=40, arr_m=40, train_number="D1", origin_code="BXP", destination_code="ZKP"),
+        _rail_offer("北京西站", "张家口", day, 14, 15, dep_m=30, arr_m=30, train_number="D2", origin_code="BXP", destination_code="ZKP"),
+        _rail_offer("北京西站", "张家口", day, 14, 16, dep_m=58, arr_m=3, train_number="D6649", origin_code="BXP", destination_code="ZKP"),
+    ]
+    _, request = _configure_complete_transfer_offer_scenario(monkeypatch, second_offers)
+
+    plans, *_ = build_plans(request)
+
+    transfer_plan = next(plan for plan in plans if plan.plan_type == PlanType.TRANSFER_RAIL)
+    rail_segments = [segment for segment in transfer_plan.segments if getattr(segment, "segment_type", None) == "RAIL"]
+    local_segments = [segment for segment in transfer_plan.segments if getattr(segment, "segment_type", None) == "LOCAL_TRANSFER"]
+    assert [segment.train_number for segment in rail_segments] == ["G502", "D6649"]
+    assert len(local_segments) == 2
+    assert not any(segment.origin in {"北京西", "北京西站"} and segment.destination in {"北京西", "北京西站"} for segment in local_segments)
+
+
+def test_dynamic_transfer_reports_connection_not_found_instead_of_provider_price_error(monkeypatch):
+    day = date(2026, 7, 15)
+    second_offers = [
+        _rail_offer("北京西", "张家口", day, 14, 15, dep_m=56, arr_m=56, train_number="D44", origin_code="BXP", destination_code="ZKP")
+    ]
+    _, request = _configure_complete_transfer_offer_scenario(monkeypatch, second_offers)
+
+    plans, failures, _, _, explanations, _ = build_plans(request)
+
+    assert not any(plan.plan_type == PlanType.TRANSFER_RAIL for plan in plans)
+    assert any(failure.error_code == "RAIL_CONNECTION_NOT_FOUND" for failure in failures)
+    assert not any(failure.error_code == "RAIL_PROVIDER_MISSING_PRICE" for failure in failures)
+    assert any(
+        explanation.plan_type == PlanType.TRANSFER_RAIL and explanation.reason_code == "RAIL_CONNECTION_NOT_FOUND"
+        for explanation in explanations
+    )
 
 
 def test_dynamic_flight_rail_mixed_planner_builds_connectable_plan(monkeypatch):

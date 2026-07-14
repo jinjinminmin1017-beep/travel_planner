@@ -56,6 +56,8 @@ class RailOffer:
     stop_sequence: list[str]
     seat_options: list[SeatOption]
     data_source: DataSourceMetadata
+    origin_station_code: str | None = None
+    destination_station_code: str | None = None
 
 
 @dataclass(frozen=True)
@@ -258,6 +260,8 @@ class Official12306RailProvider:
             stop_sequence=[origin_station, destination_station],
             seat_options=seats,
             data_source=data_source,
+            origin_station_code=origin_code,
+            destination_station_code=destination_code,
         )
 
     def _headers(self) -> dict[str, str]:
@@ -544,6 +548,8 @@ def _offer_with_cache_metadata(offer: RailOffer, *, cache_hit: bool, ttl_seconds
         stop_sequence=offer.stop_sequence,
         seat_options=seats,
         data_source=data_source,
+        origin_station_code=offer.origin_station_code,
+        destination_station_code=offer.destination_station_code,
     )
 
 
