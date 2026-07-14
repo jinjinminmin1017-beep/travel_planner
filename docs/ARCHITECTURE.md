@@ -1,6 +1,6 @@
 # Architecture
 
-更新日期：2026-07-12
+更新日期：2026-07-14
 
 本文记录当前代码中已确认的架构；尚未落地的内容会明确标注为“目标设计，待实现”。
 
@@ -377,3 +377,91 @@ flowchart TD
 - 地理编码或路线 Provider 超时会减少可推荐方案，但比生成不可验证的接驳事实更安全。
 - 规则估算关闭后，现有依赖估算接驳才能成形的样例可能从 `PARTIAL` 变为无完整门到门候选，测试数据必须改用可搜索真实地点或显式 mock Provider。
 - 使用功能开关可回滚高德搜索调度顺序，但不得重新启用规则估算；紧急回滚时只能把接驳标为不可用并退出推荐。
+
+## 铁路中转完整候选匹配架构（V1.17，已实现）
+
+设计日期：2026-07-14。实现日期：2026-07-14，代码提交：`bdff0d67300a04676da2ba3ac45131575850d4fb`。
+
+### 当前问题与证据
+
+- `rail_providers.py` 已按发车时间升序返回完整铁路 offer，但 `planner.py` 在验证连接前只取第一程前 2 个和第二程前 2 个，最多检查 4 个组合。
+- 2026-07-15 岳阳至张家口真实查询中，岳阳至北京西的 G502 于 14:12 到达，北京西至张家口的 D6649 于 14:58 发车，46 分钟换乘满足当前 45 分钟安全门槛；由于 D6649 不在第二程最早两个 offer 中，现有规划器没有检查该组合。
+- 同次复现中，北京西完整 offer 集存在大量满足时间门槛的组合，因此该失败属于候选提前截断造成的假阴性，不是 12306 无车或无票价。
+- 当前中转计划在两段铁路之间无条件调用 `taxi(first_offer.destination_station, second_offer.origin_station, ...)`。北京西至北京西属于同站换乘，不应依赖地图路线；否则修复时间匹配后仍可能被零距离地图查询错误淘汰。
+- 当前失败聚合会把某个中转站的缺票价错误放大为整个 `TRANSFER_RAIL` 的 Provider 核心事实失败，无法区分“Provider 没有事实”和“事实存在但没有安全连接”。
+
+### 推荐方案
+
+#### 1. 连接匹配独立成内部服务
+
+新增 `backend/app/services/rail_connection_matcher.py`，负责纯内存、确定性的两段铁路连接匹配；`planner.py` 只负责查询 Provider、调用 matcher、构造门到门计划和聚合结果。
+
+内部策略至少包含：
+
+- `min_same_station_transfer_minutes`：同站最低换乘时间，第一期默认 45 分钟。
+- `max_transfer_wait_minutes`：允许的最大等待时间，第一期默认 360 分钟。
+- `allow_overnight_transfer`：第一期固定为 false，隔夜中转另行设计。
+- `max_connections_per_first_offer` 与 `max_raw_connections_per_hub`：只在连接验证后限制内存候选数量，不得用于截断 Provider 原始事实。
+
+#### 2. 按到达时间查找可行第二程
+
+1. 第一、二程 offer 分别按时间排序并去重。
+2. 为第二程构建发车时间数组。
+3. 对每个第一程计算 `earliest_second_departure = first.arrival_at + required_transfer_minutes`。
+4. 使用二分查找定位第一班可行第二程，继续扫描到最大等待时间边界。
+5. 对连接执行车站身份、时间、票价、席别、重复车次和数据来源校验。
+6. 完整有效连接生成后，再按硬约束、安全、到达时间、总耗时、等待时间、费用和风险排序并限制最终计划数。
+
+该算法不增加 12306 请求次数，复杂度由无界笛卡尔积收敛为排序加区间扫描；禁止通过把 `[:2]` 改成 `[:10]` 作为最终修复。
+
+#### 3. 区分同站换乘与跨站换乘
+
+- 使用规范化后的 `station_id/station_code` 判断是否同站，不以展示名称模糊猜测。
+- 同站换乘不调用地图 Provider，不生成出租车接驳；换乘等待由两段铁路的真实到发时间计算，并计入计划总时长与风险说明。
+- 跨站换乘必须取得真实地图路线，所需换乘时间为出站缓冲、验证后的地面接驳时间和进站缓冲之和；路线不可验证时连接不得进入正常计划。
+- 第一阶段不新增 API segment 类型；前端可继续消费相邻两个 `RailSegment`。若后续需要单独展示站内等待，再通过新 schema version 增加专用连接段，不与本次紧急修复绑定。
+
+#### 4. 正确表达无连接原因
+
+- Provider 返回空、缺票价、超时、限流继续使用对应 Provider 错误码。
+- 两段 Provider 事实均有效但没有满足安全门槛的连接，使用 `RAIL_CONNECTION_NOT_FOUND`，不得伪装为 `RAIL_PROVIDER_MISSING_PRICE`。
+- 日志至少记录 `first_offer_count`、`second_offer_count`、`pairs_examined`、`rejected_departed_before_arrival`、`rejected_transfer_buffer`、`rejected_max_wait`、`rejected_cross_station_route`、`valid_connection_count` 和 `selected_connection_count`。
+- 日志不得记录完整用户输入、凭证或 API key；车次与站点只用于任务级诊断。
+
+### 数据流
+
+```mermaid
+flowchart TD
+    A["Provider 返回完整第一程/第二程 offers"] --> B["按时间排序、去重并建立第二程发车索引"]
+    B --> C["按第一程到达时间二分定位可行第二程"]
+    C --> D{"同站换乘?"}
+    D -->|是| E["应用同站安全时间门槛"]
+    D -->|否| F["验证跨站地图路线与动态换乘时间"]
+    E --> G["形成有效 RailConnection 候选"]
+    F --> G
+    G --> H["硬约束、安全、时间、费用与风险排序"]
+    H --> I["验证后限流并构造 TravelPlan"]
+    I --> J["候选过滤与 Recommendation"]
+```
+
+### 影响范围与文件修改范围
+
+- 新增：`backend/app/services/rail_connection_matcher.py`。
+- 修改：`backend/app/services/planner.py`、必要的铁路连接内部模型与 `.env.example` 配置。
+- 测试：`backend/app/tests/test_rail_connection_matcher.py`、`backend/app/tests/test_planning_rules.py`、`backend/app/tests/test_rail_providers.py`，并由现有 API 全量回归覆盖外部响应。
+- 文档：`docs/ARCHITECTURE.md`、`docs/Dev/task_from_arc_for_dev_20260714.md`、`docs/Test/task_from_arc_for_test_20260714.md`。
+- 第一阶段不修改 API Contract、schema version、数据库结构和前端类型；无需数据库迁移。
+
+### 风险与控制
+
+- 候选数量增长：使用二分查找、最大等待窗口、每首段/每中转站验证后上限和任务级查询缓存控制，不在事实进入前截断。
+- 过短换乘被推荐：45 分钟先作为可配置安全下限；跨站换乘必须使用更严格的动态门槛。
+- 过长等待污染推荐：使用最大等待时间和总耗时排序；隔夜连接第一阶段明确排除。
+- 同名站误判同站：只信任规范化 station id/code；无法确认时按跨站处理并要求验证。
+- 状态语义回归：增加独立连接失败原因，合同外部结构保持 V1.17 不变。
+
+### 回滚方式
+
+- 使用 `TRAVEL_RAIL_CONNECTION_MATCHER_V2` 功能开关控制新 matcher；紧急回滚时恢复旧匹配路径。
+- 新模块只改变候选生成，不迁移数据库、不改变已持久化响应结构，可独立回滚。
+- 回滚后必须保留新增诊断日志，禁止通过伪造车次、规则估算或放宽安全门槛掩盖无连接问题。

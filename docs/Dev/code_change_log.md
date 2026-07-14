@@ -191,3 +191,21 @@
   - `npm run typecheck`：通过。
   - `npm run build`：通过，Expo iOS / Android / Web 导出成功。
   - 本地浏览器规划状态：`当前进度` 不再渲染，地图和四阶段状态正常存在。
+
+## 2026-07-14 12:05:53 +08:00
+
+- 任务：ARC-20260714-01 修复铁路中转候选提前截断与同站接驳误建模。
+- 代码提交：`bdff0d67300a04676da2ba3ac45131575850d4fb`。
+- 修改内容：
+  - 新增 `rail_connection_matcher.py`，对 Provider 完整 offer 集按稳定事实键去重、排序并建立第二程发车索引，使用二分查找和最大等待窗口生成验证后候选。
+  - `RailOffer` 保留 12306 起终站电报码；同站连接只按稳定 station code 判定，不调用地图 Provider，也不生成虚构的站间接驳段。
+  - 跨站或站点身份不明确时必须取得真实地图接驳段，换乘门槛取 45 分钟安全下限与“出站缓冲 + 地面接驳 + 进站缓冲”的较大值。
+  - 规划器先汇总所有中转站候选，再按安全、硬约束、到达时间、总耗时、等待、费用、风险和稳定键排序，最后应用 `max_plans`。
+  - 增加 `RAIL_CONNECTION_NOT_FOUND` 独立错误语义、逐中转路线诊断指标和安全默认配置；功能开关关闭时回退到旧的前 2×2 offer 窗口。
+  - 新增完整候选、G502 + D6649、44/45 分钟、360/361 分钟、同站/跨站、去重、配置回退和错误语义回归测试。
+- 验证：
+  - 标准 TEST 配置下 `\.venv\Scripts\python -m pytest backend\app\tests -q`：通过，187 passed。
+  - `\.venv\Scripts\python scripts\export_schemas.py`：通过，`schemas/` 无差异。
+  - `\.venv\Scripts\python scripts\check_real_api_config.py --tier public`：通过。
+  - `\.venv\Scripts\python scripts\live_smoke_real_apis.py --tier public`：通过，地图、地点解析、航班动态、天气和 redirect-only Provider 全部成功。
+  - `git diff --check`：通过。

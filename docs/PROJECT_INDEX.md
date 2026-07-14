@@ -23,6 +23,7 @@
 - `backend/app/main.py`：后端应用、middleware、异常处理与全部路由注册入口。
 - `backend/app/models/`：Pydantic schema/model。
 - `backend/app/services/`：规划、解析、推荐、重算、结果集偏好传播、存储、可观测性等业务服务层；结果集席别传播位于 `result_set_preferences.py`。
+- `backend/app/services/rail_connection_matcher.py`：铁路两段完整 offer 的确定性连接匹配、同站身份校验、跨站动态换乘门槛与诊断指标。
 - `backend/app/services/constraints/`：V1.16 分类型约束计算、安全门禁、Pareto 筛选和最近备选选择。
 - `backend/app/data_sources/`：地图、地理编码、铁路、航班、天气、LLM、跳转和数据源配置适配器。
 - `backend/app/core/`：请求上下文、安全策略、日志配置。
