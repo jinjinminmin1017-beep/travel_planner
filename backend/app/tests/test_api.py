@@ -1,3 +1,5 @@
+from copy import deepcopy
+
 from fastapi.testclient import TestClient
 
 from app.main import app
@@ -7,6 +9,7 @@ from app.data_sources.rail_providers import RailProviderSearchResult
 from app.models.schemas import LLMRecommendationOutput, RecommendationSlot, RecommendationSlotStatus, RecommendationType
 from app.core import security
 from app.services import store
+from app.services.cost_comfort_risk_engine import refresh_plan_cost_and_quality
 
 client = TestClient(app)
 
@@ -749,7 +752,7 @@ def test_recalculate_rail_seat_updates_cost_comfort_and_stored_snapshot():
     assert stored.json()["plan"]["cost_breakdown"]["total_cost"] == updated_plan["cost_breakdown"]["total_cost"]
 
 
-def test_recalculate_result_set_propagates_canonical_seat_and_persists_full_snapshot(monkeypatch):
+def test_recalculate_result_set_syncs_canonical_seat_only_to_matching_train(monkeypatch):
     class _ValidLLMProvider:
         source_id = "real_llm"
         model_name = "test-result-set-model"
@@ -770,13 +773,44 @@ def test_recalculate_result_set_propagates_canonical_seat_and_persists_full_snap
     plan_response = client.post("/api/travel/plan", json={"raw_user_input": RAW_INPUT}).json()
     target_plan = _first_dynamic_rail_plan(plan_response["plans"])
     target_segment = next(segment for segment in target_plan["segments"] if segment["segment_type"] == "RAIL")
-    unsupported_plan = next(
-        plan for plan in store.PLANS.values()
-        if plan.plan_id != target_plan["plan_id"] and any(segment.segment_type == "RAIL" for segment in plan.segments)
-    )
-    for segment in unsupported_plan.segments:
-        if segment.segment_type == "RAIL":
-            segment.seat_options = [option for option in segment.seat_options if option.seat_type != "一等座"]
+    rail_plans = [
+        store.PLANS[plan["plan_id"]]
+        for plan in plan_response["plans"]
+        if any(segment["segment_type"] == "RAIL" for segment in plan["segments"])
+    ]
+    assert len(rail_plans) >= 4
+    target_plan_model, same_train_plan, unsupported_plan, different_train_plan = rail_plans[:4]
+
+    same_train_segment = next(segment for segment in same_train_plan.segments if segment.segment_type == "RAIL")
+    same_train_segment.train_number = " g900 "
+    for option in same_train_segment.seat_options:
+        previous_option_id = option.option_id
+        option.option_id = f"{option.option_id}_same_train"
+        if same_train_segment.selected_seat_option_id == previous_option_id:
+            same_train_segment.selected_seat_option_id = option.option_id
+
+    unsupported_segment = next(segment for segment in unsupported_plan.segments if segment.segment_type == "RAIL")
+    unsupported_segment.seat_options = [option for option in unsupported_segment.seat_options if option.seat_type != "一等座"]
+
+    different_train_segment = next(segment for segment in different_train_plan.segments if segment.segment_type == "RAIL")
+    different_train_segment.train_number = "D100"
+    different_train_selected_before = different_train_segment.selected_seat_option_id
+    different_train_cost_before = different_train_plan.cost_breakdown.total_cost
+    different_train_eligibility_before = different_train_plan.recommendation_eligibility
+
+    other_train_segment = deepcopy(next(segment for segment in target_plan_model.segments if segment.segment_type == "RAIL"))
+    other_train_segment.segment_id = "seg_other_train_k597"
+    other_train_segment.train_number = "K597"
+    other_train_segment.seat_options = [
+        other_train_segment.seat_options[0].model_copy(update={"option_id": "seat_hard_sleeper", "seat_type": "硬卧"}),
+        other_train_segment.seat_options[1].model_copy(update={"option_id": "seat_hard", "seat_type": "硬座"}),
+    ]
+    other_train_segment.selected_seat_option_id = "seat_hard_sleeper"
+    target_plan_model.segments.append(other_train_segment)
+    refresh_plan_cost_and_quality(target_plan_model)
+
+    preferred_seat_before = plan_response["travel_request"]["preferred_rail_seat"]
+    preference_source_before = plan_response["travel_request"]["preference_source"]
 
     recalc = client.post(
         "/api/travel/recalculate",
@@ -801,10 +835,13 @@ def test_recalculate_result_set_propagates_canonical_seat_and_persists_full_snap
     assert recalc.status_code == 200
     body = recalc.json()
     updated = body["updated_response"]
-    assert updated["travel_request"]["preferred_rail_seat"] == "一等座"
-    assert updated["travel_request"]["preference_source"] == "USER_EXPLICIT"
+    assert updated["travel_request"]["preferred_rail_seat"] == preferred_seat_before
+    assert updated["travel_request"]["preference_source"] == preference_source_before
     assert body["preference_application"]["canonical_value"] == "一等座"
-    assert unsupported_plan.plan_id in body["preference_application"]["unsupported_plan_ids"]
+    assert set(body["preference_application"]["applied_plan_ids"]) == {target_plan_model.plan_id, same_train_plan.plan_id}
+    assert body["preference_application"]["unsupported_plan_ids"] == [unsupported_plan.plan_id]
+    assert "G900 的一等座已同步到2个方案" in body["preference_application"]["message"]
+    assert body["change_summary"]["changed_fields"] == ["plans", "recommendation_result"]
     assert body["recommendation_result"] == updated["recommendation_result"]
     available_ids = {
         slot["plan_id"]
@@ -812,23 +849,89 @@ def test_recalculate_result_set_propagates_canonical_seat_and_persists_full_snap
         if slot["status"] == "AVAILABLE"
     }
     assert unsupported_plan.plan_id not in available_ids
-    for plan in updated["plans"]:
-        rail_segments = [segment for segment in plan["segments"] if segment["segment_type"] == "RAIL"]
-        if not rail_segments:
-            continue
-        if plan["plan_id"] == unsupported_plan.plan_id:
-            assert plan["recommendation_eligibility"] == "NOT_RECOMMENDED"
-            assert plan["block_reason_code"] == "RAIL_SEAT_UNSUPPORTED"
-            continue
-        for segment in rail_segments:
-            selected = next(option for option in segment["seat_options"] if option["option_id"] == segment["selected_seat_option_id"])
-            assert selected["seat_type"] == "一等座"
-        expected_total = sum(item["amount"]["amount_minor"] for item in plan["cost_breakdown"]["items"])
-        assert plan["cost_breakdown"]["total_cost"]["amount_minor"] == expected_total
+
+    updated_by_id = {plan["plan_id"]: plan for plan in updated["plans"]}
+    updated_target = updated_by_id[target_plan_model.plan_id]
+    updated_target_rail = {segment["train_number"]: segment for segment in updated_target["segments"] if segment["segment_type"] == "RAIL"}
+    assert updated_target_rail["G900"]["selected_seat_option_id"] == "seat_first"
+    assert updated_target_rail["K597"]["selected_seat_option_id"] == "seat_hard_sleeper"
+
+    updated_same_train = updated_by_id[same_train_plan.plan_id]
+    updated_same_train_segment = next(segment for segment in updated_same_train["segments"] if segment["segment_type"] == "RAIL")
+    assert updated_same_train_segment["selected_seat_option_id"] == "seat_first_same_train"
+
+    updated_unsupported = updated_by_id[unsupported_plan.plan_id]
+    assert updated_unsupported["recommendation_eligibility"] == "NOT_RECOMMENDED"
+    assert updated_unsupported["block_reason_code"] == "RAIL_SEAT_UNSUPPORTED"
+    assert "G900" in updated_unsupported["block_reason_message"]
+
+    updated_different_train = updated_by_id[different_train_plan.plan_id]
+    updated_different_segment = next(segment for segment in updated_different_train["segments"] if segment["segment_type"] == "RAIL")
+    assert updated_different_segment["selected_seat_option_id"] == different_train_selected_before
+    assert updated_different_train["cost_breakdown"]["total_cost"] == different_train_cost_before.model_dump()
+    assert updated_different_train["recommendation_eligibility"] == different_train_eligibility_before
 
     stored = client.get(f"/api/travel/plans/{target_plan['plan_id']}")
     assert stored.status_code == 200
     assert stored.json()["plan"] == body["plan"]
+
+
+def test_recalculate_result_set_does_not_require_other_train_to_offer_selected_seat():
+    plan_response = client.post("/api/travel/plan", json={"raw_user_input": RAW_INPUT}).json()
+    target_plan = _first_dynamic_rail_plan(plan_response["plans"])
+    target_plan_model = store.PLANS[target_plan["plan_id"]]
+    g_train_segment = next(segment for segment in target_plan_model.segments if segment.segment_type == "RAIL")
+    g_train_selected_before = g_train_segment.selected_seat_option_id
+
+    k597_segment = deepcopy(g_train_segment)
+    k597_segment.segment_id = "seg_k597_regression"
+    k597_segment.train_number = "K597"
+    k597_segment.seat_options = [
+        k597_segment.seat_options[0].model_copy(update={"option_id": "seat_k597_sleeper", "seat_type": "硬卧"}),
+        k597_segment.seat_options[1].model_copy(update={"option_id": "seat_k597_hard", "seat_type": "硬座"}),
+    ]
+    k597_segment.selected_seat_option_id = "seat_k597_sleeper"
+    target_plan_model.segments.append(k597_segment)
+    refresh_plan_cost_and_quality(target_plan_model)
+    target_plan_model.recommendation_eligibility = "NOT_RECOMMENDED"
+    target_plan_model.can_be_selected_by_llm = False
+    target_plan_model.block_reason_code = "RAIL_SEAT_UNSUPPORTED"
+    target_plan_model.block_reason_message = "旧逻辑错误地要求其他车次也提供硬座。"
+
+    recalc = client.post(
+        "/api/travel/recalculate",
+        json={
+            "schema_version": "1.17",
+            "request_id": "req_train_specific_regression",
+            "idempotency_key": "idem_train_specific_regression",
+            "plan_id": target_plan_model.plan_id,
+            "change_type": "SEAT_TYPE",
+            "target_segment_id": k597_segment.segment_id,
+            "selected_option": {
+                "option_type": "SEAT",
+                "option_id": "seat_k597_hard",
+                "option_value": "硬座",
+                "source_option_version": "provider_test_v1",
+            },
+            "application_scope": "RESULT_SET",
+            "recalculate_scope": "FULL_REEVALUATION",
+        },
+    )
+
+    assert recalc.status_code == 200
+    body = recalc.json()
+    assert body["preference_application"]["applied_plan_ids"] == [target_plan_model.plan_id]
+    assert body["preference_application"]["unsupported_plan_ids"] == []
+    assert "K597 的硬座已同步到1个方案" in body["change_summary"]["message"]
+    updated_segments = {
+        segment["train_number"]: segment
+        for segment in body["plan"]["segments"]
+        if segment["segment_type"] == "RAIL"
+    }
+    assert updated_segments["G900"]["selected_seat_option_id"] == g_train_selected_before
+    assert updated_segments["K597"]["selected_seat_option_id"] == "seat_k597_hard"
+    assert body["plan"]["recommendation_eligibility"] == "ELIGIBLE"
+    assert body["plan"]["block_reason_code"] is None
 
 
 def test_recalculate_local_transfer_consistency_on_dynamic_rail_plan():

@@ -1977,7 +1977,7 @@ def recalculate_plan(existing: TravelPlan, request: RecalculateRequest, ctx: Req
                 cost_delta=money_delta(updated_plan.cost_breakdown.total_cost.amount_minor - existing.cost_breakdown.total_cost.amount_minor),
                 duration_delta_minutes=updated_plan.total_duration_minutes - existing.total_duration_minutes,
                 comfort_delta=round(updated_plan.comfort_score.total_score - existing.comfort_score.total_score, 2),
-                changed_fields=["travel_request.preferred_rail_seat", "plans", "recommendation_result"],
+                changed_fields=["plans", "recommendation_result"],
                 message=preference_application.message,
             ),
             updated_response=updated_response,

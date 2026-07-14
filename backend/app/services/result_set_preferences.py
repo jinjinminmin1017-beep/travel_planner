@@ -58,38 +58,48 @@ def apply_rail_seat_to_result_set(
         raise ValueError("selected option_id is not available for target segment")
 
     canonical_value = normalize_seat_type(selected_target_option.seat_type)
+    target_train_number = normalize_train_number(target_segment.train_number)
+    if not target_train_number:
+        raise ValueError("target rail segment does not have a valid train_number")
     applied_plan_ids: list[str] = []
     unsupported_plan_ids: list[str] = []
 
     for plan in snapshot.plans:
-        rail_segments = [segment for segment in plan.segments if isinstance(segment, RailSegment)]
-        if not rail_segments:
+        matching_segments = [
+            segment
+            for segment in plan.segments
+            if isinstance(segment, RailSegment) and normalize_train_number(segment.train_number) == target_train_number
+        ]
+        if not matching_segments:
             continue
         matches = [
             next((option for option in segment.seat_options if normalize_seat_type(option.seat_type) == canonical_value), None)
-            for segment in rail_segments
+            for segment in matching_segments
         ]
         if any(option is None for option in matches):
             plan.recommendation_eligibility = RecommendationEligibility.NOT_RECOMMENDED
             plan.can_be_selected_by_llm = False
             plan.block_reason_code = "RAIL_SEAT_UNSUPPORTED"
-            plan.block_reason_message = f"该方案并非所有铁路段都提供{canonical_value}，已退出当前推荐。"
+            plan.block_reason_message = f"该方案中的{target_segment.train_number}不提供{canonical_value}，已退出当前推荐。"
             unsupported_plan_ids.append(plan.plan_id)
             continue
-        _apply_plan_seat_options(plan, rail_segments, matches)
+        if plan.block_reason_code == "RAIL_SEAT_UNSUPPORTED":
+            plan.recommendation_eligibility = RecommendationEligibility.ELIGIBLE
+            plan.can_be_selected_by_llm = True
+            plan.block_reason_code = None
+            plan.block_reason_message = None
+        _apply_plan_seat_options(plan, matching_segments, matches)
         applied_plan_ids.append(plan.plan_id)
 
-    snapshot.travel_request.preferred_rail_seat = canonical_value
-    snapshot.travel_request.preference_source = "USER_EXPLICIT"
     candidate_pool = generate_candidate_plan_pool(snapshot.plans, snapshot.travel_request, snapshot.missing_plan_explanations)
     snapshot.recommendation_result = _refresh_recommendations(snapshot, candidate_pool.llm_candidate_plans, ctx)
     snapshot.generated_at = now_timepoint()
     snapshot = TravelPlanResponse.model_validate(snapshot.model_dump())
 
     updated_target = next(plan for plan in snapshot.plans if plan.plan_id == target_plan_id)
-    message = f"{canonical_value}已应用到{len(applied_plan_ids)}个方案"
+    message = f"{target_segment.train_number} 的{canonical_value}已同步到{len(applied_plan_ids)}个方案"
     if unsupported_plan_ids:
-        message += f"；{len(unsupported_plan_ids)}个方案不提供该席别，已退出推荐。"
+        message += f"；{len(unsupported_plan_ids)}个同车次方案不提供该席别，已退出推荐。"
     else:
         message += "。"
     application = PreferenceApplication(
@@ -104,6 +114,10 @@ def apply_rail_seat_to_result_set(
 def normalize_seat_type(value: str) -> str:
     normalized = "".join(value.strip().split()).replace("席", "座")
     return _SEAT_ALIASES.get(normalized, normalized)
+
+
+def normalize_train_number(value: str) -> str:
+    return "".join(value.strip().upper().split())
 
 
 def _apply_plan_seat_options(plan: TravelPlan, segments: list[RailSegment], matches: list[SeatOption | None]) -> None:
