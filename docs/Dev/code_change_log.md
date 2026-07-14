@@ -209,3 +209,18 @@
   - `\.venv\Scripts\python scripts\check_real_api_config.py --tier public`：通过。
   - `\.venv\Scripts\python scripts\live_smoke_real_apis.py --tier public`：通过，地图、地点解析、航班动态、天气和 redirect-only Provider 全部成功。
   - `git diff --check`：通过。
+
+## 2026-07-14 22:06:23 +08:00
+
+- 任务：ARC-20260714-02 修复高德公交空费用导致异步规划崩溃。
+- 代码提交：`5da3564859b66e1d33c7f0ffab4dbc878bb52f81`。
+- 修改内容：
+  - 地图费用解析改用 `Decimal` 完成元到分转换；`None`、空字符串和空数组保留为未知费用，禁止回填 0 元或模拟金额。
+  - 非空数组、对象、布尔值、负数、非有限值和非法字符串统一转换为 `MAP_ROUTE_RESPONSE_INVALID`，公交费用与出租车费用复用同一解析规则。
+  - 地图 Provider 调度边界隔离 `ValueError`、`TypeError` 和 `KeyError`，记录不含原始响应、密钥和 URL 的结构化日志，并继续兼容的后备 Provider。
+  - 增加费用输入矩阵、空公交费用事实保留、日志脱敏、后备 Provider、接驳方式隔离和异步规划终态回归测试。
+- 验证：
+  - 标准 TEST 配置下 `\.venv\Scripts\python -m pytest backend\app\tests\test_map_providers.py backend\app\tests\test_local_transfer_engine.py backend\app\tests\test_api.py -q`：通过，77 passed。
+  - 标准 TEST 配置下 `\.venv\Scripts\python -m pytest backend\app\tests -q`：通过，207 passed。
+  - `\.venv\Scripts\python scripts\export_schemas.py`：通过，`schemas/` 无差异。
+  - `git diff --check`：通过。

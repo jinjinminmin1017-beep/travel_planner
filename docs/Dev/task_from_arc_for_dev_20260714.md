@@ -133,3 +133,98 @@ TRAVEL_RAIL_MAX_TRANSFER_WAIT_MINUTES=360
 - 使用 `TRAVEL_RAIL_CONNECTION_MATCHER_V2` 灰度；关闭后回到旧 matcher，不影响数据结构。
 - 新模块不做数据库迁移，回滚不需要重写历史响应。
 - 回滚时保留新增诊断日志；禁止以降低安全换乘门槛或恢复模拟数据作为回滚手段。
+
+# ARC-20260714-02 修复高德公交空费用导致异步规划崩溃
+
+来源：2026-07-14 真实规划失败诊断。任务 `job_65889cd392e0`，请求 `req_0e9d3df67a7d`。
+
+完成状态：已完成。完成时间：2026-07-14 22:06:23 +08:00。代码提交：`5da3564859b66e1d33c7f0ffab4dbc878bb52f81`。
+
+实现摘要：高德公交/地铁空费用现在保留为 `estimated_cost=None`，距离、时长和步行距离事实不丢失；非法金额结构统一转换为 `MAP_ROUTE_RESPONSE_INVALID`，地图 Provider 边界会隔离字段类型异常并继续后备 Provider 或其他接驳方式。公共 API、Schema V1.17、数据库和前端类型均未改动。
+
+## 背景与证据
+
+- 高德公交/地铁路线接口 `/v3/direction/transit/integrated` 返回 `status=1`，并返回 5 条 `transits`，说明路线查询本身成功。
+- 第一条路线的原始费用字段为 `cost: []`，表示该路线没有可直接消费的费用值。
+- `AmapRouteProvider._parse_payload()` 将 `first.get("cost")` 交给 `_yuan_to_money()`；当前实现直接执行 `float(value)`，对空数组触发 `TypeError`。
+- `estimate_route_with_enabled_provider_result()` 未捕获 `TypeError`，异常越过地图 Provider 和本地接驳边界，最终由异步任务总兜底转换为通用 `planning_status=FAILED`。
+- 本次铁路中转 Provider 已返回可用事实，地点坐标和出租车路线也已解析成功；失败不是地址歧义、12306 全量无结果或前端轮询超时。
+- 当前 `test_map_providers.py` 只覆盖字符串费用 `cost: "5"`，没有覆盖空数组、缺失值或异常结构。
+
+## 开发目标
+
+- 兼容高德真实响应中的空费用字段，费用未知不得阻断已验证的距离、时长和路线。
+- 金额转换禁止使用 `float`，统一使用 `Decimal` 进行元到分转换。
+- 单个接驳方式响应结构异常时只淘汰该方式或将可选费用标为未知，不得击穿整个规划任务。
+- 保持 API schema V1.17、数据库结构和前端类型不变。
+
+## 开发任务 A：费用字段规范化
+
+1. 修改 `backend/app/data_sources/map_providers.py` 的 `_yuan_to_money()`，建立明确输入规则：
+   - `None`、空字符串、空数组返回 `None`，语义为“费用未知”。
+   - 合法整数、数字字符串和可安全转换的十进制值使用 `Decimal(str(value))` 转换为分。
+   - 禁止继续使用 `float` 处理金额。
+   - 非空数组、对象、布尔值、非有限值、负数或非法字符串不得任意取值或默认为 0；转换为结构化 Provider 响应错误。
+2. 费用未知时保留 Provider 返回且已通过校验的距离、时长和步行距离。
+3. 不得把 `cost=[]` 显示为 0 元，不得生成模拟费用或规则估算费用。
+4. 驾车 `taxi_cost` 与公交 `transits[].cost` 复用同一安全金额解析规则。
+
+## 开发任务 B：Provider 故障隔离
+
+1. 将响应字段类型错误统一包装为 `MapProviderError`，错误码使用 `MAP_ROUTE_RESPONSE_INVALID`。
+2. `estimate_route_with_enabled_provider_result()` 对适配器边界增加必要的 `TypeError`、`KeyError` 防御，转换为 Provider 失败结果后继续尝试兼容的备用 Provider；不得让异常直接退出规划器。
+3. 某种接驳方式失败时，`build_local_transfer_options()` 继续处理其他方式：
+   - 出租车成功、公交费用未知时，至少保留出租车；公交距离和时长有效时可保留公交并将费用置空。
+   - 只有所有允许方式均无有效路线时，才返回 `MAP_TRANSFER_UNAVAILABLE` 并淘汰该门到门候选。
+4. 异步任务总兜底继续保留，但正常 Provider 数据异常必须在 Provider 层转成结构化失败，不能只留下 `missing_components=["travel_plan"]`。
+5. 日志只记录 Provider、字段路径、实际类型和错误码；不得记录完整原始响应、API key 或带密钥的请求 URL。
+
+## 开发任务 C：测试与回归
+
+1. 在 `backend/app/tests/test_map_providers.py` 增加费用解析矩阵：
+   - `"5"`、`5`、`"5.25"` 正确转换为分。
+   - `None`、`""`、`[]` 返回 `None`。
+   - `{}`、非空数组、布尔值、负数、非数字字符串返回 `MAP_ROUTE_RESPONSE_INVALID`，且不会抛出未捕获异常。
+2. 增加高德公交成功响应 `transits[0].cost=[]` 回归用例，断言距离、时长仍被保留。
+3. 在 `backend/app/tests/test_local_transfer_engine.py` 增加单方式异常隔离：一个地图方式响应无效时，其他已验证方式仍可形成 `LocalTransferSegment`。
+4. 增加异步规划回归：模拟本次空费用响应，轮询终态不得为系统异常 `FAILED`；若仍存在铁路候选，应返回 `COMPLETE`、`PARTIAL` 或基于约束的 `NO_MATCH`。
+5. 现有正常驾车、步行、公交、地图备用 Provider、铁路中转和 API 全量测试不得回归。
+
+## 主要文件范围
+
+- `backend/app/data_sources/map_providers.py`
+- `backend/app/services/local_transfer_engine.py`（仅在需要补充单方式隔离时修改）
+- `backend/app/tests/test_map_providers.py`
+- `backend/app/tests/test_local_transfer_engine.py`
+- `backend/app/tests/test_api.py` 或规划集成测试文件
+
+## 非目标与合同影响
+
+- 不修改 API URL、请求字段、响应字段或 schema version。
+- 不修改数据库结构，不需要迁移。
+- 不修改前端，不新增费用展示字段。
+- 不启用新的地图 Provider，不恢复规则估算接驳。
+- 不把未知费用写成 0，不使用 LLM 推测公交或出租车费用。
+
+## 验收标准
+
+- 高德返回 `status=1`、有效 `transits` 且 `cost=[]` 时，解析过程不抛出 `TypeError`。
+- 空费用被表示为 `estimated_cost=None`，距离、时长和路线来源保持真实 Provider 事实。
+- 单个公交/地铁方式费用或响应结构异常不会终止整个异步规划任务。
+- 非法费用结构生成 `MAP_ROUTE_RESPONSE_INVALID`，日志不包含 API key 和完整响应。
+- 金额转换路径不再使用 `float`，元到分精度测试通过。
+- 本次复现场景不再由 `_yuan_to_money()` 导致通用 `FAILED`。
+
+## 验证命令
+
+- `.\.venv\Scripts\python -m pytest backend/app/tests/test_map_providers.py`
+- `.\.venv\Scripts\python -m pytest backend/app/tests/test_local_transfer_engine.py`
+- `.\.venv\Scripts\python -m pytest backend/app/tests/test_api.py`
+- `.\.venv\Scripts\python -m pytest backend/app/tests`
+- `.\.venv\Scripts\python scripts/export_schemas.py` 后确认 `schemas/` 无非预期 diff
+
+## 风险与回滚
+
+- 将未知费用保留为 `None` 可能使部分计划缺少接驳费用，但比伪造 0 元或终止规划更符合事实边界；推荐和总价逻辑必须沿用现有“可空费用”语义。
+- 扩大异常捕获范围可能隐藏适配器缺陷，因此必须先记录 `MAP_ROUTE_RESPONSE_INVALID`，且只在 Provider 边界捕获明确的字段类型异常。
+- 修复只涉及响应解析，无数据库和公共合同变化；紧急回滚可恢复旧解析器，但应优先通过功能级回退禁用公交费用消费，不能恢复 `float` 金额计算或模拟费用。

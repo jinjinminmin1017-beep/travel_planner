@@ -1,0 +1,7 @@
+## 2026-07-14 真实规划任务因高德公交空费用失败
+
+- 用户提问时间：2026-07-14。
+- 问题描述：异步规划任务 `job_65889cd392e0` 在铁路、地点和出租车事实已成功返回后仍进入通用 `FAILED`；高德公交/地铁响应中的 `transits[0].cost` 为 `[]`。
+- 问题根因：`AmapRouteProvider._parse_payload()` 将空数组交给 `_yuan_to_money()`，旧实现通过 `float(value)` 转换金额并触发未捕获的 `TypeError`；地图 Provider 调度边界未隔离该字段类型异常。
+- 解决方式：金额转换改为严格的 `Decimal` 解析；空费用表达为未知并保留真实距离、时长和步行距离；非法结构返回 `MAP_ROUTE_RESPONSE_INVALID`；Provider 边界捕获字段转换异常并继续后备 Provider，单一接驳方式失败不再中断其他方式或异步规划任务；新增完整回归测试与日志脱敏断言。
+- 问题修改提交：`5da3564859b66e1d33c7f0ffab4dbc878bb52f81`。
