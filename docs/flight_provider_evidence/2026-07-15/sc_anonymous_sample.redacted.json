@@ -1,0 +1,35 @@
+{
+  "source_id": "airline_sc_public_query",
+  "captured_at": "2026-07-15T08:20:48+08:00",
+  "capture_type": "official_browser_ui",
+  "request": {
+    "entry_url": "https://flights.sda.cn/flight/lowPrice",
+    "browser_method": "GET",
+    "origin_city": "Jinan",
+    "destination_city": null,
+    "date_range": "within one week",
+    "cookies": "[REDACTED_NOT_CAPTURED]",
+    "dynamic_tokens": "[REDACTED_NOT_CAPTURED]"
+  },
+  "response": {
+    "result_status": "VISIBLE_LOW_PRICE_LIST",
+    "currency": "CNY",
+    "items": [
+      {"origin": "Jinan", "destination": "Sanya", "date": "2026-07-21", "price": 650, "discount": "1.9"},
+      {"origin": "Jinan", "destination": "Nanning", "date": "2026-07-15", "price": 450, "discount": "2.1"},
+      {"origin": "Jinan", "destination": "Nanning", "date": "2026-07-17", "price": 450, "discount": "2.1"},
+      {"origin": "Jinan", "destination": "Nanning", "date": "2026-07-22", "price": 450, "discount": "2.1"},
+      {"origin": "Jinan", "destination": "Sanya", "date": "2026-07-22", "price": 750, "discount": "2.2"},
+      {"origin": "Jinan", "destination": "Chongqing", "date": "2026-07-16", "price": 400, "discount": "2.2"},
+      {"origin": "Jinan", "destination": "Chongqing", "date": "2026-07-18", "price": 400, "discount": "2.2"},
+      {"origin": "Jinan", "destination": "Lanzhou", "date": "2026-07-22", "price": 400, "discount": "2.3"},
+      {"origin": "Jinan", "destination": "Nanning", "date": "2026-07-19", "price": 490, "discount": "2.3"},
+      {"origin": "Jinan", "destination": "Shanghai", "date": "2026-07-21", "price": 340, "discount": "2.4"}
+    ],
+    "cabin_fields_confirmed": false,
+    "availability_fields_confirmed": false,
+    "captcha_observed": false,
+    "rate_limit_observed": false,
+    "notes": "The public low-price page returned visible prices anonymously. Destination filter submission was not confirmed, so only the initial list is evidence."
+  }
+}

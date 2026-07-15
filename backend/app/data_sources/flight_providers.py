@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import html
+import hashlib
 import json
 import logging
 import os
@@ -18,6 +19,11 @@ from uuid import uuid4
 import httpx
 
 from app.data_sources.config_loader import load_data_source_configs, public_airline_allowed_hosts
+from app.data_sources.flight_provider_contracts import (
+    AirlinePublicQueryContract,
+    airline_public_query_contract,
+    public_airline_contract_ready,
+)
 from app.models.schemas import CacheMetadata, DataSourceMetadata, DataSourceType, Money, money, now_timepoint
 
 logger = logging.getLogger("app.flight")
@@ -32,7 +38,6 @@ PUBLIC_AIRLINE_SOURCE_IDS = (
     "airline_cz_public_query",
     "airline_sc_public_query",
 )
-DEFAULT_AIRLINE_PUBLIC_SEARCH_PATH = "/api/flight/search"
 DEFAULT_AIRLINE_PUBLIC_USER_AGENT = "AITravelPlanner/0.1 public-airline-query"
 DEFAULT_FLIGHT_CACHE_TTL_SECONDS = 60
 SHANGHAI_TZ = timezone(timedelta(hours=8))
@@ -180,20 +185,28 @@ class OfficialAirlinePublicQueryProvider:
         user_agent: str | None = None,
         cache_ttl_seconds: int | None = None,
         allowed_hosts: tuple[str, ...] | None = None,
+        contract: AirlinePublicQueryContract | None = None,
     ) -> None:
         self.source_id = source_id
         self.source_name = source_name
         self.allowed_carriers = tuple(code.upper() for code in allowed_carriers)
+        self.contract = contract or airline_public_query_contract(source_id)
         self.allowed_hosts = tuple(host.lower().strip(".") for host in (allowed_hosts or public_airline_allowed_hosts(source_id)))
         self.base_url = (base_url or _source_env(source_id, "BASE_URL") or "").rstrip("/")
-        self.search_path = search_path or _source_env(source_id, "SEARCH_PATH") or DEFAULT_AIRLINE_PUBLIC_SEARCH_PATH
+        self.search_path = search_path or (self.contract.endpoint_path if self.contract else None) or ""
         self.user_agent = user_agent or _source_env(source_id, "USER_AGENT") or DEFAULT_AIRLINE_PUBLIC_USER_AGENT
         self.cache_ttl_seconds = cache_ttl_seconds if cache_ttl_seconds is not None else _public_query_cache_ttl_seconds(source_id)
         self.client = client or httpx.Client(timeout=_provider_timeout_seconds(), follow_redirects=False, headers=self._headers())
 
     def search_offers(self, request: FlightSearchRequest) -> list[FlightOffer]:
+        if self.contract is None:
+            raise FlightProviderError(f"{self.source_id} has no source-specific contract")
+        if self.contract.blocking_reason:
+            raise FlightProviderError(f"{self.source_id} contract blocked: {self.contract.blocking_reason}")
         if not self.base_url:
             raise FlightProviderError(f"{self.source_id} base URL is not configured")
+        if not self.search_path:
+            raise FlightProviderError(f"{self.source_id} search path is not confirmed")
         if not _base_url_matches_allowed_hosts(self.base_url, self.allowed_hosts):
             raise FlightProviderError(f"{self.source_id} base URL is outside the source allowlist")
 
@@ -212,18 +225,19 @@ class OfficialAirlinePublicQueryProvider:
             request.destination_iata,
             request.departure_date.isoformat(),
         )
-        response = self.client.get(
-            endpoint,
-            params={
-                "origin": request.origin_iata,
-                "destination": request.destination_iata,
-                "departureDate": request.departure_date.isoformat(),
-                "adults": request.adults,
-                "currency": request.currency_code,
-                **({"nonStop": str(request.non_stop).lower()} if request.non_stop is not None else {}),
-            },
-            headers=self._headers(),
-        )
+        if self.contract.endpoint_method != "GET":
+            raise FlightProviderError(f"{self.source_id} unsupported confirmed method: {self.contract.endpoint_method}")
+        request_values: dict[str, object] = {
+            "origin_iata": request.origin_iata,
+            "destination_iata": request.destination_iata,
+            "departure_date": request.departure_date.isoformat(),
+            "adults": request.adults,
+            "currency_code": request.currency_code,
+        }
+        if request.non_stop is not None:
+            request_values["non_stop"] = str(request.non_stop).lower()
+        response = self.client.get(endpoint, params=self.contract.request_params(request_values), headers=self._headers())
+        _raise_for_airline_risk_response(response, source_id=self.source_id)
         response.raise_for_status()
         payload = _response_payload(response)
         snapshot_id = save_flight_raw_snapshot(
@@ -307,10 +321,17 @@ def build_enabled_flight_providers(environment: str | None = None) -> list[Fligh
     }
     for source_id in PUBLIC_AIRLINE_SOURCE_IDS:
         config = configs.get(source_id)
-        if not config or not config.enabled or config.license_status != "APPROVED":
+        if not config or not config.enabled or config.license_status != "APPROVED" or not public_airline_contract_ready(source_id):
             continue
         source_name, carriers = source_names[source_id]
-        providers.append(OfficialAirlinePublicQueryProvider(source_id=source_id, source_name=source_name, allowed_carriers=carriers))
+        providers.append(
+            OfficialAirlinePublicQueryProvider(
+                source_id=source_id,
+                source_name=source_name,
+                allowed_carriers=carriers,
+                contract=airline_public_query_contract(source_id),
+            )
+        )
     return providers
 
 
@@ -371,7 +392,14 @@ def save_flight_raw_snapshot(*, source_id: str, request_key: str, payload_text: 
             INSERT INTO flight_raw_snapshots(snapshot_id, source_id, request_key, payload_text, content_type, fetched_at)
             VALUES (?, ?, ?, ?, ?, ?)
             """,
-            (snapshot_id, source_id, request_key, payload_text, content_type, datetime.now(timezone.utc).isoformat()),
+            (
+                snapshot_id,
+                source_id,
+                _request_key_fingerprint(request_key),
+                redact_flight_snapshot(payload_text),
+                content_type,
+                datetime.now(timezone.utc).isoformat(),
+            ),
         )
     return snapshot_id
 
@@ -389,7 +417,14 @@ def save_flight_canonical_offers(*, source_id: str, request_key: str, offers: li
                 INSERT OR REPLACE INTO flight_canonical_offers(offer_id, source_id, request_key, offer_json, indexed_at, expires_at)
                 VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                (offer.offer_id, source_id, request_key, _offer_to_json(offer), indexed_at.isoformat(), expires_at.isoformat()),
+                (
+                    offer.offer_id,
+                    source_id,
+                    _request_key_fingerprint(request_key),
+                    _offer_to_json(offer),
+                    indexed_at.isoformat(),
+                    expires_at.isoformat(),
+                ),
             )
 
 
@@ -617,6 +652,75 @@ def _response_text(response: Any) -> str:
         return json.dumps(payload, ensure_ascii=False)
     except (ValueError, AttributeError):
         return ""
+
+
+_SENSITIVE_SNAPSHOT_KEYS = re.compile(
+    r"(?:authorization|cookie|set-cookie|token|access[_-]?token|refresh[_-]?token|session|sessionid|csrf|signature|sign|enc|api[_-]?key)",
+    flags=re.IGNORECASE,
+)
+_CHALLENGE_MARKERS = (
+    "captcha",
+    "geetest",
+    "cf-chl-",
+    "hcaptcha",
+    "recaptcha",
+    "\u9a8c\u8bc1\u7801",
+    "\u4eba\u673a\u9a8c\u8bc1",
+)
+
+
+def redact_flight_snapshot(payload_text: str) -> str:
+    """Remove credentials and dynamic session material before persistence."""
+
+    try:
+        payload = json.loads(payload_text)
+    except (TypeError, ValueError):
+        payload = None
+    if payload is not None:
+        return json.dumps(_redact_snapshot_value(payload), ensure_ascii=False, separators=(",", ":"))
+
+    redacted = payload_text
+    redacted = re.sub(r"(?i)(authorization\s*[:=]\s*bearer\s+)[^\s\"'<>]+", r"\1[REDACTED]", redacted)
+    redacted = re.sub(r"(?i)((?:set-)?cookie\s*[:=]\s*)[^\r\n<]+", r"\1[REDACTED]", redacted)
+    redacted = re.sub(
+        r"(?i)([?&](?:token|access_token|refresh_token|session|sessionid|csrf|signature|sign|enc|api_key)=)[^&#\s\"'<>]+",
+        r"\1[REDACTED]",
+        redacted,
+    )
+    redacted = re.sub(
+        r"(?i)([\"'](?:token|access_token|refresh_token|session|sessionid|csrf|signature|sign|enc|api_key)[\"']\s*:\s*[\"'])[^\"']*",
+        r"\1[REDACTED]",
+        redacted,
+    )
+    return redacted
+
+
+def _redact_snapshot_value(value: Any, key: str | None = None) -> Any:
+    if key and _SENSITIVE_SNAPSHOT_KEYS.fullmatch(key):
+        return "[REDACTED]"
+    if isinstance(value, dict):
+        return {str(item_key): _redact_snapshot_value(item_value, str(item_key)) for item_key, item_value in value.items()}
+    if isinstance(value, list):
+        return [_redact_snapshot_value(item) for item in value]
+    if isinstance(value, str):
+        return redact_flight_snapshot(value) if re.search(r"https?://|authorization|cookie", value, flags=re.IGNORECASE) else value
+    return value
+
+
+def _request_key_fingerprint(request_key: str) -> str:
+    return f"sha256:{hashlib.sha256(request_key.encode('utf-8')).hexdigest()[:24]}"
+
+
+def _raise_for_airline_risk_response(response: Any, *, source_id: str) -> None:
+    status_code = getattr(response, "status_code", None)
+    if status_code == 429:
+        retry_after = str(getattr(response, "headers", {}).get("retry-after", "")).strip()
+        suffix = f"; retry-after={retry_after}" if retry_after else ""
+        raise FlightProviderError(f"{source_id} rate limited (HTTP 429){suffix}")
+    lowered = _response_text(response).lower()
+    marker = next((item for item in _CHALLENGE_MARKERS if item in lowered), None)
+    if marker:
+        raise FlightProviderError(f"{source_id} anti-bot challenge detected; automated bypass is forbidden")
 
 
 def _source_env(source_id: str, suffix: str) -> str | None:

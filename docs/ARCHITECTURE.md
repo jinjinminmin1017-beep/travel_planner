@@ -38,7 +38,7 @@
   - 地图路线：`map_providers.py`。
   - 地理编码：`geocoding_providers.py`。
   - 铁路：`rail_providers.py`。
-  - 航班：`flight_providers.py`。
+  - 航班：`flight_providers.py`；MU/CZ/SC 的执行前置契约在 `flight_provider_contracts.py`，禁止以共享猜测路径或浏览器可访问性代替独立接口与条款审批。
   - 天气：`weather_providers.py`。
   - LLM：`llm_providers.py`。
   - 跳转：`redirect_providers.py`。

@@ -16,6 +16,7 @@ BACKEND = ROOT / "backend"
 sys.path.insert(0, str(BACKEND))
 
 from app.data_sources.config_loader import load_data_source_configs, required_secret_envs, runtime_statuses  # noqa: E402
+from app.data_sources.flight_provider_contracts import airline_public_query_contract  # noqa: E402
 from app.models.schemas import DataSourceConfig  # noqa: E402
 
 REQUIRED_FOR_FULL_LIVE_PLANNING = {
@@ -139,6 +140,10 @@ def validate_secret_tier(selected_sources: list[str]) -> list[str]:
                 failures.append(f"{source_id}: 状态不是 OK（{reason}），无法用于{purpose}")
                 continue
             if source_id in SECRET_TIER_SOURCES["flight"]:
+                contract = airline_public_query_contract(source_id)
+                if contract is None or contract.blocking_reason:
+                    reason = contract.blocking_reason if contract else "missing contract"
+                    failures.append(f"{source_id}: source-specific executable contract is not ready ({reason})")
                 base_url = (os.getenv(_env_key(source_id, "BASE_URL")) or "").rstrip("/")
                 if not base_url:
                     failures.append(f"{source_id}: 缺少 {_env_key(source_id, 'BASE_URL')}，无法执行官方公开前端采集")

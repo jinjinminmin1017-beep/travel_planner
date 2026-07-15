@@ -1,0 +1,24 @@
+{
+  "source_id": "airline_mu_public_query",
+  "captured_at": "2026-07-15T08:20:48+08:00",
+  "capture_type": "official_browser_ui",
+  "request": {
+    "entry_url": "https://www.ceair.com/zh/cny/home",
+    "ui_action": "submit anonymous one-way search",
+    "network_method": "UNCONFIRMED",
+    "origin": "Shanghai/SHA",
+    "destination": "Beijing/PEK",
+    "departure_date": "2026-07-16",
+    "passengers": {"adults": 1},
+    "cookies": "[REDACTED_NOT_CAPTURED]",
+    "dynamic_tokens": "[REDACTED_NOT_CAPTURED]"
+  },
+  "response": {
+    "result_status": "FORM_REACHABLE_SUBMIT_NO_RESULT",
+    "final_url": "https://www.ceair.com/zh/cny/home",
+    "visible_result_fields": [],
+    "captcha_observed": false,
+    "rate_limit_observed": false,
+    "notes": "Cookie consent was accepted. Search submission did not navigate or show a result/error, so endpoint, price, cabin and availability contracts remain unconfirmed."
+  }
+}

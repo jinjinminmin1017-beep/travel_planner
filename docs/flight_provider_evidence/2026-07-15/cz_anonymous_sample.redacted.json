@@ -1,0 +1,36 @@
+{
+  "source_id": "airline_cz_public_query",
+  "captured_at": "2026-07-15T08:20:48+08:00",
+  "capture_type": "official_browser_ui",
+  "request": {
+    "entry_url": "https://www.csair.com/wa/zh/",
+    "visible_result_url": "https://oversea.csair.com/tk/wa/zh/book/shop?enc=[REDACTED]",
+    "browser_link_method": "GET",
+    "origin": "Tashkent/TAS",
+    "destination": "Shanghai/SHA",
+    "departure_date": "2026-07-20",
+    "return_date": "2026-07-25",
+    "passengers": {"adults": 1},
+    "channel": "HTHJP",
+    "cookies": "[REDACTED_NOT_CAPTURED]",
+    "dynamic_tokens": {"enc": "[REDACTED]"}
+  },
+  "response": {
+    "result_status": "VISIBLE_CALENDAR_LOWEST_PRICE",
+    "currency": "USD",
+    "calendar_lowest_prices": [
+      {"date": "2026-07-17", "amount": 563.70},
+      {"date": "2026-07-18", "amount": 563.70},
+      {"date": "2026-07-19", "amount": 563.70},
+      {"date": "2026-07-20", "amount": 433.70},
+      {"date": "2026-07-21", "amount": 534.70},
+      {"date": "2026-07-22", "amount": 461.70},
+      {"date": "2026-07-23", "amount": 461.70}
+    ],
+    "cabin_fields_confirmed": false,
+    "availability_fields_confirmed": false,
+    "captcha_observed": false,
+    "rate_limit_observed": false,
+    "notes": "A travel/visa warning modal appeared; it was not a CAPTCHA. The internal XHR/fetch endpoint and response body were not captured."
+  }
+}

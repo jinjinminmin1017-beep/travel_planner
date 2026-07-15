@@ -26,6 +26,7 @@
 - `backend/app/services/rail_connection_matcher.py`：铁路两段完整 offer 的确定性连接匹配、同站身份校验、跨站动态换乘门槛与诊断指标。
 - `backend/app/services/constraints/`：V1.16 分类型约束计算、安全门禁、Pareto 筛选和最近备选选择。
 - `backend/app/data_sources/`：地图、地理编码、铁路、航班、天气、LLM、跳转和数据源配置适配器。
+  - `flight_provider_contracts.py`：MU/CZ/SC 独立航司契约与 fail-closed 启用门禁；只有条款、接口、限流全部确认后才允许执行。
 - `backend/app/core/`：请求上下文、安全策略、日志配置。
 - `backend/app/data/`：本地数据目录，如交通节点和目的地资产。
 - `backend/app/llm/`：Prompt、LLM 调用日志和版本相关文件。
@@ -91,3 +92,5 @@
 - Schema 导出：`.\.venv\Scripts\python scripts\export_schemas.py`
 - Provider 配置检查：`.\.venv\Scripts\python scripts\check_real_api_config.py --tier public`
 - 公开 live smoke：`.\.venv\Scripts\python scripts\live_smoke_real_apis.py --tier public`
+- 航司连续门禁 smoke：`.\.venv\Scripts\python scripts\continuous_flight_smoke.py --mode gate --iterations 3 --interval-seconds 0`
+- 航司匿名取样与条款证据：`docs/flight_provider_evidence/2026-07-15/`

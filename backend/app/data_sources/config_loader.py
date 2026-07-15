@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 from urllib.parse import urlparse
 
+from app.data_sources.flight_provider_contracts import public_airline_contract_ready
 from app.models.schemas import DataSourceConfig, DataSourceRuntimeStatus, now_timepoint
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -161,16 +162,19 @@ def runtime_statuses(environment: str | None = None) -> list[DataSourceRuntimeSt
         public_airline_base_url = os.getenv(_source_env_name(config.source_id, "BASE_URL"))
         missing_public_airline_base_url = config.enabled and config.source_id in PUBLIC_AIRLINE_QUERY_SOURCE_IDS and not public_airline_base_url
         invalid_public_airline_base_url = config.enabled and config.source_id in PUBLIC_AIRLINE_QUERY_SOURCE_IDS and bool(public_airline_base_url) and not public_airline_base_url_allowed(config.source_id, public_airline_base_url)
+        unverified_public_airline_contract = config.enabled and config.source_id in PUBLIC_AIRLINE_QUERY_SOURCE_IDS and not public_airline_contract_ready(config.source_id)
         pending_license = config.enabled and config.license_status != "APPROVED"
-        degraded = missing_secret or missing_public_airline_base_url or invalid_public_airline_base_url or pending_license
+        degraded = missing_secret or pending_license or unverified_public_airline_contract or missing_public_airline_base_url or invalid_public_airline_base_url
         if missing_secret:
             degraded_reason = "required API credential environment variable is missing"
+        elif pending_license:
+            degraded_reason = "data source license is not approved"
         elif missing_public_airline_base_url:
             degraded_reason = "official airline public query base URL is missing"
         elif invalid_public_airline_base_url:
             degraded_reason = "official airline public query base URL is outside the source allowlist"
-        elif pending_license:
-            degraded_reason = "data source license is not approved"
+        elif unverified_public_airline_contract:
+            degraded_reason = "official airline source-specific executable contract is not verified"
         else:
             degraded_reason = None
         health_status = "DEGRADED" if degraded else ("OK" if config.enabled else "DISABLED")
