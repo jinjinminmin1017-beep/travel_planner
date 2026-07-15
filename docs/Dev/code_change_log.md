@@ -242,3 +242,8 @@
   - `npm run test:helpers`：11 passed。
   - `python scripts/export_schemas.py`：通过，`schemas/` 无差异。
   - 后端全量：205 passed、3 failed；失败为本机高德地理编码启用状态与既有默认禁用断言冲突，与本次席别改动无关。
+## 2026-07-15 08:30:00 +08:00
+
+- Task: official-airline anonymous sampling, redacted evidence, independent contracts, risk controls, terms review and continuous smoke.
+- Implementation commit: `d1aa196`.
+- Result: MU/CZ/SC remain disabled and `PENDING_REVIEW`; three safety-gate smoke iterations and 212 backend tests passed. Live offer smoke remains blocked until written authorization and executable endpoint contracts are available.
