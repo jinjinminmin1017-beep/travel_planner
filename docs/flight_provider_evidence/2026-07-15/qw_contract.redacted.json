@@ -1,0 +1,15 @@
+{
+  "source_id": "airline_qw_public_query",
+  "observed_at": "2026-07-15T21:00:00+08:00",
+  "official_entry": "https://www.qdairlines.com",
+  "request_contract": {
+    "method": "POST",
+    "path": "/api/ewp/promotion/sales/v1/air/list",
+    "body_fields": ["origCode3", "destCode3", "departureDate", "isReturn", "adultNum", "plat", "openId", "trickToken"],
+    "dynamic_fields": ["COOKIEID", "RANDOM", "openId", "trickToken", "rid", "deviceId", "NECaptchaValidate"]
+  },
+  "response_fields_from_official_bundle": ["departAVFS", "flightNo", "departTime", "destTime", "fares", "cabinClasses", "avTkt", "price_ad"],
+  "response_sample": null,
+  "risk_observation": "NetEase CAPTCHA branch and temporary official-asset unavailability observed; no bypass attempted",
+  "result": "BLOCKED"
+}

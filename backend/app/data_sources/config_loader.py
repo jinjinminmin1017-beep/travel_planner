@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 from urllib.parse import urlparse
 
-from app.data_sources.flight_provider_contracts import public_airline_contract_ready
+from app.data_sources.flight_provider_contracts import AIRLINE_PUBLIC_QUERY_CONTRACTS, public_airline_contract_ready
 from app.models.schemas import DataSourceConfig, DataSourceRuntimeStatus, now_timepoint
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -21,9 +21,6 @@ REQUIRED_SECRET_ENVS = {
     "nominatim_geocode": (),
     "amap_uri_redirect": (),
     "baidu_uri_redirect": (),
-    "airline_mu_public_query": (),
-    "airline_cz_public_query": (),
-    "airline_sc_public_query": (),
     "opensky_states": (),
     "variflight_status": ("VARIFLIGHT_API_KEY",),
     "rail_12306_public_query": (),
@@ -32,15 +29,10 @@ REQUIRED_SECRET_ENVS = {
     "rail_12306_redirect": (),
     "real_llm": ("OPENAI_API_KEY", "LLM_API_KEY"),
 }
-PUBLIC_AIRLINE_QUERY_SOURCE_IDS = {
-    "airline_mu_public_query",
-    "airline_cz_public_query",
-    "airline_sc_public_query",
-}
+REQUIRED_SECRET_ENVS.update({source_id: () for source_id in AIRLINE_PUBLIC_QUERY_CONTRACTS})
+PUBLIC_AIRLINE_QUERY_SOURCE_IDS = frozenset(AIRLINE_PUBLIC_QUERY_CONTRACTS)
 PUBLIC_AIRLINE_ALLOWED_HOSTS = {
-    "airline_mu_public_query": ("ceair.com",),
-    "airline_cz_public_query": ("csair.com",),
-    "airline_sc_public_query": ("sda.cn",),
+    source_id: contract.allowed_hosts for source_id, contract in AIRLINE_PUBLIC_QUERY_CONTRACTS.items()
 }
 
 
@@ -94,6 +86,10 @@ def _apply_env_overrides(config: DataSourceConfig) -> DataSourceConfig:
     license_status = os.getenv(_source_env_name(config.source_id, "LICENSE_STATUS"))
     if license_status:
         updates["license_status"] = license_status
+        if config.source_id in PUBLIC_AIRLINE_QUERY_SOURCE_IDS and license_status == "APPROVED" and enabled is None:
+            updates["enabled"] = True
+            if qps_limit is None and config.qps_limit <= 0:
+                updates["qps_limit"] = 1
     commercial_allowed = _env_flag(_source_env_name(config.source_id, "COMMERCIAL_ALLOWED"))
     if commercial_allowed is not None:
         updates["commercial_allowed"] = commercial_allowed
@@ -159,7 +155,8 @@ def runtime_statuses(environment: str | None = None) -> list[DataSourceRuntimeSt
     statuses: list[DataSourceRuntimeStatus] = []
     for config in load_data_source_configs(environment):
         missing_secret = config.enabled and not has_required_secret(config.source_id)
-        public_airline_base_url = os.getenv(_source_env_name(config.source_id, "BASE_URL"))
+        contract = AIRLINE_PUBLIC_QUERY_CONTRACTS.get(config.source_id)
+        public_airline_base_url = os.getenv(_source_env_name(config.source_id, "BASE_URL")) or (contract.base_url if contract else None)
         missing_public_airline_base_url = config.enabled and config.source_id in PUBLIC_AIRLINE_QUERY_SOURCE_IDS and not public_airline_base_url
         invalid_public_airline_base_url = config.enabled and config.source_id in PUBLIC_AIRLINE_QUERY_SOURCE_IDS and bool(public_airline_base_url) and not public_airline_base_url_allowed(config.source_id, public_airline_base_url)
         unverified_public_airline_contract = config.enabled and config.source_id in PUBLIC_AIRLINE_QUERY_SOURCE_IDS and not public_airline_contract_ready(config.source_id)
@@ -167,14 +164,14 @@ def runtime_statuses(environment: str | None = None) -> list[DataSourceRuntimeSt
         degraded = missing_secret or pending_license or unverified_public_airline_contract or missing_public_airline_base_url or invalid_public_airline_base_url
         if missing_secret:
             degraded_reason = "required API credential environment variable is missing"
+        elif invalid_public_airline_base_url:
+            degraded_reason = "official airline public query base URL is outside the source allowlist"
+        elif unverified_public_airline_contract:
+            degraded_reason = "official airline source-specific technical contract is not verified"
         elif pending_license:
             degraded_reason = "data source license is not approved"
         elif missing_public_airline_base_url:
             degraded_reason = "official airline public query base URL is missing"
-        elif invalid_public_airline_base_url:
-            degraded_reason = "official airline public query base URL is outside the source allowlist"
-        elif unverified_public_airline_contract:
-            degraded_reason = "official airline source-specific executable contract is not verified"
         else:
             degraded_reason = None
         health_status = "DEGRADED" if degraded else ("OK" if config.enabled else "DISABLED")

@@ -1,0 +1,18 @@
+{
+  "source_id": "airline_hna_micro_public_query",
+  "observed_at": "2026-07-15T23:00:00+08:00",
+  "official_entry": "https://jdair.net/micro/main/flight/search",
+  "bundle": "https://jdair.net/app/main/js/security.js",
+  "request_contract": {
+    "method": "POST",
+    "path": "/api/flight/query/flight",
+    "dynamic_body_fields": ["desc"]
+  },
+  "risk_contract": {
+    "generator": "PEkingBorn.getCiphertext()",
+    "challenge_statuses": ["10000", "10001"],
+    "challenge_behavior": "CAPTCHA/frequency-control branch; no bypass attempted"
+  },
+  "response_sample": null,
+  "result": "BLOCKED"
+}

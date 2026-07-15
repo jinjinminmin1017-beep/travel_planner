@@ -18,6 +18,7 @@ if hasattr(sys.stderr, "reconfigure"):
 import httpx  # noqa: E402
 
 from app.data_sources.config_loader import load_project_env, runtime_statuses  # noqa: E402
+from app.data_sources.flight_provider_contracts import AIRLINE_PUBLIC_QUERY_CONTRACTS  # noqa: E402
 from app.data_sources.flight_providers import (  # noqa: E402
     FlightSearchRequest,
     FlightStateRequest,
@@ -52,6 +53,13 @@ RELEVANT_SOURCE_IDS = [
     "airline_mu_public_query",
     "airline_cz_public_query",
     "airline_sc_public_query",
+    "airline_ca_public_query",
+    "airline_hna_micro_public_query",
+    "airline_zh_public_query",
+    "airline_3u_public_query",
+    "airline_9c_public_query",
+    "airline_ho_public_query",
+    "airline_qw_public_query",
     "opensky_states",
     "open_meteo_forecast",
     "rail_12306_public_query",
@@ -61,6 +69,7 @@ RELEVANT_SOURCE_IDS = [
 ]
 PUBLIC_SMOKE_PROVIDERS = ["map", "geocode", "flight-status", "weather", "redirect"]
 SECRET_SMOKE_PROVIDERS = ["flight"]
+LIVE_FLIGHT_SOURCE_IDS = frozenset(AIRLINE_PUBLIC_QUERY_CONTRACTS)
 
 
 def _env(name: str, default: str) -> str:
@@ -168,7 +177,7 @@ def smoke_geocode() -> bool:
 
 def smoke_flight() -> bool:
     print("航班官方公开采集 Provider live smoke:")
-    ready_sources = [source_id for source_id in ("airline_mu_public_query", "airline_cz_public_query", "airline_sc_public_query") if _enabled_ok(source_id)]
+    ready_sources = [source_id for source_id in sorted(LIVE_FLIGHT_SOURCE_IDS) if _enabled_ok(source_id)]
     if not ready_sources:
         print("- SKIP/FAIL: 没有 airline_*_public_query 处于 OK 状态")
         return False

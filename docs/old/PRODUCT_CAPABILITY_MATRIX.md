@@ -27,7 +27,7 @@
 | 地点解析与节点候选 | 验收通过 | `location_resolver` 已集中管理地点解析、站点候选、机场候选、候选元数据和 Nominatim fallback；Planner 不再维护坐标表。 | 路线规划引擎仍只覆盖已实现城市对；未覆盖城市对会返回清晰不可用和候选节点说明。 |
 | 本地接驳 | 验收通过 | `local_transfer_engine` 已支持 TAXI、SUBWAY、BUS、WALK 可用性判断；真实地图 Provider 返回距离、耗时、费用估算；地图不可用时以 `SourceFailure` 标记并退回内部规则估算；App 可展示接驳上下车/换乘说明并切换重算。 | 完整逐站公交/地铁线路、打车平台实时派单和生产级导航仍依赖授权地图或打车 Provider。 |
 | 铁路规划 | 12306 公开查询 Provider 已接入 / 票源增强待动态化 | Planner 已可按地点解析出的候选站点生成站点对查询，并仅用 `rail_12306_public_query` 返回的真实车次、时刻、席别和票价组装铁路方案；座席必须同时满足可用和有票价，余票字段只用于后端筛选且 App 不展示；`rail_12306_redirect` 可跳转官方入口。 | 多段和票源增强仍按能力缺口阻断且不使用旧模板补造；缺站点码、无票、缺价、限流或页面结构变化时必须阻断对应铁路方案；测试 fixture 不得作为运行时 fallback。 |
-| 航班规划 | 自采 Provider 已接入 / 源站审批后启用 | `flight_planning_engine` 已覆盖直飞、中转、多机场组合；Planner 使用 `airline_mu_public_query`、`airline_cz_public_query`、`airline_sc_public_query` 等官方公开前端采集 Provider 返回的真实价格、真实舱位和可售信号生成航班段；OpenSky/天气仅作为风险辅助边界。 | 未启用、未审批、源站不可用、缺价、无可售信号或解析失败时必须阻断对应航班方案；不得用 fixture、OpenSky、估算价、报价二次确认假设或按固定价差生成额外舱位作为 fallback。 |
+| 航班规划 | 自采 Provider 已接入 / 源站审批后启用 | `flight_planning_engine` 已覆盖直飞、中转、多机场组合；Planner 使用 10 套独立官方公开航司契约覆盖 16 个承运人代码，只有真实价格、真实舱位和可售信号均通过技术契约且许可已审批时才生成航班段；OpenSky/天气仅作为风险辅助边界。 | 未启用、未审批、技术契约不完整、源站不可用、缺价、无可售信号或解析失败时必须阻断对应航班方案；不得用 fixture、OpenSky、估算价、报价二次确认假设或按固定价差生成额外舱位作为 fallback。 |
 | 候选方案生成 | 验收通过 | `candidate_generator` 已分层管理原始方案和 LLM 候选池，支持 1-15 条可验证候选、hard constraints 过滤、soft preference 排序/排除，并为被过滤方案生成 MissingPlanExplanation。 | 异步增量候选体验和任务队列仍归入 P2-02/P3-02；不得为凑满候选数量补造方案。 |
 | Cost / Comfort / Risk | 验收通过 | `cost_comfort_risk_engine` 已独立输出 Money 汇总、ComfortScore breakdown/score_vector/score_version、RiskAssessment/RiskItem 和 DataQuality 缺失/警告/置信度；重算路径复用同一费用引擎。 | 后续质量优化可继续细化权重和离线评估，但 LLM 不参与事实计算。 |
 | LLM Recommendation | 验收通过 / 真实 LLM 阻塞于授权 / Prompt 待按 V1.2 口径精简 | Recommendation Prompt、语义校验 REC-001 至 REC-012、一次 Repair Prompt、LLMValidationResult 元数据和候选池外/不可选/BLOCKED/过期方案拒绝链路已完成；架构口径要求运行时只传候选摘要、合法 `plan_id` 清单和最小输出契约。LLM 不可用时返回 `recommendation_result = null`，候选仍可展示。 | `real_llm` 缺用户自有 key 和授权前不得宣称真实 LLM 推荐上线；不得用代码 fallback 生成三张推荐卡；不得在 Prompt 模板中放可被照抄的 `plan_id` 占位符。 |
@@ -69,6 +69,13 @@
 | `airline_mu_public_query` | FLIGHT | 阻塞于授权 | 禁用 | 源站审核通过后低频采集东航官方公开前端报价，只返回有真实价格且有可售/余票信号的舱位。 | 登录、绕验证码、逆向强认证、下单、支付、抢票、缺价补价、无可售信号时生成航班方案或作为 fallback。 |
 | `airline_cz_public_query` | FLIGHT | 阻塞于授权 | 禁用 | 源站审核通过后低频采集南航官方公开前端报价，只返回有真实价格且有可售/余票信号的舱位。 | 登录、绕验证码、逆向强认证、下单、支付、抢票、缺价补价、无可售信号时生成航班方案或作为 fallback。 |
 | `airline_sc_public_query` | FLIGHT | 阻塞于授权 | 禁用 | 源站审核通过后低频采集山航官方公开前端报价，只返回有真实价格且有可售/余票信号的舱位。 | 登录、绕验证码、逆向强认证、下单、支付、抢票、缺价补价、无可售信号时生成航班方案或作为 fallback。 |
+| `airline_ca_public_query` | FLIGHT | 阻塞于授权 | 禁用 | 国航独立契约；许可审批后仍须通过匿名真实库存响应技术门禁。 | 不得把官网入口可达等同于可执行票价契约。 |
+| `airline_hna_micro_public_query` | FLIGHT | 阻塞于授权 | 禁用 | 海航微服务体系独立契约，覆盖 JD/8L/UQ/FU/Y8。 | 不生成或绕过动态密文、指纹、验证码和频控材料。 |
+| `airline_zh_public_query` | FLIGHT | 阻塞于授权 | 禁用 | 深航独立契约；许可审批后仍须通过匿名真实库存响应技术门禁。 | 不得把 B2C 入口可达等同于可执行票价契约。 |
+| `airline_3u_public_query` | FLIGHT | 阻塞于授权 | 禁用 | 川航独立契约。 | 不绕过 Dingxiang CAPTCHA/ConstID 等风险控制。 |
+| `airline_9c_public_query` | FLIGHT | 阻塞于授权 | 禁用 | 春秋航空独立契约。 | 不绕过 Geetest、安全脚本或频控。 |
+| `airline_ho_public_query` | FLIGHT | 阻塞于授权 | 禁用 | 吉祥航空独立契约；已记录查询 endpoint 与 `INVALID_TOKEN` 匿名响应。 | 不伪造 token、blackBox 或绕过 Geetest。 |
+| `airline_qw_public_query` | FLIGHT | 阻塞于授权 | 禁用 | 青岛航空独立契约；已记录请求/响应字段线索。 | 不伪造 COOKIEID、RANDOM、trickToken 或绕过 NECaptcha。 |
 | `variflight_status` | FLIGHT | 阻塞于授权 | 禁用 | 授权后提供商业航班状态/延误风险。 | 未授权时调用或把 OpenSky 结果冒充商业状态。 |
 | `real_llm` | LLM | 阻塞于授权 | 禁用 | 用户自有 key 存在时做解析、推荐选择和解释，并经过 Schema/语义校验。 | 生成车次、航班、价格、余票、路线、购买链接等事实字段。 |
 

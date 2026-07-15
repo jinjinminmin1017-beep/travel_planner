@@ -20,6 +20,7 @@ import httpx
 
 from app.data_sources.config_loader import load_data_source_configs, public_airline_allowed_hosts
 from app.data_sources.flight_provider_contracts import (
+    AIRLINE_PUBLIC_QUERY_CONTRACTS,
     AirlinePublicQueryContract,
     airline_public_query_contract,
     public_airline_contract_ready,
@@ -33,11 +34,7 @@ class FlightProviderError(RuntimeError):
     pass
 
 
-PUBLIC_AIRLINE_SOURCE_IDS = (
-    "airline_mu_public_query",
-    "airline_cz_public_query",
-    "airline_sc_public_query",
-)
+PUBLIC_AIRLINE_SOURCE_IDS = tuple(AIRLINE_PUBLIC_QUERY_CONTRACTS)
 DEFAULT_AIRLINE_PUBLIC_USER_AGENT = "AITravelPlanner/0.1 public-airline-query"
 DEFAULT_FLIGHT_CACHE_TTL_SECONDS = 60
 SHANGHAI_TZ = timezone(timedelta(hours=8))
@@ -192,7 +189,7 @@ class OfficialAirlinePublicQueryProvider:
         self.allowed_carriers = tuple(code.upper() for code in allowed_carriers)
         self.contract = contract or airline_public_query_contract(source_id)
         self.allowed_hosts = tuple(host.lower().strip(".") for host in (allowed_hosts or public_airline_allowed_hosts(source_id)))
-        self.base_url = (base_url or _source_env(source_id, "BASE_URL") or "").rstrip("/")
+        self.base_url = (base_url or _source_env(source_id, "BASE_URL") or (self.contract.base_url if self.contract else "")).rstrip("/")
         self.search_path = search_path or (self.contract.endpoint_path if self.contract else None) or ""
         self.user_agent = user_agent or _source_env(source_id, "USER_AGENT") or DEFAULT_AIRLINE_PUBLIC_USER_AGENT
         self.cache_ttl_seconds = cache_ttl_seconds if cache_ttl_seconds is not None else _public_query_cache_ttl_seconds(source_id)
@@ -314,22 +311,17 @@ class OpenSkyStatesProvider:
 def build_enabled_flight_providers(environment: str | None = None) -> list[FlightOfferProvider]:
     configs = {config.source_id: config for config in load_data_source_configs(environment)}
     providers: list[FlightOfferProvider] = []
-    source_names = {
-        "airline_mu_public_query": ("China Eastern Official Public Flight Query", ("MU", "FM")),
-        "airline_cz_public_query": ("China Southern Official Public Flight Query", ("CZ",)),
-        "airline_sc_public_query": ("Shandong Airlines Official Public Flight Query", ("SC",)),
-    }
     for source_id in PUBLIC_AIRLINE_SOURCE_IDS:
         config = configs.get(source_id)
         if not config or not config.enabled or config.license_status != "APPROVED" or not public_airline_contract_ready(source_id):
             continue
-        source_name, carriers = source_names[source_id]
+        contract = AIRLINE_PUBLIC_QUERY_CONTRACTS[source_id]
         providers.append(
             OfficialAirlinePublicQueryProvider(
                 source_id=source_id,
-                source_name=source_name,
-                allowed_carriers=carriers,
-                contract=airline_public_query_contract(source_id),
+                source_name=contract.source_name,
+                allowed_carriers=contract.carrier_codes,
+                contract=contract,
             )
         )
     return providers

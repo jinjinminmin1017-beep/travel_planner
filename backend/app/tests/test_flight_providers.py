@@ -29,7 +29,7 @@ from app.services.planner import build_plans
 @pytest.fixture(autouse=True)
 def clear_flight_source_env(monkeypatch):
     monkeypatch.setattr("app.data_sources.config_loader._ENV_LOADED", True)
-    for source_id in ("AIRLINE_MU_PUBLIC_QUERY", "AIRLINE_CZ_PUBLIC_QUERY", "AIRLINE_SC_PUBLIC_QUERY"):
+    for source_id in (source_id.upper() for source_id in AIRLINE_PUBLIC_QUERY_CONTRACTS):
         for suffix in ("ENABLED", "LICENSE_STATUS", "QPS_LIMIT", "COMMERCIAL_ALLOWED", "BASE_URL", "SEARCH_PATH", "USER_AGENT", "CACHE_TTL_SECONDS"):
             monkeypatch.delenv(f"TRAVEL_SOURCE_{source_id}_{suffix}", raising=False)
     monkeypatch.delenv("TRAVEL_FLIGHT_SNAPSHOT_BACKEND", raising=False)
@@ -189,18 +189,21 @@ def test_enabled_public_airline_provider_requires_verified_source_contract(monke
         environment="DEV",
     )
     assert result.offers == []
-    assert result.attempted_source_ids == ["airline_mu_public_query", "airline_cz_public_query", "airline_sc_public_query"]
+    assert result.attempted_source_ids == list(AIRLINE_PUBLIC_QUERY_CONTRACTS)
     assert result.failure_message == "no enabled public airline flight provider"
 
 
 def test_source_contracts_are_independent_and_fail_closed():
     contracts = AIRLINE_PUBLIC_QUERY_CONTRACTS
 
-    assert set(contracts) == {"airline_mu_public_query", "airline_cz_public_query", "airline_sc_public_query"}
-    assert len({contract.contract_version for contract in contracts.values()}) == 3
+    assert len(contracts) == 10
+    assert len({contract.contract_version for contract in contracts.values()}) == len(contracts)
+    assert set().union(*(set(contract.carrier_codes) for contract in contracts.values())) >= {
+        "MU", "FM", "CZ", "OQ", "SC", "CA", "JD", "8L", "UQ", "FU", "Y8", "ZH", "3U", "9C", "HO", "QW"
+    }
     assert contracts["airline_mu_public_query"].response_fields_confirmed == ()
     assert "calendar_lowest_price" in contracts["airline_cz_public_query"].response_fields_confirmed
-    assert "discount" in contracts["airline_sc_public_query"].response_fields_confirmed
+    assert "flightOptions" in contracts["airline_sc_public_query"].response_fields_confirmed
     assert all(contract.blocking_reason for contract in contracts.values())
 
 
@@ -268,7 +271,7 @@ def test_flight_search_result_reports_disabled_provider_when_not_configured():
     )
 
     assert result.offers == []
-    assert result.attempted_source_ids == ["airline_mu_public_query", "airline_cz_public_query", "airline_sc_public_query"]
+    assert result.attempted_source_ids == list(AIRLINE_PUBLIC_QUERY_CONTRACTS)
     assert result.failure_message == "no enabled public airline flight provider"
 
 
@@ -444,8 +447,12 @@ def _test_contract(source_id: str):
             ("currency_code", "currency"),
             ("non_stop", "nonStop"),
         ),
-        rate_limit_verified=True,
-        terms_status="APPROVED",
+        response_fields_confirmed=("flight", "fare", "cabin", "availability"),
+        anonymous_sample_status="PASS",
+        required_dynamic_material=(),
+        captcha_observed=False,
+        rate_limit_status="VERIFIED",
+        technical_blocker=None,
         executable=True,
     )
 

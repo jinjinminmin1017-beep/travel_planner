@@ -16,16 +16,15 @@ BACKEND = ROOT / "backend"
 sys.path.insert(0, str(BACKEND))
 
 from app.data_sources.config_loader import load_data_source_configs, required_secret_envs, runtime_statuses  # noqa: E402
-from app.data_sources.flight_provider_contracts import airline_public_query_contract  # noqa: E402
+from app.data_sources.flight_provider_contracts import AIRLINE_PUBLIC_QUERY_CONTRACTS, airline_public_query_contract  # noqa: E402
 from app.models.schemas import DataSourceConfig  # noqa: E402
 
 REQUIRED_FOR_FULL_LIVE_PLANNING = {
-    "airline_mu_public_query": "东航官方公开前端航班采集",
-    "airline_cz_public_query": "南航官方公开前端航班采集",
-    "airline_sc_public_query": "山航官方公开前端航班采集",
+    source_id: f"{contract.source_name}（{','.join(contract.carrier_codes)}）"
+    for source_id, contract in AIRLINE_PUBLIC_QUERY_CONTRACTS.items()
 }
 SECRET_TIER_SOURCES = {
-    "flight": ("airline_mu_public_query", "airline_cz_public_query", "airline_sc_public_query"),
+    "flight": tuple(AIRLINE_PUBLIC_QUERY_CONTRACTS),
 }
 MAP_PROVIDER_SOURCE_IDS = ("amap_route", "baidu_map_route", "osrm_route")
 PUBLIC_READ_ONLY_SOURCE_IDS = {
@@ -62,18 +61,20 @@ def validate_env_example_sync() -> list[str]:
     dev_config_path = BACKEND / "app" / "data_sources" / "data_sources.dev.json"
     committed_configs = [DataSourceConfig.model_validate(item) for item in json.loads(dev_config_path.read_text(encoding="utf-8"))]
     for config in committed_configs:
-        expected = {
-            _env_key(config.source_id, "ENABLED"): str(config.enabled).lower(),
-            _env_key(config.source_id, "LICENSE_STATUS"): config.license_status,
-            _env_key(config.source_id, "QPS_LIMIT"): str(config.qps_limit),
-            _env_key(config.source_id, "COMMERCIAL_ALLOWED"): str(config.commercial_allowed).lower(),
-        }
+        expected = {_env_key(config.source_id, "LICENSE_STATUS"): config.license_status, _env_key(config.source_id, "COMMERCIAL_ALLOWED"): str(config.commercial_allowed).lower()}
+        if config.source_id not in AIRLINE_PUBLIC_QUERY_CONTRACTS:
+            expected.update({_env_key(config.source_id, "ENABLED"): str(config.enabled).lower(), _env_key(config.source_id, "QPS_LIMIT"): str(config.qps_limit)})
         for key, expected_value in expected.items():
             actual = values.get(key)
             if actual is None:
                 failures.append(f".env.example 缺少 {key}")
             elif actual.lower() != expected_value.lower():
                 failures.append(f".env.example {key}={actual}，应为 {expected_value}")
+        if config.source_id in AIRLINE_PUBLIC_QUERY_CONTRACTS:
+            for suffix in ("ENABLED", "QPS_LIMIT"):
+                key = _env_key(config.source_id, suffix)
+                if key in values:
+                    failures.append(f".env.example 不应设置 {key}；航司默认由 LICENSE_STATUS 单变量启用")
     return failures
 
 

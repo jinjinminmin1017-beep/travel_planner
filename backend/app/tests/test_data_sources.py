@@ -14,6 +14,13 @@ PLANNED_REAL_SOURCE_IDS = {
     "airline_mu_public_query",
     "airline_cz_public_query",
     "airline_sc_public_query",
+    "airline_ca_public_query",
+    "airline_hna_micro_public_query",
+    "airline_zh_public_query",
+    "airline_3u_public_query",
+    "airline_9c_public_query",
+    "airline_ho_public_query",
+    "airline_qw_public_query",
     "variflight_status",
     "real_llm",
 }
@@ -37,7 +44,7 @@ def clear_local_real_source_env(monkeypatch):
     monkeypatch.setattr("app.data_sources.config_loader._ENV_LOADED", True)
     for source_id in PLANNED_REAL_SOURCE_IDS | DEFAULT_ENABLED_REAL_SOURCE_IDS | OPTIONAL_DISABLED_REAL_SOURCE_IDS:
         prefix = f"TRAVEL_SOURCE_{source_id.upper()}"
-        for suffix in ["ENABLED", "LICENSE_STATUS", "QPS_LIMIT", "COMMERCIAL_ALLOWED"]:
+        for suffix in ["ENABLED", "LICENSE_STATUS", "QPS_LIMIT", "COMMERCIAL_ALLOWED", "BASE_URL"]:
             monkeypatch.delenv(f"{prefix}_{suffix}", raising=False)
     for key in [
         "TRAVEL_SOURCE_AMAP_ROUTE_ENABLED",
@@ -212,6 +219,19 @@ def test_public_airline_source_rejects_non_allowlisted_base_url(monkeypatch):
     assert status.enabled is True
     assert status.health_status == "DEGRADED"
     assert status.degraded_reason == "official airline public query base URL is outside the source allowlist"
+
+
+def test_public_airline_license_approval_is_the_only_activation_setting(monkeypatch):
+    monkeypatch.setenv("TRAVEL_SOURCE_AIRLINE_CA_PUBLIC_QUERY_LICENSE_STATUS", "APPROVED")
+
+    config = {item.source_id: item for item in load_data_source_configs("DEV")}["airline_ca_public_query"]
+    status = {item.source_id: item for item in runtime_statuses("DEV")}["airline_ca_public_query"]
+
+    assert config.enabled is True
+    assert config.qps_limit == 1
+    assert config.commercial_allowed is False
+    assert status.health_status == "DEGRADED"
+    assert status.degraded_reason == "official airline source-specific technical contract is not verified"
 
 
 def test_project_env_loader_reads_local_env_file_without_overriding_existing_values(tmp_path, monkeypatch):

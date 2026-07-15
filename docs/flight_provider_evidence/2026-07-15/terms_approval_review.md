@@ -2,7 +2,7 @@
 
 Review date: 2026-07-15 (Asia/Shanghai)
 
-Decision for `airline_mu_public_query`, `airline_cz_public_query` and `airline_sc_public_query`: **PENDING_REVIEW / keep disabled**.
+Decision for all 10 registered official-query systems (MU, CZ, SC, CA, HNA-micro, ZH, 3U, 9C, HO and QW): **PENDING_REVIEW / keep fail-closed**.
 
 ## Evidence reviewed
 
@@ -22,3 +22,5 @@ Decision for `airline_mu_public_query`, `airline_cz_public_query` and `airline_s
 5. Named business/legal approver and approval record.
 
 Until all gates are present, changing `LICENSE_STATUS` to `APPROVED` would be a false approval. This review is an engineering governance record, not legal advice.
+
+The runtime now accepts `LICENSE_STATUS` as the only manual activation setting: an approved source is auto-enabled at 1 QPS. This does not make the present review an approval and does not bypass the independent technical-contract gate.

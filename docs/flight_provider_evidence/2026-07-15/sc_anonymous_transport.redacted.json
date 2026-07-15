@@ -1,0 +1,30 @@
+{
+  "source_id": "airline_sc_public_query",
+  "observed_at": "2026-07-15T22:44:47+08:00",
+  "request": {
+    "method": "POST",
+    "url": "https://flights.sda.cn/tRtApi/flight/resultSets",
+    "headers": {
+      "Accept-Language": "zh-CN",
+      "Market-Country-Code": "CN",
+      "Device-Id": "[REDACTED]"
+    },
+    "body": {
+      "cabinClass": "ANY",
+      "currencyCode": "CNY",
+      "bounds": [{
+        "departureDate": "2026-08-20",
+        "origin": {"code": "TAO", "context": "IATA", "searchByCity": false},
+        "destination": {"code": "SHA", "context": "IATA", "searchByCity": false}
+      }],
+      "passengerCounts": [{"count": 1, "passengerType": "ADT"}]
+    }
+  },
+  "response": {
+    "http_status": 400,
+    "apiErrors": [{"errorCode": "COMMON-01-0060", "userMessage": "请求格式不正确"}],
+    "request_id": "[REDACTED]"
+  },
+  "browser_result": "official result page remained in loading state",
+  "result": "BLOCKED"
+}

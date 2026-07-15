@@ -1,0 +1,34 @@
+{
+  "source_id": "airline_ho_public_query",
+  "observed_at": "2026-07-15T22:00:00+08:00",
+  "request": {
+    "method": "POST",
+    "url": "https://www.juneyaoair.com/server/api/flightFares/queryFlightSimple",
+    "headers": {
+      "ChannelNo": "B2C",
+      "ClientVersion": "1.0.0",
+      "VersionCode": "10000",
+      "BlackBox": "[REDACTED]"
+    },
+    "body": {
+      "channelNo": "B2C",
+      "data": {
+        "RouteType": "OW",
+        "FlightDirection": "G",
+        "PassengerType": ["ADT"],
+        "SegCondList": [{"SegNO": 0, "FlightDirection": "G", "DepCity": "SHA", "ArrCity": "CAN", "FlightDate": "2026-08-20"}]
+      },
+      "blackBox": "[REDACTED]"
+    }
+  },
+  "response": {
+    "http_status": 200,
+    "code": "INVALID_TOKEN",
+    "resultCode": "50002",
+    "message": "登录凭证已失效，请重新登录",
+    "loginFlag": true,
+    "traceId": "[REDACTED]"
+  },
+  "repeat_count": 2,
+  "result": "BLOCKED"
+}
