@@ -247,3 +247,19 @@
 - Task: official-airline anonymous sampling, redacted evidence, independent contracts, risk controls, terms review and continuous smoke.
 - Implementation commit: `d1aa196`.
 - Result: MU/CZ/SC remain disabled and `PENDING_REVIEW`; three safety-gate smoke iterations and 212 backend tests passed. Live offer smoke remains blocked until written authorization and executable endpoint contracts are available.
+
+## 2026-07-15 23:04:04 +08:00
+
+- 任务：将官方航司查询源从 3 套扩展到 10 套，并收口为 `LICENSE_STATUS` 单变量许可启用。
+- 代码提交：`801277574ed3ca2ef658c49ecc7c14d5cfeb3a96`。
+- 修改内容：
+  - 新增 CA、HNA-micro、ZH、3U、9C、HO、QW 独立契约，合计覆盖 16 个承运人代码；官方 host、入口、已确认 transport、请求/响应字段、动态材料、验证码/限流信号和阻塞原因均逐源登记。
+  - 将技术证据门禁与许可门禁分离；航司模板不再显式设置 `ENABLED`/`QPS_LIMIT`，只修改对应 `LICENSE_STATUS=APPROVED` 即自动启用并采用 1 QPS，显式环境覆盖仍可用于紧急停用或限速。
+  - 保存 HO、SC 匿名传输结果和 HNA-micro、QW 官方 bundle 契约的脱敏证据；不记录 Cookie、有效 token、设备指纹或用户会话，不绕过验证码或频控。
+  - 配置检查、live smoke 和产品能力矩阵改为覆盖完整航司注册表；技术证据不完整时始终 fail-closed。
+- 验证：
+  - 隔离本机高德环境配置后，`python -m pytest backend/app/tests -q`：213 passed。
+  - 航司/配置/能力矩阵专项：34 passed。
+  - `python scripts/check_real_api_config.py --tier public`：通过。
+  - `python scripts/continuous_flight_smoke.py --mode gate --iterations 3 --interval-seconds 0`：3/3 通过，10 套源均被各自技术契约正确阻断。
+  - secret 配置检查与单次 live smoke：按设计失败，零真实 offer；当前仍缺可重放匿名库存响应和书面自动化/数据复用批准，未将阻塞伪装为通过。
