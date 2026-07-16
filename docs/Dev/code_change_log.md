@@ -263,3 +263,22 @@
   - `python scripts/check_real_api_config.py --tier public`：通过。
   - `python scripts/continuous_flight_smoke.py --mode gate --iterations 3 --interval-seconds 0`：3/3 通过，10 套源均被各自技术契约正确阻断。
   - secret 配置检查与单次 live smoke：按设计失败，零真实 offer；当前仍缺可重放匿名库存响应和书面自动化/数据复用批准，未将阻塞伪装为通过。
+
+## 2026-07-16 21:49:56 +08:00
+
+- 任务：将后端数据源运行配置收敛为 ENV 单一配置源。
+- 代码提交：`4bb293f`。
+- 修改内容：
+  - 新增不可变类型化数据源 settings、一次性 ENV 快照与 adapter 注册表，所有 Provider 由集中工厂接收构造参数，移除 Provider 内部分散的环境变量读取。
+  - 以 `TRAVEL_DATA_SOURCE_IDS` 和 `TRAVEL_SOURCE_<ID>_*` 作为唯一运行配置结构，严格校验重复源、未知键/adapter、非法类型、host、许可状态和启用源必填项，错误不输出凭证值。
+  - 删除 DEV/TEST/PROD 三套 JSON 数据源配置和 `flight_provider_contracts.py`；官方航司技术实现只允许由代码注册，ENV 无法伪造 readiness，未实现源继续 fail-closed。
+  - 重建 `.env.example`，增加本地 `.env` 安全迁移脚本，并同步配置检查、benchmark、连续航班 gate、真实 API smoke、项目索引和能力矩阵。
+  - 启动阶段同时校验启用且已批准 Provider 的可构造性，禁用 Provider 不创建网络客户端；状态 API schema 保持不变。
+- 验证：
+  - `\.venv\Scripts\python -m pytest backend/app/tests -q`：214 passed。
+  - `\.venv\Scripts\python scripts/check_real_api_config.py --tier public`：通过。
+  - FastAPI startup smoke：`/api/health` 与 `/api/data-sources/status` 均返回 200，共加载 26 个数据源。
+  - `scripts/continuous_flight_smoke.py --mode gate --iterations 3 --interval-seconds 0`：3/3 通过，10 个未实现官方航司源均保持禁用且没有模拟航班。
+  - 地图、地点解析和天气真实 smoke 通过；12306 一次真实 smoke 收到上游非 JSON 响应，未伪报成功，铁路 Provider 与规划回归由全量测试覆盖并通过。
+  - 旧 JSON、`flight_provider_contracts` 和 `public_airline_contract_ready` 引用检查为空；`git diff --check` 通过。
+- 兼容性：未修改 API schema version，未修改数据库和前端，无需数据库迁移。
