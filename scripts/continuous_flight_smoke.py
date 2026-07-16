@@ -11,9 +11,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "backend"))
 
-from app.data_sources.config_loader import load_project_env, runtime_statuses  # noqa: E402
-from app.data_sources.flight_provider_contracts import AIRLINE_PUBLIC_QUERY_CONTRACTS  # noqa: E402
+from app.data_sources.config_loader import load_data_source_settings, load_project_env, runtime_statuses  # noqa: E402
 from app.data_sources.flight_providers import (  # noqa: E402
+    OFFICIAL_AIRLINE_REQUEST_SCHEMAS,
     FlightSearchRequest,
     search_flight_offers_with_enabled_provider_result,
 )
@@ -23,16 +23,19 @@ def gate_smoke() -> tuple[bool, dict[str, object]]:
     statuses = {item.source_id: item for item in runtime_statuses()}
     source_results: dict[str, object] = {}
     passed = True
-    for source_id, contract in AIRLINE_PUBLIC_QUERY_CONTRACTS.items():
+    sources = load_data_source_settings().by_adapter("official_airline_public_query")
+    for source in sources:
+        source_id = source.source_id
         status = statuses[source_id]
-        source_passed = status.health_status != "OK" and contract.blocking_reason is not None
+        implementation_registered = source_id in OFFICIAL_AIRLINE_REQUEST_SCHEMAS
+        source_passed = status.health_status != "OK" and not implementation_registered
         passed = passed and source_passed
         source_results[source_id] = {
             "passed": source_passed,
             "runtime_status": status.health_status,
             "license_status": status.license_status,
-            "contract_version": contract.contract_version,
-            "contract_blocking_reason": contract.blocking_reason,
+            "adapter": source.adapter,
+            "request_implementation_registered": implementation_registered,
         }
     return passed, source_results
 

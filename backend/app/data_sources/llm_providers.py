@@ -1,14 +1,12 @@
 from __future__ import annotations
 
 import json
-import os
 from datetime import date
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 import httpx
 
-from app.data_sources.config_loader import has_required_secret, load_data_source_configs
 from app.models.schemas import LLMRecommendationInput, LLMRecommendationOutput
 
 PROMPT_DIR = Path(__file__).resolve().parents[1] / "llm" / "prompts"
@@ -44,12 +42,23 @@ class RecommendationLLMProvider(Protocol):
 class OpenAICompatibleLLMProvider:
     source_id = "real_llm"
 
-    def __init__(self, api_key: str, model: str, client: httpx.Client | None = None, base_url: str = "https://api.openai.com/v1") -> None:
+    def __init__(
+        self,
+        api_key: str,
+        model: str,
+        client: httpx.Client | None = None,
+        base_url: str = "https://api.openai.com/v1",
+        timeout_seconds: float = 45.0,
+        max_tokens: int = DEFAULT_REAL_LLM_MAX_TOKENS,
+        thinking_disabled: bool = True,
+    ) -> None:
         self.api_key = api_key
         self.model = model
         self.model_name = model
-        self.client = client or httpx.Client(timeout=_llm_timeout_seconds())
+        self.client = client or httpx.Client(timeout=timeout_seconds)
         self.base_url = base_url.rstrip("/")
+        self.max_tokens = max_tokens
+        self.thinking_disabled = thinking_disabled
         self._last_recommendation_raw_output: str | None = None
 
     def parse_intent(self, raw_user_input: str, request_id: str, current_date: date, default_timezone: str) -> str:
@@ -145,7 +154,7 @@ class OpenAICompatibleLLMProvider:
             "model": self.model,
             "temperature": 0,
             "response_format": {"type": "json_object"},
-            "max_tokens": _llm_max_tokens(),
+            "max_tokens": self.max_tokens,
             "messages": [
                 {
                     "role": "system",
@@ -157,7 +166,7 @@ class OpenAICompatibleLLMProvider:
                 },
             ],
         }
-        if _llm_thinking_disabled():
+        if self.thinking_disabled:
             request_json["thinking"] = {"type": "disabled"}
 
         response = self.client.post(
@@ -175,14 +184,10 @@ class OpenAICompatibleLLMProvider:
 
 
 def build_enabled_llm_provider(environment: str | None = None) -> RecommendationLLMProvider | None:
-    configs = {config.source_id: config for config in load_data_source_configs(environment)}
-    config = configs.get("real_llm")
-    if not config or not config.enabled or config.license_status != "APPROVED" or not has_required_secret("real_llm"):
-        return None
-    api_key = _first_env("OPENAI_API_KEY", "LLM_API_KEY")
-    model = os.getenv("REAL_LLM_MODEL", "gpt-4.1-mini")
-    base_url = os.getenv("REAL_LLM_BASE_URL", "https://api.openai.com/v1")
-    return OpenAICompatibleLLMProvider(api_key=api_key, model=model, base_url=base_url)
+    from app.data_sources.provider_registry import build_enabled_providers
+
+    providers = build_enabled_providers({"real_llm"}, environment)
+    return cast(RecommendationLLMProvider, providers[0]) if providers else None
 
 
 def build_enabled_intent_llm_provider(environment: str | None = None) -> IntentParserLLMProvider | None:
@@ -342,35 +347,6 @@ def _time_summary(value: Any | None) -> str | None:
 
 def _enum_value(value: Any) -> Any:
     return getattr(value, "value", value)
-
-
-def _first_env(*names: str) -> str:
-    for name in names:
-        value = os.getenv(name)
-        if value:
-            return value
-    raise LLMProviderError(f"missing LLM credential env: {'/'.join(names)}")
-
-
-def _llm_timeout_seconds() -> float:
-    raw_value = os.getenv("REAL_LLM_TIMEOUT_SECONDS", "45")
-    try:
-        return max(1.0, float(raw_value))
-    except ValueError:
-        return 45.0
-
-
-def _llm_max_tokens() -> int:
-    raw_value = os.getenv("REAL_LLM_MAX_TOKENS", str(DEFAULT_REAL_LLM_MAX_TOKENS))
-    try:
-        value = int(raw_value)
-    except ValueError:
-        return DEFAULT_REAL_LLM_MAX_TOKENS
-    return value if value >= 1 else DEFAULT_REAL_LLM_MAX_TOKENS
-
-
-def _llm_thinking_disabled() -> bool:
-    return os.getenv("REAL_LLM_THINKING_DISABLED", "true").strip().lower() != "false"
 
 
 def _prompt(filename: str) -> str:

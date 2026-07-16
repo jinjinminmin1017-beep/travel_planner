@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import re
 import threading
 import time
@@ -10,11 +9,11 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 import httpx
 
-from app.data_sources.config_loader import load_data_source_configs
+from app.data_sources.config_loader import load_data_source_settings
 from app.models.schemas import CacheMetadata, DataSourceMetadata, DataSourceType, Money, SeatOption, money, now_timepoint
 
 logger = logging.getLogger("app.rail")
@@ -80,14 +79,15 @@ class Official12306RailProvider:
     def __init__(
         self,
         client: httpx.Client | None = None,
-        base_url: str | None = None,
-        user_agent: str | None = None,
-        cache_ttl_seconds: int | None = None,
+        base_url: str = DEFAULT_12306_BASE_URL,
+        user_agent: str = DEFAULT_12306_USER_AGENT,
+        cache_ttl_seconds: int = 60,
+        timeout_seconds: float = 10.0,
     ) -> None:
-        self.base_url = (base_url or os.getenv("TRAVEL_SOURCE_RAIL_12306_PUBLIC_QUERY_BASE_URL") or DEFAULT_12306_BASE_URL).rstrip("/")
-        self.user_agent = user_agent or os.getenv("TRAVEL_SOURCE_RAIL_12306_PUBLIC_QUERY_USER_AGENT") or DEFAULT_12306_USER_AGENT
-        self.cache_ttl_seconds = cache_ttl_seconds if cache_ttl_seconds is not None else _public_query_cache_ttl_seconds()
-        self.client = client or httpx.Client(timeout=10.0, follow_redirects=True, headers=self._headers())
+        self.base_url = base_url.rstrip("/")
+        self.user_agent = user_agent
+        self.cache_ttl_seconds = cache_ttl_seconds
+        self.client = client or httpx.Client(timeout=timeout_seconds, follow_redirects=True, headers=self._headers())
 
     def search_offers(self, request: RailSearchRequest) -> list[RailOffer]:
         logger.info(
@@ -299,18 +299,22 @@ def rail_data_source_metadata(
 
 
 def build_enabled_rail_providers(environment: str | None = None) -> list[RailProvider]:
-    configs = {config.source_id: config for config in load_data_source_configs(environment)}
-    config = configs.get("rail_12306_public_query")
-    if not config or not config.enabled or config.license_status != "APPROVED":
+    settings = load_data_source_settings(environment).get("rail_12306_public_query")
+    if not settings or not settings.enabled or settings.license_status != "APPROVED":
         logger.warning(
             "rail_provider_config_blocked source_id=rail_12306_public_query configured=%s enabled=%s license_status=%s",
-            bool(config),
-            config.enabled if config else None,
-            config.license_status if config else None,
+            bool(settings),
+            settings.enabled if settings else None,
+            settings.license_status if settings else None,
         )
         return []
-    logger.info("rail_provider_config_enabled source_id=rail_12306_public_query qps_limit=%s", config.qps_limit)
-    return [Official12306RailProvider()]
+    logger.info("rail_provider_config_enabled source_id=rail_12306_public_query qps_limit=%s", settings.qps_limit)
+    from app.data_sources.provider_registry import build_enabled_providers
+
+    return [
+        cast(RailProvider, provider)
+        for provider in build_enabled_providers({"rail_12306_public_query"}, environment)
+    ]
 
 
 def search_rail_offers_with_enabled_provider_result(request: RailSearchRequest, environment: str | None = None) -> RailProviderSearchResult:
@@ -495,25 +499,12 @@ def _respect_provider_rate_limit(source_id: str, environment: str | None) -> Non
 
 
 def _provider_min_interval_seconds(source_id: str, environment: str | None) -> float:
-    env_override = os.getenv(f"TRAVEL_SOURCE_{source_id.upper()}_MIN_INTERVAL_SECONDS")
-    if env_override:
-        return _safe_float(env_override, 1.0)
-    configs = {config.source_id: config for config in load_data_source_configs(environment)}
-    config = configs.get(source_id)
-    if config and config.qps_limit > 0:
-        return 1.0 / config.qps_limit
+    settings = load_data_source_settings(environment).get(source_id)
+    if settings and settings.min_interval_seconds is not None:
+        return settings.min_interval_seconds
+    if settings and settings.qps_limit > 0:
+        return 1.0 / settings.qps_limit
     return 1.0 if source_id == "rail_12306_public_query" else 0.0
-
-
-def _public_query_cache_ttl_seconds() -> int:
-    return int(os.getenv("TRAVEL_SOURCE_RAIL_12306_PUBLIC_QUERY_CACHE_TTL_SECONDS", "60"))
-
-
-def _safe_float(value: str, fallback: float) -> float:
-    try:
-        return max(0.0, float(value))
-    except ValueError:
-        return fallback
 
 
 def _cache_get(key: str, ttl_seconds: int) -> list[RailOffer] | None:

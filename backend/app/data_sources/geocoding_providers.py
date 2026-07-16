@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 import httpx
 
-from app.data_sources.config_loader import has_required_secret, load_data_source_configs
 from app.models.schemas import DataSourceMetadata, DataSourceType, GeoPoint, now_timepoint
 
 
@@ -57,10 +55,16 @@ class GeocodingProvider(Protocol):
 class AmapAddressGeocodingProvider:
     source_id = "amap_geocode"
 
-    def __init__(self, api_key: str, client: httpx.Client | None = None, base_url: str | None = None) -> None:
+    def __init__(
+        self,
+        api_key: str,
+        client: httpx.Client | None = None,
+        base_url: str = "https://restapi.amap.com",
+        timeout_seconds: float = 5.0,
+    ) -> None:
         self.api_key = api_key
-        self.client = client or httpx.Client(timeout=5.0)
-        self.base_url = (base_url or os.getenv("AMAP_GEOCODING_BASE_URL") or "https://restapi.amap.com").rstrip("/")
+        self.client = client or httpx.Client(timeout=timeout_seconds)
+        self.base_url = base_url.rstrip("/")
 
     def geocode(self, request: GeocodeRequest) -> list[GeocodeCandidate]:
         if not request.query.strip():
@@ -108,10 +112,16 @@ class AmapAddressGeocodingProvider:
 class AmapPlaceSearchProvider:
     source_id = "amap_place_search"
 
-    def __init__(self, api_key: str, client: httpx.Client | None = None, base_url: str | None = None) -> None:
+    def __init__(
+        self,
+        api_key: str,
+        client: httpx.Client | None = None,
+        base_url: str = "https://restapi.amap.com",
+        timeout_seconds: float = 5.0,
+    ) -> None:
         self.api_key = api_key
-        self.client = client or httpx.Client(timeout=5.0)
-        self.base_url = (base_url or os.getenv("AMAP_GEOCODING_BASE_URL") or "https://restapi.amap.com").rstrip("/")
+        self.client = client or httpx.Client(timeout=timeout_seconds)
+        self.base_url = base_url.rstrip("/")
 
     def geocode(self, request: GeocodeRequest) -> list[GeocodeCandidate]:
         if not request.query.strip():
@@ -164,10 +174,16 @@ class AmapPlaceSearchProvider:
 class NominatimGeocodingProvider:
     source_id = "nominatim_geocode"
 
-    def __init__(self, client: httpx.Client | None = None, base_url: str | None = None, user_agent: str | None = None) -> None:
-        self.base_url = (base_url or os.getenv("NOMINATIM_BASE_URL") or "https://nominatim.openstreetmap.org").rstrip("/")
-        self.client = client or httpx.Client(timeout=10.0)
-        self.user_agent = user_agent or os.getenv("NOMINATIM_USER_AGENT") or "AITravelPlanner/0.1 (local-dev)"
+    def __init__(
+        self,
+        client: httpx.Client | None = None,
+        base_url: str = "https://nominatim.openstreetmap.org",
+        user_agent: str = "AITravelPlanner/0.1 (local-dev)",
+        timeout_seconds: float = 10.0,
+    ) -> None:
+        self.base_url = base_url.rstrip("/")
+        self.client = client or httpx.Client(timeout=timeout_seconds)
+        self.user_agent = user_agent
 
     def geocode(self, request: GeocodeRequest) -> list[GeocodeCandidate]:
         if not request.query.strip():
@@ -230,19 +246,15 @@ def geocoding_data_source_metadata(source_id: str, source_name: str, *, authorit
 
 
 def build_enabled_geocoding_providers(environment: str | None = None) -> list[GeocodingProvider]:
-    configs = {config.source_id: config for config in load_data_source_configs(environment)}
-    providers: list[GeocodingProvider] = []
-    amap_key = _first_env("AMAP_WEB_SERVICE_KEY", "AMAP_API_KEY")
-    amap_geocode = configs.get("amap_geocode")
-    if amap_key and amap_geocode and amap_geocode.enabled and amap_geocode.license_status == "APPROVED" and has_required_secret("amap_geocode"):
-        providers.append(AmapAddressGeocodingProvider(amap_key))
-    amap_place_search = configs.get("amap_place_search")
-    if amap_key and amap_place_search and amap_place_search.enabled and amap_place_search.license_status == "APPROVED" and has_required_secret("amap_place_search"):
-        providers.append(AmapPlaceSearchProvider(amap_key))
-    nominatim = configs.get("nominatim_geocode")
-    if nominatim and nominatim.enabled and nominatim.license_status == "APPROVED":
-        providers.append(NominatimGeocodingProvider())
-    return providers
+    from app.data_sources.provider_registry import build_enabled_providers
+
+    return [
+        cast(GeocodingProvider, provider)
+        for provider in build_enabled_providers(
+            {"amap_geocode", "amap_place_search", "nominatim_geocode"},
+            environment,
+        )
+    ]
 
 
 def geocode_with_enabled_provider_result(request: GeocodeRequest, environment: str | None = None) -> GeocodeProviderSearchResult:
@@ -338,14 +350,6 @@ def _geocoding_error_code(exc: Exception) -> str:
 def _aggregate_geocoding_error_code(codes: list[str]) -> str | None:
     priority = ["MAP_GEOCODING_RATE_LIMITED", "MAP_GEOCODING_TIMEOUT", "MAP_GEOCODING_FAILED", "MAP_GEOCODING_EMPTY"]
     return next((code for code in priority if code in codes), codes[-1] if codes else None)
-
-
-def _first_env(*names: str) -> str | None:
-    for name in names:
-        value = os.getenv(name)
-        if value:
-            return value
-    return None
 
 
 def _optional_str(value: Any) -> str | None:

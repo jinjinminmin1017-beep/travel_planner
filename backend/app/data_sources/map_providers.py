@@ -1,15 +1,13 @@
 from __future__ import annotations
 
 import logging
-import os
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from math import ceil
-from typing import Any, Literal, Protocol
+from typing import Any, Literal, Protocol, cast
 
 import httpx
 
-from app.data_sources.config_loader import has_required_secret, load_data_source_configs
 from app.models.schemas import DataSourceMetadata, DataSourceType, GeoPoint, Money, TransportMode, money, now_timepoint
 
 logger = logging.getLogger("app.map")
@@ -96,9 +94,15 @@ class AmapRouteProvider:
         }
     )
 
-    def __init__(self, api_key: str, client: httpx.Client | None = None, base_url: str = "https://restapi.amap.com") -> None:
+    def __init__(
+        self,
+        api_key: str,
+        client: httpx.Client | None = None,
+        base_url: str = "https://restapi.amap.com",
+        timeout_seconds: float = 5.0,
+    ) -> None:
         self.api_key = api_key
-        self.client = client or httpx.Client(timeout=5.0)
+        self.client = client or httpx.Client(timeout=timeout_seconds)
         self.base_url = base_url.rstrip("/")
 
     def estimate_route(self, request: MapRouteRequest) -> MapRouteEstimate:
@@ -170,9 +174,15 @@ class BaiduDirectionLiteProvider:
     source_id = "baidu_map_route"
     supported_modes = AmapRouteProvider.supported_modes
 
-    def __init__(self, api_key: str, client: httpx.Client | None = None, base_url: str = "https://api.map.baidu.com") -> None:
+    def __init__(
+        self,
+        api_key: str,
+        client: httpx.Client | None = None,
+        base_url: str = "https://api.map.baidu.com",
+        timeout_seconds: float = 5.0,
+    ) -> None:
         self.api_key = api_key
-        self.client = client or httpx.Client(timeout=5.0)
+        self.client = client or httpx.Client(timeout=timeout_seconds)
         self.base_url = base_url.rstrip("/")
 
     def estimate_route(self, request: MapRouteRequest) -> MapRouteEstimate:
@@ -219,9 +229,14 @@ class OsrmRouteProvider:
         }
     )
 
-    def __init__(self, client: httpx.Client | None = None, base_url: str | None = None) -> None:
-        self.client = client or httpx.Client(timeout=8.0)
-        self.base_url = (base_url or os.getenv("OSRM_ROUTE_BASE_URL") or "https://router.project-osrm.org").rstrip("/")
+    def __init__(
+        self,
+        client: httpx.Client | None = None,
+        base_url: str = "https://router.project-osrm.org",
+        timeout_seconds: float = 8.0,
+    ) -> None:
+        self.client = client or httpx.Client(timeout=timeout_seconds)
+        self.base_url = base_url.rstrip("/")
 
     def estimate_route(self, request: MapRouteRequest) -> MapRouteEstimate:
         if request.mode not in self.supported_modes:
@@ -251,18 +266,15 @@ class OsrmRouteProvider:
 
 
 def build_enabled_map_providers(environment: str | None = None) -> list[MapRouteProvider]:
-    configs = {config.source_id: config for config in load_data_source_configs(environment)}
-    providers: list[MapRouteProvider] = []
-    amap_config = configs.get("amap_route")
-    if amap_config and amap_config.enabled and amap_config.license_status == "APPROVED" and has_required_secret("amap_route"):
-        providers.append(AmapRouteProvider(_first_env("AMAP_WEB_SERVICE_KEY", "AMAP_API_KEY")))
-    baidu_config = configs.get("baidu_map_route")
-    if baidu_config and baidu_config.enabled and baidu_config.license_status == "APPROVED" and has_required_secret("baidu_map_route"):
-        providers.append(BaiduDirectionLiteProvider(_first_env("BAIDU_MAP_AK", "BAIDU_MAP_API_KEY")))
-    osrm_config = configs.get("osrm_route")
-    if osrm_config and osrm_config.enabled and osrm_config.license_status == "APPROVED":
-        providers.append(OsrmRouteProvider())
-    return providers
+    from app.data_sources.provider_registry import build_enabled_providers
+
+    return [
+        cast(MapRouteProvider, provider)
+        for provider in build_enabled_providers(
+            {"amap_route", "baidu_map_route", "osrm_route"},
+            environment,
+        )
+    ]
 
 
 def estimate_route_with_enabled_provider(request: MapRouteRequest, environment: str | None = None) -> MapRouteEstimate | None:
@@ -350,14 +362,6 @@ def _aggregate_failure_code(codes: list[str]) -> str:
         "MAP_ROUTE_FAILED",
     ]
     return next((code for code in priority if code in codes), codes[-1])
-
-
-def _first_env(*names: str) -> str:
-    for name in names:
-        value = os.getenv(name)
-        if value:
-            return value
-    raise MapProviderError(f"missing API credential env: {'/'.join(names)}")
 
 
 def _amap_coord(point: GeoPoint) -> str:

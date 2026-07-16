@@ -1,11 +1,11 @@
 # Project Index
 
-更新日期：2026-07-12
+更新日期：2026-07-16
 
 ## 技术栈
 
 - 前端：Expo / React Native、React 19、TypeScript。
-- 后端：FastAPI、Pydantic v2、Uvicorn、pytest、httpx、python-dotenv。
+- 后端：FastAPI、Pydantic v2、Uvicorn、pytest、httpx；根目录 `.env` 由项目内 ENV loader 一次性加载。
 - 数据与合同：`backend/app/models/schemas.py` 为后端 Pydantic 合同，`schemas/*.schema.json` 为导出的 JSON Schema，`frontend/src/types/index.ts` 为前端类型。
 - CI：GitHub Actions，覆盖 schema export/diff、后端测试、前端 typecheck、Expo export、Provider 配置与公开 smoke。
 
@@ -26,7 +26,9 @@
 - `backend/app/services/rail_connection_matcher.py`：铁路两段完整 offer 的确定性连接匹配、同站身份校验、跨站动态换乘门槛与诊断指标。
 - `backend/app/services/constraints/`：V1.16 分类型约束计算、安全门禁、Pareto 筛选和最近备选选择。
 - `backend/app/data_sources/`：地图、地理编码、铁路、航班、天气、LLM、跳转和数据源配置适配器。
-  - `flight_provider_contracts.py`：MU/CZ/SC 独立航司契约与 fail-closed 启用门禁；只有条款、接口、限流全部确认后才允许执行。
+  - `config_loader.py`：从 `TRAVEL_DATA_SOURCE_IDS` 与 `TRAVEL_SOURCE_<ID>_*` 构造不可变、类型化的 ENV-only 配置快照。
+  - `provider_registry.py`：统一的 adapter settings model 与 Provider factory 注册表；启用源在启动期完成构造校验。
+  - `flight_providers.py`：航班请求构造、响应解析、快照脱敏和代码内请求实现注册；环境变量不能声明技术就绪。
 - `backend/app/core/`：请求上下文、安全策略、日志配置。
 - `backend/app/data/`：本地数据目录，如交通节点和目的地资产。
 - `backend/app/llm/`：Prompt、LLM 调用日志和版本相关文件。
@@ -68,14 +70,14 @@
 - TTL 缓存服务：`backend/app/services/cache_store.py`。
 - 运行时 store：`backend/app/services/store.py`。
 - 默认 SQLite 路径配置：`.env.example` 中的 `TRAVEL_SQLITE_PATH=logs/travel_planner.sqlite3`。
-- 飞行快照 SQLite 配置：`.env.example` 中的 `TRAVEL_FLIGHT_SNAPSHOT_SQLITE_PATH=logs/flight_harvest.sqlite3`。
+- 飞行快照 SQLite 配置：官方航司 source 的 `TRAVEL_SOURCE_<ID>_SNAPSHOT_BACKEND` 与 `TRAVEL_SOURCE_<ID>_SNAPSHOT_SQLITE_PATH`。
 - Redis/PostgreSQL 配置入口存在于 `.env.example`，当前依赖文件未包含对应驱动。
 
 ## 配置文件
 
 - 后端环境模板：`.env.example`。
 - 前端环境模板：`frontend/.env.example`。
-- 数据源配置：`backend/app/data_sources/data_sources.dev.json`、`data_sources.test.json`、`data_sources.prod.json`。
+- 数据源配置：进程环境变量；本地由根目录 `.env` 注入，`.env.example` 是唯一非敏感变量清单。运行时不读取 JSON 配置源。
 - Expo 配置：`frontend/app.json`。
 - TypeScript 配置：`frontend/tsconfig.json`。
 

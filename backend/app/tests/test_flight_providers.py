@@ -1,10 +1,11 @@
 import sqlite3
-from dataclasses import replace
 from datetime import date, datetime
 
 import pytest
 
+from app.data_sources.config_loader import DataSourceConfigurationError, reset_data_source_settings_cache
 from app.data_sources.flight_providers import (
+    OFFICIAL_AIRLINE_REQUEST_SCHEMAS,
     FlightOffer,
     FlightOfferCabinOption,
     FlightOfferSegment,
@@ -12,6 +13,7 @@ from app.data_sources.flight_providers import (
     FlightProviderSearchResult,
     FlightSearchRequest,
     FlightStateRequest,
+    OfficialAirlineRequestSchema,
     OfficialAirlinePublicQueryProvider,
     OpenSkyStatesProvider,
     build_enabled_flight_providers,
@@ -21,19 +23,22 @@ from app.data_sources.flight_providers import (
     save_flight_raw_snapshot,
     search_flight_offers_with_enabled_provider_result,
 )
-from app.data_sources.flight_provider_contracts import AIRLINE_PUBLIC_QUERY_CONTRACTS
 from app.models.schemas import PlanType, RecommendationType, TravelHardConstraints, TravelRequest, TravelSoftPreferences, money
 from app.services.planner import build_plans
 
 
-@pytest.fixture(autouse=True)
-def clear_flight_source_env(monkeypatch):
-    monkeypatch.setattr("app.data_sources.config_loader._ENV_LOADED", True)
-    for source_id in (source_id.upper() for source_id in AIRLINE_PUBLIC_QUERY_CONTRACTS):
-        for suffix in ("ENABLED", "LICENSE_STATUS", "QPS_LIMIT", "COMMERCIAL_ALLOWED", "BASE_URL", "SEARCH_PATH", "USER_AGENT", "CACHE_TTL_SECONDS"):
-            monkeypatch.delenv(f"TRAVEL_SOURCE_{source_id}_{suffix}", raising=False)
-    monkeypatch.delenv("TRAVEL_FLIGHT_SNAPSHOT_BACKEND", raising=False)
-    monkeypatch.delenv("TRAVEL_FLIGHT_SNAPSHOT_SQLITE_PATH", raising=False)
+AIRLINE_SOURCE_IDS = (
+    "airline_mu_public_query",
+    "airline_cz_public_query",
+    "airline_sc_public_query",
+    "airline_ca_public_query",
+    "airline_hna_micro_public_query",
+    "airline_zh_public_query",
+    "airline_3u_public_query",
+    "airline_9c_public_query",
+    "airline_ho_public_query",
+    "airline_qw_public_query",
+)
 
 
 class _FakeResponse:
@@ -62,8 +67,7 @@ class _FakeClient:
         return self.response
 
 
-def test_official_airline_public_provider_maps_available_cabin_offer(monkeypatch):
-    monkeypatch.setenv("TRAVEL_FLIGHT_SNAPSHOT_BACKEND", "disabled")
+def test_official_airline_public_provider_maps_available_cabin_offer():
     client = _FakeClient(_FakeResponse(_public_offer_payload()))
     provider = OfficialAirlinePublicQueryProvider(
         source_id="airline_mu_public_query",
@@ -73,7 +77,8 @@ def test_official_airline_public_provider_maps_available_cabin_offer(monkeypatch
         base_url="https://example.test",
         cache_ttl_seconds=0,
         allowed_hosts=("example.test",),
-        contract=_test_contract("airline_mu_public_query"),
+        request_schema=_test_schema(),
+        snapshot_backend="disabled",
     )
 
     offers = provider.search_offers(
@@ -97,8 +102,7 @@ def test_official_airline_public_provider_maps_available_cabin_offer(monkeypatch
     assert offer.cabin_options[0].remaining_count == 3
 
 
-def test_official_airline_public_provider_reads_html_embedded_payload(monkeypatch):
-    monkeypatch.setenv("TRAVEL_FLIGHT_SNAPSHOT_BACKEND", "disabled")
+def test_official_airline_public_provider_reads_html_embedded_payload():
     html = '<html><script id="flight-offers-json" type="application/json">{"offers":[{"id":"mu_html","available":true,"flightNumber":"MU5511","origin":"SHA","destination":"TAO","departureTime":"2026-05-21T11:20:00+08:00","arrivalTime":"2026-05-21T13:00:00+08:00","price":{"total":"940.00","currency":"CNY"}}]}</script></html>'
     client = _FakeClient(_FakeResponse(text=html, content_type="text/html"))
     provider = OfficialAirlinePublicQueryProvider(
@@ -109,7 +113,8 @@ def test_official_airline_public_provider_reads_html_embedded_payload(monkeypatc
         base_url="https://example.test",
         cache_ttl_seconds=0,
         allowed_hosts=("example.test",),
-        contract=_test_contract("airline_mu_public_query"),
+        request_schema=_test_schema(),
+        snapshot_backend="disabled",
     )
 
     offers = provider.search_offers(FlightSearchRequest(origin_iata="SHA", destination_iata="TAO", departure_date=date(2026, 5, 21)))
@@ -119,8 +124,7 @@ def test_official_airline_public_provider_reads_html_embedded_payload(monkeypatc
     assert offers[0].cabin_options[0].availability == "AVAILABLE"
 
 
-def test_public_airline_provider_filters_sold_out_and_missing_price(monkeypatch):
-    monkeypatch.setenv("TRAVEL_FLIGHT_SNAPSHOT_BACKEND", "disabled")
+def test_public_airline_provider_filters_sold_out_and_missing_price():
     payload = {
         "offers": [
             {
@@ -152,7 +156,8 @@ def test_public_airline_provider_filters_sold_out_and_missing_price(monkeypatch)
         base_url="https://example.test",
         cache_ttl_seconds=0,
         allowed_hosts=("example.test",),
-        contract=_test_contract("airline_mu_public_query"),
+        request_schema=_test_schema(),
+        snapshot_backend="disabled",
     )
 
     offers = provider.search_offers(FlightSearchRequest(origin_iata="SHA", destination_iata="TAO", departure_date=date(2026, 5, 21)))
@@ -160,8 +165,7 @@ def test_public_airline_provider_filters_sold_out_and_missing_price(monkeypatch)
     assert offers == []
 
 
-def test_public_airline_provider_rejects_base_url_outside_allowlist(monkeypatch):
-    monkeypatch.setenv("TRAVEL_FLIGHT_SNAPSHOT_BACKEND", "disabled")
+def test_public_airline_provider_rejects_base_url_outside_allowlist():
     provider = OfficialAirlinePublicQueryProvider(
         source_id="airline_mu_public_query",
         source_name="China Eastern Official Public Flight Query",
@@ -169,46 +173,33 @@ def test_public_airline_provider_rejects_base_url_outside_allowlist(monkeypatch)
         client=_FakeClient(_FakeResponse(_public_offer_payload())),
         base_url="https://example.test",
         cache_ttl_seconds=0,
-        contract=_test_contract("airline_mu_public_query"),
+        request_schema=_test_schema(),
+        snapshot_backend="disabled",
     )
 
     with pytest.raises(FlightProviderError, match="outside the source allowlist"):
         provider.search_offers(FlightSearchRequest(origin_iata="SHA", destination_iata="TAO", departure_date=date(2026, 5, 21)))
 
 
-def test_enabled_public_airline_provider_requires_verified_source_contract(monkeypatch):
+def test_enabled_public_airline_provider_requires_code_implementation(monkeypatch):
     assert build_enabled_flight_providers("DEV") == []
 
     monkeypatch.setenv("TRAVEL_SOURCE_AIRLINE_MU_PUBLIC_QUERY_ENABLED", "true")
     monkeypatch.setenv("TRAVEL_SOURCE_AIRLINE_MU_PUBLIC_QUERY_LICENSE_STATUS", "APPROVED")
-    providers = build_enabled_flight_providers("DEV")
+    monkeypatch.setenv("TRAVEL_SOURCE_AIRLINE_MU_PUBLIC_QUERY_QPS_LIMIT", "1")
+    monkeypatch.setenv("TRAVEL_SOURCE_AIRLINE_MU_PUBLIC_QUERY_SEARCH_PATH", "/api/flight/search")
+    reset_data_source_settings_cache()
 
-    assert providers == []
-    result = search_flight_offers_with_enabled_provider_result(
-        FlightSearchRequest(origin_iata="SHA", destination_iata="TAO", departure_date=date(2026, 5, 21)),
-        environment="DEV",
-    )
-    assert result.offers == []
-    assert result.attempted_source_ids == list(AIRLINE_PUBLIC_QUERY_CONTRACTS)
-    assert result.failure_message == "no enabled public airline flight provider"
+    with pytest.raises(DataSourceConfigurationError, match="adapter implementation is missing"):
+        build_enabled_flight_providers("DEV")
 
 
-def test_source_contracts_are_independent_and_fail_closed():
-    contracts = AIRLINE_PUBLIC_QUERY_CONTRACTS
-
-    assert len(contracts) == 10
-    assert len({contract.contract_version for contract in contracts.values()}) == len(contracts)
-    assert set().union(*(set(contract.carrier_codes) for contract in contracts.values())) >= {
-        "MU", "FM", "CZ", "OQ", "SC", "CA", "JD", "8L", "UQ", "FU", "Y8", "ZH", "3U", "9C", "HO", "QW"
-    }
-    assert contracts["airline_mu_public_query"].response_fields_confirmed == ()
-    assert "calendar_lowest_price" in contracts["airline_cz_public_query"].response_fields_confirmed
-    assert "flightOptions" in contracts["airline_sc_public_query"].response_fields_confirmed
-    assert all(contract.blocking_reason for contract in contracts.values())
+def test_official_airline_implementation_registry_is_program_owned_and_fail_closed():
+    assert len(AIRLINE_SOURCE_IDS) == 10
+    assert OFFICIAL_AIRLINE_REQUEST_SCHEMAS == {}
 
 
-def test_public_airline_provider_blocks_captcha_and_rate_limit(monkeypatch):
-    monkeypatch.setenv("TRAVEL_FLIGHT_SNAPSHOT_BACKEND", "disabled")
+def test_public_airline_provider_blocks_captcha_and_rate_limit():
     request = FlightSearchRequest(origin_iata="SHA", destination_iata="TAO", departure_date=date(2026, 5, 21))
     captcha_provider = OfficialAirlinePublicQueryProvider(
         source_id="airline_mu_public_query",
@@ -218,7 +209,8 @@ def test_public_airline_provider_blocks_captcha_and_rate_limit(monkeypatch):
         base_url="https://example.test",
         cache_ttl_seconds=0,
         allowed_hosts=("example.test",),
-        contract=_test_contract("airline_mu_public_query"),
+        request_schema=_test_schema(),
+        snapshot_backend="disabled",
     )
     limited_provider = OfficialAirlinePublicQueryProvider(
         source_id="airline_mu_public_query",
@@ -228,7 +220,8 @@ def test_public_airline_provider_blocks_captcha_and_rate_limit(monkeypatch):
         base_url="https://example.test",
         cache_ttl_seconds=0,
         allowed_hosts=("example.test",),
-        contract=_test_contract("airline_mu_public_query"),
+        request_schema=_test_schema(),
+        snapshot_backend="disabled",
     )
 
     with pytest.raises(FlightProviderError, match="anti-bot challenge detected"):
@@ -237,13 +230,17 @@ def test_public_airline_provider_blocks_captcha_and_rate_limit(monkeypatch):
         limited_provider.search_offers(request)
 
 
-def test_flight_snapshot_is_redacted_and_request_key_is_fingerprinted(monkeypatch, tmp_path):
+def test_flight_snapshot_is_redacted_and_request_key_is_fingerprinted(tmp_path):
     snapshot_path = tmp_path / "flight.sqlite3"
-    monkeypatch.setenv("TRAVEL_FLIGHT_SNAPSHOT_BACKEND", "sqlite")
-    monkeypatch.setenv("TRAVEL_FLIGHT_SNAPSHOT_SQLITE_PATH", str(snapshot_path))
     payload = '{"price":433.70,"token":"secret-token","nested":{"sessionId":"abc"},"url":"https://example.test/search?enc=dynamic-secret&route=SHA-TAO"}'
 
-    save_flight_raw_snapshot(source_id="airline_cz_public_query", request_key="route:SHA:TAO:2026-07-20", payload_text=payload, content_type="application/json")
+    save_flight_raw_snapshot(
+        source_id="airline_cz_public_query",
+        request_key="route:SHA:TAO:2026-07-20",
+        payload_text=payload,
+        content_type="application/json",
+        snapshot_path=snapshot_path,
+    )
 
     with sqlite3.connect(snapshot_path) as conn:
         stored_key, stored_payload = conn.execute("SELECT request_key, payload_text FROM flight_raw_snapshots").fetchone()
@@ -271,8 +268,8 @@ def test_flight_search_result_reports_disabled_provider_when_not_configured():
     )
 
     assert result.offers == []
-    assert result.attempted_source_ids == list(AIRLINE_PUBLIC_QUERY_CONTRACTS)
-    assert result.failure_message == "no enabled public airline flight provider"
+    assert result.attempted_source_ids == list(AIRLINE_SOURCE_IDS)
+    assert result.failure_message == "no enabled official-airline flight provider implementation"
 
 
 def test_price_wrapper_keeps_self_harvest_offer_without_second_provider():
@@ -433,10 +430,8 @@ def _public_offer_payload():
     }
 
 
-def _test_contract(source_id: str):
-    return replace(
-        AIRLINE_PUBLIC_QUERY_CONTRACTS[source_id],
-        contract_version=f"{source_id}-test-v1",
+def _test_schema() -> OfficialAirlineRequestSchema:
+    return OfficialAirlineRequestSchema(
         endpoint_method="GET",
         endpoint_path="/api/flight/search",
         query_parameter_names=(
@@ -447,13 +442,6 @@ def _test_contract(source_id: str):
             ("currency_code", "currency"),
             ("non_stop", "nonStop"),
         ),
-        response_fields_confirmed=("flight", "fare", "cabin", "availability"),
-        anonymous_sample_status="PASS",
-        required_dynamic_material=(),
-        captcha_observed=False,
-        rate_limit_status="VERIFIED",
-        technical_blocker=None,
-        executable=True,
     )
 
 

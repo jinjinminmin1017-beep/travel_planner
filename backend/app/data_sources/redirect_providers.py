@@ -1,16 +1,13 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import timedelta
-from typing import Protocol
+from typing import Protocol, cast
 from urllib.parse import parse_qsl, quote, urlencode, urlparse
 from uuid import uuid4
 
-from app.data_sources.config_loader import has_required_secret, load_data_source_configs
 from app.models.schemas import (
     BookingRedirect,
     BookingRedirectRequest,
-    DataSourceConfig,
     DataSourceMetadata,
     DataSourceType,
     FlightSegment,
@@ -31,12 +28,6 @@ class BookingRedirectProvider(Protocol):
 
     def create_redirect(self, request: BookingRedirectRequest, plan: TravelPlan) -> BookingRedirect:
         ...
-
-
-@dataclass(frozen=True)
-class _ResolvedConfig:
-    config: DataSourceConfig
-    metadata: DataSourceMetadata
 
 
 class Rail12306RedirectProvider:
@@ -134,41 +125,25 @@ def create_booking_redirect(request: BookingRedirectRequest, plan: TravelPlan, e
 
 
 def _select_provider(redirect_type: str, environment: str | None = None) -> BookingRedirectProvider | None:
-    configs = {_item.config.source_id: _item for _item in _enabled_redirect_configs(environment)}
-    if redirect_type == "RAIL_12306" and "rail_12306_redirect" in configs:
-        return Rail12306RedirectProvider(configs["rail_12306_redirect"].metadata)
-    if redirect_type == "AIRLINE" and "airline_official_redirect" in configs:
-        return AirlineOfficialRedirectProvider(configs["airline_official_redirect"].metadata)
+    from app.data_sources.provider_registry import build_enabled_providers
+
+    providers = {
+        cast(BookingRedirectProvider, provider).source_id: cast(BookingRedirectProvider, provider)
+        for provider in build_enabled_providers(
+            {"rail_12306_redirect", "airline_official_redirect", "amap_uri_redirect", "baidu_uri_redirect"},
+            environment,
+        )
+    }
+    if redirect_type == "RAIL_12306" and "rail_12306_redirect" in providers:
+        return providers["rail_12306_redirect"]
+    if redirect_type == "AIRLINE" and "airline_official_redirect" in providers:
+        return providers["airline_official_redirect"]
     if redirect_type in {"MAP_NAVIGATION", "RIDE_HAILING"}:
-        if "amap_uri_redirect" in configs:
-            return AmapUriRedirectProvider(configs["amap_uri_redirect"].metadata)
-        if "baidu_uri_redirect" in configs:
-            return BaiduUriRedirectProvider(configs["baidu_uri_redirect"].metadata)
+        if "amap_uri_redirect" in providers:
+            return providers["amap_uri_redirect"]
+        if "baidu_uri_redirect" in providers:
+            return providers["baidu_uri_redirect"]
     return None
-
-
-def _enabled_redirect_configs(environment: str | None = None) -> list[_ResolvedConfig]:
-    resolved: list[_ResolvedConfig] = []
-    for config in load_data_source_configs(environment):
-        if config.source_id not in {"rail_12306_redirect", "airline_official_redirect", "amap_uri_redirect", "baidu_uri_redirect"}:
-            continue
-        if not config.enabled or config.license_status != "APPROVED" or not has_required_secret(config.source_id):
-            continue
-        resolved.append(_ResolvedConfig(config=config, metadata=_metadata_from_config(config)))
-    return resolved
-
-
-def _metadata_from_config(config: DataSourceConfig) -> DataSourceMetadata:
-    return DataSourceMetadata(
-        source_id=config.source_id,
-        source_name=config.source_name,
-        source_type=config.source_type,
-        authority_level=config.authority_level,
-        license_status=config.license_status,
-        commercial_allowed=config.commercial_allowed,
-        fetched_at=now_timepoint(),
-        cacheable=False,
-    )
 
 
 def _synthetic_metadata(source_id: str, source_name: str, source_type: DataSourceType) -> DataSourceMetadata:

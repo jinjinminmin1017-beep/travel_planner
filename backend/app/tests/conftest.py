@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 
+from app.data_sources.config_loader import reset_data_source_settings_cache
 from app.data_sources.flight_providers import FlightOffer, FlightOfferCabinOption, FlightOfferSegment, FlightProviderSearchResult, flight_data_source_metadata
 from app.data_sources.map_providers import MapRouteEstimate, MapRouteProviderResult, data_source_metadata
 from app.data_sources.rail_providers import RailOffer, RailProviderSearchResult, rail_data_source_metadata
@@ -14,10 +16,22 @@ SHANGHAI_TZ = timezone(timedelta(hours=8))
 
 
 @pytest.fixture(autouse=True)
-def disable_external_llm_for_deterministic_tests(monkeypatch):
-    monkeypatch.setenv("TRAVEL_SOURCE_REAL_LLM_ENABLED", "false")
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    monkeypatch.delenv("LLM_API_KEY", raising=False)
+def deterministic_data_source_env(monkeypatch):
+    env_example = Path(__file__).resolve().parents[3] / ".env.example"
+    for raw_line in env_example.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        if key == "APP_ENV" or key == "TRAVEL_DATA_SOURCE_IDS" or key.startswith("TRAVEL_SOURCE_"):
+            if value:
+                monkeypatch.setenv(key, value)
+            else:
+                monkeypatch.delenv(key, raising=False)
+    monkeypatch.setattr("app.data_sources.config_loader._ENV_LOADED", True)
+    reset_data_source_settings_cache()
+    yield
+    reset_data_source_settings_cache()
 
 
 @pytest.fixture(autouse=True)

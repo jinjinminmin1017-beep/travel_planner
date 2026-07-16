@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import statistics
 import sys
 import time
@@ -12,7 +11,6 @@ from typing import Any
 from uuid import uuid4
 
 import httpx
-from dotenv import load_dotenv
 
 ROOT = Path(__file__).resolve().parents[1]
 BACKEND_DIR = ROOT / "backend"
@@ -21,6 +19,12 @@ LOG_DIR = ROOT / "logs"
 
 sys.path.insert(0, str(BACKEND_DIR))
 
+from app.data_sources.config_loader import (  # noqa: E402
+    RealLlmSourceSettings,
+    load_data_source_settings,
+    load_project_env,
+    secret_value,
+)
 from app.models.schemas import TravelRequest  # noqa: E402
 from app.services.intent_parser import validate_travel_request_semantics  # noqa: E402
 
@@ -40,25 +44,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--sleep-seconds", type=float, default=0.2)
     parser.add_argument("--label", default="baseline")
     return parser.parse_args()
-
-
-def env_value(*names: str, default: str | None = None) -> str:
-    for name in names:
-        value = os.getenv(name)
-        if value:
-            return value
-    if default is not None:
-        return default
-    raise RuntimeError(f"Missing required environment variable: {'/'.join(names)}")
-
-
-def env_int(name: str, default: int) -> int:
-    raw_value = os.getenv(name, str(default))
-    try:
-        value = int(raw_value)
-    except ValueError:
-        return default
-    return value if value >= 1 else default
 
 
 def prompt_text(filename: str) -> str:
@@ -149,13 +134,20 @@ def summarize(records: list[dict[str, Any]]) -> dict[str, Any]:
 
 def main() -> int:
     args = parse_args()
-    load_dotenv(ROOT / ".env")
-    api_key = env_value("OPENAI_API_KEY", "LLM_API_KEY")
-    model = env_value("REAL_LLM_MODEL", default="gpt-4.1-mini")
-    base_url = env_value("REAL_LLM_BASE_URL", default="https://api.openai.com/v1").rstrip("/")
-    timeout_seconds = args.timeout if args.timeout is not None else float(env_value("REAL_LLM_TIMEOUT_SECONDS", default="45"))
-    max_tokens = args.max_tokens if args.max_tokens is not None and args.max_tokens >= 1 else env_int("REAL_LLM_MAX_TOKENS", DEFAULT_REAL_LLM_MAX_TOKENS)
-    thinking_disabled = not args.enable_thinking and os.getenv("REAL_LLM_THINKING_DISABLED", "true").strip().lower() != "false"
+    load_project_env()
+    settings = load_data_source_settings().get("real_llm")
+    if not isinstance(settings, RealLlmSourceSettings) or settings.api_key is None:
+        raise RuntimeError("real_llm: missing key TRAVEL_SOURCE_REAL_LLM_API_KEY")
+    api_key = secret_value(settings.api_key) or ""
+    model = settings.model or "gpt-4.1-mini"
+    base_url = (settings.base_url or "https://api.openai.com/v1").rstrip("/")
+    timeout_seconds = args.timeout if args.timeout is not None else settings.timeout_seconds
+    max_tokens = (
+        args.max_tokens
+        if args.max_tokens is not None and args.max_tokens >= 1
+        else settings.max_tokens or DEFAULT_REAL_LLM_MAX_TOKENS
+    )
+    thinking_disabled = not args.enable_thinking and settings.thinking_disabled
     system_prompt = prompt_text("intent_parser_prompt_v1_0.txt")
     response_format = not args.no_response_format
     current_date = date.today()

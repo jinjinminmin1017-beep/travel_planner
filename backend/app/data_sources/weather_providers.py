@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 import httpx
 
-from app.data_sources.config_loader import load_data_source_configs
 from app.models.schemas import DataSourceMetadata, DataSourceType, now_timepoint
 
 
@@ -56,9 +54,14 @@ class WeatherForecastProvider(Protocol):
 class OpenMeteoForecastProvider:
     source_id = "open_meteo_forecast"
 
-    def __init__(self, client: httpx.Client | None = None, base_url: str | None = None) -> None:
-        self.base_url = (base_url or os.getenv("OPEN_METEO_BASE_URL") or "https://api.open-meteo.com").rstrip("/")
-        self.client = client or httpx.Client(timeout=10.0)
+    def __init__(
+        self,
+        client: httpx.Client | None = None,
+        base_url: str = "https://api.open-meteo.com",
+        timeout_seconds: float = 10.0,
+    ) -> None:
+        self.base_url = base_url.rstrip("/")
+        self.client = client or httpx.Client(timeout=timeout_seconds)
 
     def get_forecast(self, request: WeatherForecastRequest) -> WeatherForecast:
         response = self.client.get(
@@ -122,11 +125,12 @@ def weather_data_source_metadata(source_id: str, source_name: str) -> DataSource
 
 
 def build_enabled_weather_providers(environment: str | None = None) -> list[WeatherForecastProvider]:
-    configs = {config.source_id: config for config in load_data_source_configs(environment)}
-    config = configs.get("open_meteo_forecast")
-    if config and config.enabled and config.license_status == "APPROVED":
-        return [OpenMeteoForecastProvider()]
-    return []
+    from app.data_sources.provider_registry import build_enabled_providers
+
+    return [
+        cast(WeatherForecastProvider, provider)
+        for provider in build_enabled_providers({"open_meteo_forecast"}, environment)
+    ]
 
 
 def get_weather_forecast_with_enabled_provider_result(request: WeatherForecastRequest, environment: str | None = None) -> WeatherProviderSearchResult:

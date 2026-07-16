@@ -32,7 +32,7 @@ Authorization requirements and provider onboarding steps are documented in `docs
 ```powershell
 $env:TRAVEL_SOURCE_AMAP_ROUTE_ENABLED="true"
 $env:TRAVEL_SOURCE_AMAP_ROUTE_LICENSE_STATUS="APPROVED"
-$env:AMAP_WEB_SERVICE_KEY="..."
+$env:TRAVEL_SOURCE_AMAP_ROUTE_API_KEY="..."
 ```
 
 For flight fares, configure one or more approved official airline public query sources such as `airline_mu_public_query`, `airline_cz_public_query`, or `airline_sc_public_query`. Each enabled source must have an approved license status, a source allowlisted `TRAVEL_SOURCE_*_BASE_URL`, a low QPS limit, and no fallback source. The provider only returns offers with a real price and an available or limited cabin signal.

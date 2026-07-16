@@ -4,7 +4,6 @@ import html
 import hashlib
 import json
 import logging
-import os
 import re
 import sqlite3
 import threading
@@ -12,19 +11,13 @@ import time
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol, cast
 from urllib.parse import urlparse
 from uuid import uuid4
 
 import httpx
 
-from app.data_sources.config_loader import load_data_source_configs, public_airline_allowed_hosts
-from app.data_sources.flight_provider_contracts import (
-    AIRLINE_PUBLIC_QUERY_CONTRACTS,
-    AirlinePublicQueryContract,
-    airline_public_query_contract,
-    public_airline_contract_ready,
-)
+from app.data_sources.config_loader import load_data_source_settings
 from app.models.schemas import CacheMetadata, DataSourceMetadata, DataSourceType, Money, money, now_timepoint
 
 logger = logging.getLogger("app.flight")
@@ -34,9 +27,25 @@ class FlightProviderError(RuntimeError):
     pass
 
 
-PUBLIC_AIRLINE_SOURCE_IDS = tuple(AIRLINE_PUBLIC_QUERY_CONTRACTS)
+@dataclass(frozen=True)
+class OfficialAirlineRequestSchema:
+    """Program-owned request mapping for a verified official-airline adapter."""
+
+    endpoint_method: Literal["GET"]
+    endpoint_path: str
+    query_parameter_names: tuple[tuple[str, str], ...]
+
+    def request_params(self, values: dict[str, object]) -> dict[str, object]:
+        mapping = dict(self.query_parameter_names)
+        return {wire_name: values[field_name] for field_name, wire_name in mapping.items() if field_name in values}
+
+
+# This registry intentionally cannot be populated from ENV. No official-airline
+# anonymous fare query currently has a safely replayable and approved schema.
+OFFICIAL_AIRLINE_REQUEST_SCHEMAS: dict[str, OfficialAirlineRequestSchema] = {}
 DEFAULT_AIRLINE_PUBLIC_USER_AGENT = "AITravelPlanner/0.1 public-airline-query"
 DEFAULT_FLIGHT_CACHE_TTL_SECONDS = 60
+DEFAULT_FLIGHT_SNAPSHOT_PATH = Path("logs/flight_harvest.sqlite3")
 SHANGHAI_TZ = timezone(timedelta(hours=8))
 
 _RATE_LIMIT_LOCK = threading.Lock()
@@ -151,20 +160,21 @@ def flight_data_source_metadata(
     cache_ttl_seconds: int | None = None,
     evidence_id: str | None = None,
 ) -> DataSourceMetadata:
+    is_official_airline = source_id.startswith("airline_") and source_id.endswith("_public_query")
     return DataSourceMetadata(
         source_id=source_id,
         source_name=source_name,
         source_type=DataSourceType.FLIGHT,
-        authority_level="A" if source_id in PUBLIC_AIRLINE_SOURCE_IDS else "B",
-        source_priority=10 if source_id in PUBLIC_AIRLINE_SOURCE_IDS else None,
-        source_region="CN" if source_id in PUBLIC_AIRLINE_SOURCE_IDS else None,
+        authority_level="A" if is_official_airline else "B",
+        source_priority=10 if is_official_airline else None,
+        source_region="CN" if is_official_airline else None,
         api_version=f"public_frontend_snapshot:{evidence_id}" if evidence_id else None,
         license_status="APPROVED",
         commercial_allowed=False,
         fetched_at=now_timepoint(),
         cacheable=True,
         cache_ttl_seconds=cache_ttl_seconds,
-        sla_level="PUBLIC_AIRLINE_FRONTEND_QUERY" if source_id in PUBLIC_AIRLINE_SOURCE_IDS else "PUBLIC_READ_ONLY_RATE_LIMITED",
+        sla_level="PUBLIC_AIRLINE_FRONTEND_QUERY" if is_official_airline else "PUBLIC_READ_ONLY_RATE_LIMITED",
         cache_metadata=CacheMetadata(cacheable=True, cache_ttl_seconds=cache_ttl_seconds, cache_hit=cache_hit),
     )
 
@@ -182,24 +192,29 @@ class OfficialAirlinePublicQueryProvider:
         user_agent: str | None = None,
         cache_ttl_seconds: int | None = None,
         allowed_hosts: tuple[str, ...] | None = None,
-        contract: AirlinePublicQueryContract | None = None,
+        request_schema: OfficialAirlineRequestSchema | None = None,
+        timeout_seconds: float = 10.0,
+        min_interval_seconds: float = 1.0,
+        snapshot_backend: Literal["sqlite", "disabled"] = "sqlite",
+        snapshot_sqlite_path: str | Path = DEFAULT_FLIGHT_SNAPSHOT_PATH,
     ) -> None:
         self.source_id = source_id
         self.source_name = source_name
         self.allowed_carriers = tuple(code.upper() for code in allowed_carriers)
-        self.contract = contract or airline_public_query_contract(source_id)
-        self.allowed_hosts = tuple(host.lower().strip(".") for host in (allowed_hosts or public_airline_allowed_hosts(source_id)))
-        self.base_url = (base_url or _source_env(source_id, "BASE_URL") or (self.contract.base_url if self.contract else "")).rstrip("/")
-        self.search_path = search_path or (self.contract.endpoint_path if self.contract else None) or ""
-        self.user_agent = user_agent or _source_env(source_id, "USER_AGENT") or DEFAULT_AIRLINE_PUBLIC_USER_AGENT
-        self.cache_ttl_seconds = cache_ttl_seconds if cache_ttl_seconds is not None else _public_query_cache_ttl_seconds(source_id)
-        self.client = client or httpx.Client(timeout=_provider_timeout_seconds(), follow_redirects=False, headers=self._headers())
+        self.request_schema = request_schema or OFFICIAL_AIRLINE_REQUEST_SCHEMAS.get(source_id)
+        self.allowed_hosts = tuple(host.lower().strip(".") for host in (allowed_hosts or ()))
+        self.base_url = (base_url or "").rstrip("/")
+        self.search_path = search_path or (self.request_schema.endpoint_path if self.request_schema else "")
+        self.user_agent = user_agent or DEFAULT_AIRLINE_PUBLIC_USER_AGENT
+        self.cache_ttl_seconds = cache_ttl_seconds if cache_ttl_seconds is not None else DEFAULT_FLIGHT_CACHE_TTL_SECONDS
+        self.min_interval_seconds = min_interval_seconds
+        self.snapshot_backend = snapshot_backend
+        self.snapshot_sqlite_path = Path(snapshot_sqlite_path)
+        self.client = client or httpx.Client(timeout=timeout_seconds, follow_redirects=False, headers=self._headers())
 
     def search_offers(self, request: FlightSearchRequest) -> list[FlightOffer]:
-        if self.contract is None:
-            raise FlightProviderError(f"{self.source_id} has no source-specific contract")
-        if self.contract.blocking_reason:
-            raise FlightProviderError(f"{self.source_id} contract blocked: {self.contract.blocking_reason}")
+        if self.request_schema is None:
+            raise FlightProviderError(f"{self.source_id} has no verified request implementation")
         if not self.base_url:
             raise FlightProviderError(f"{self.source_id} base URL is not configured")
         if not self.search_path:
@@ -213,7 +228,7 @@ class OfficialAirlinePublicQueryProvider:
             logger.info("flight_public_cache_hit source_id=%s cache_key=%s offer_count=%s", self.source_id, cache_key, len(cached))
             return [_offer_with_cache_metadata(offer, cache_hit=True, ttl_seconds=self.cache_ttl_seconds) for offer in cached]
 
-        _respect_provider_rate_limit(self.source_id)
+        _respect_provider_rate_limit(self.source_id, self.min_interval_seconds)
         endpoint = f"{self.base_url}{self.search_path if self.search_path.startswith('/') else '/' + self.search_path}"
         logger.info(
             "flight_public_search_start source_id=%s origin_iata=%s destination_iata=%s departure_date=%s",
@@ -222,8 +237,8 @@ class OfficialAirlinePublicQueryProvider:
             request.destination_iata,
             request.departure_date.isoformat(),
         )
-        if self.contract.endpoint_method != "GET":
-            raise FlightProviderError(f"{self.source_id} unsupported confirmed method: {self.contract.endpoint_method}")
+        if self.request_schema.endpoint_method != "GET":
+            raise FlightProviderError(f"{self.source_id} unsupported request method")
         request_values: dict[str, object] = {
             "origin_iata": request.origin_iata,
             "destination_iata": request.destination_iata,
@@ -233,7 +248,7 @@ class OfficialAirlinePublicQueryProvider:
         }
         if request.non_stop is not None:
             request_values["non_stop"] = str(request.non_stop).lower()
-        response = self.client.get(endpoint, params=self.contract.request_params(request_values), headers=self._headers())
+        response = self.client.get(endpoint, params=self.request_schema.request_params(request_values), headers=self._headers())
         _raise_for_airline_risk_response(response, source_id=self.source_id)
         response.raise_for_status()
         payload = _response_payload(response)
@@ -242,6 +257,8 @@ class OfficialAirlinePublicQueryProvider:
             request_key=cache_key,
             payload_text=_response_text(response),
             content_type=str(response.headers.get("content-type", "")) if hasattr(response, "headers") else "",
+            snapshot_backend=self.snapshot_backend,
+            snapshot_path=self.snapshot_sqlite_path,
         )
         offers = _parse_public_airline_payload(
             payload,
@@ -256,7 +273,14 @@ class OfficialAirlinePublicQueryProvider:
         offers = offers[: max(1, request.max_results)]
         if offers:
             _cache_set(cache_key, offers, self.cache_ttl_seconds)
-            save_flight_canonical_offers(source_id=self.source_id, request_key=cache_key, offers=offers, ttl_seconds=self.cache_ttl_seconds)
+            save_flight_canonical_offers(
+                source_id=self.source_id,
+                request_key=cache_key,
+                offers=offers,
+                ttl_seconds=self.cache_ttl_seconds,
+                snapshot_backend=self.snapshot_backend,
+                snapshot_path=self.snapshot_sqlite_path,
+            )
             logger.info("flight_public_search_success source_id=%s offer_count=%s", self.source_id, len(offers))
             return offers
         logger.info("flight_public_search_empty source_id=%s", self.source_id)
@@ -272,9 +296,14 @@ class OfficialAirlinePublicQueryProvider:
 class OpenSkyStatesProvider:
     source_id = "opensky_states"
 
-    def __init__(self, client: httpx.Client | None = None, base_url: str | None = None) -> None:
-        self.client = client or httpx.Client(timeout=10.0)
-        self.base_url = (base_url or os.getenv("OPENSKY_BASE_URL") or "https://opensky-network.org").rstrip("/")
+    def __init__(
+        self,
+        client: httpx.Client | None = None,
+        base_url: str = "https://opensky-network.org",
+        timeout_seconds: float = 10.0,
+    ) -> None:
+        self.client = client or httpx.Client(timeout=timeout_seconds)
+        self.base_url = base_url.rstrip("/")
 
     def get_states(self, request: FlightStateRequest) -> list[FlightState]:
         response = self.client.get(
@@ -309,30 +338,21 @@ class OpenSkyStatesProvider:
 
 
 def build_enabled_flight_providers(environment: str | None = None) -> list[FlightOfferProvider]:
-    configs = {config.source_id: config for config in load_data_source_configs(environment)}
-    providers: list[FlightOfferProvider] = []
-    for source_id in PUBLIC_AIRLINE_SOURCE_IDS:
-        config = configs.get(source_id)
-        if not config or not config.enabled or config.license_status != "APPROVED" or not public_airline_contract_ready(source_id):
-            continue
-        contract = AIRLINE_PUBLIC_QUERY_CONTRACTS[source_id]
-        providers.append(
-            OfficialAirlinePublicQueryProvider(
-                source_id=source_id,
-                source_name=contract.source_name,
-                allowed_carriers=contract.carrier_codes,
-                contract=contract,
-            )
-        )
-    return providers
+    from app.data_sources.provider_registry import build_enabled_providers
+
+    return [
+        cast(FlightOfferProvider, provider)
+        for provider in build_enabled_providers({"official_airline_public_query"}, environment)
+    ]
 
 
 def build_enabled_flight_state_providers(environment: str | None = None) -> list[FlightStateProvider]:
-    configs = {config.source_id: config for config in load_data_source_configs(environment)}
-    config = configs.get("opensky_states")
-    if config and config.enabled and config.license_status == "APPROVED":
-        return [OpenSkyStatesProvider()]
-    return []
+    from app.data_sources.provider_registry import build_enabled_providers
+
+    return [
+        cast(FlightStateProvider, provider)
+        for provider in build_enabled_providers({"opensky_states"}, environment)
+    ]
 
 
 def search_flight_offers_with_enabled_provider(request: FlightSearchRequest, environment: str | None = None) -> list[FlightOffer]:
@@ -344,7 +364,15 @@ def search_flight_offers_with_enabled_provider_result(request: FlightSearchReque
     failure_messages: list[str] = []
     providers = build_enabled_flight_providers(environment)
     if not providers:
-        return FlightProviderSearchResult(offers=[], attempted_source_ids=list(PUBLIC_AIRLINE_SOURCE_IDS), failure_message="no enabled public airline flight provider")
+        source_ids = [
+            source.source_id
+            for source in load_data_source_settings(environment).by_adapter("official_airline_public_query")
+        ]
+        return FlightProviderSearchResult(
+            offers=[],
+            attempted_source_ids=source_ids,
+            failure_message="no enabled official-airline flight provider implementation",
+        )
     for provider in providers:
         attempted_source_ids.append(provider.source_id)
         try:
@@ -373,12 +401,21 @@ def get_flight_states_with_enabled_provider(request: FlightStateRequest, environ
     return []
 
 
-def save_flight_raw_snapshot(*, source_id: str, request_key: str, payload_text: str, content_type: str) -> str:
+def save_flight_raw_snapshot(
+    *,
+    source_id: str,
+    request_key: str,
+    payload_text: str,
+    content_type: str,
+    snapshot_backend: Literal["sqlite", "disabled"] = "sqlite",
+    snapshot_path: str | Path = DEFAULT_FLIGHT_SNAPSHOT_PATH,
+) -> str:
     snapshot_id = f"fltraw_{uuid4().hex[:12]}"
-    if _snapshot_backend_disabled():
+    if snapshot_backend == "disabled":
         return snapshot_id
-    _init_flight_snapshot_store()
-    with sqlite3.connect(_flight_snapshot_path()) as conn:
+    path = Path(snapshot_path)
+    _init_flight_snapshot_store(path)
+    with sqlite3.connect(path) as conn:
         conn.execute(
             """
             INSERT INTO flight_raw_snapshots(snapshot_id, source_id, request_key, payload_text, content_type, fetched_at)
@@ -396,13 +433,22 @@ def save_flight_raw_snapshot(*, source_id: str, request_key: str, payload_text: 
     return snapshot_id
 
 
-def save_flight_canonical_offers(*, source_id: str, request_key: str, offers: list[FlightOffer], ttl_seconds: int) -> None:
-    if _snapshot_backend_disabled():
+def save_flight_canonical_offers(
+    *,
+    source_id: str,
+    request_key: str,
+    offers: list[FlightOffer],
+    ttl_seconds: int,
+    snapshot_backend: Literal["sqlite", "disabled"] = "sqlite",
+    snapshot_path: str | Path = DEFAULT_FLIGHT_SNAPSHOT_PATH,
+) -> None:
+    if snapshot_backend == "disabled":
         return
-    _init_flight_snapshot_store()
+    path = Path(snapshot_path)
+    _init_flight_snapshot_store(path)
     indexed_at = datetime.now(timezone.utc)
     expires_at = indexed_at + timedelta(seconds=max(0, ttl_seconds))
-    with sqlite3.connect(_flight_snapshot_path()) as conn:
+    with sqlite3.connect(path) as conn:
         for offer in offers:
             conn.execute(
                 """
@@ -715,10 +761,6 @@ def _raise_for_airline_risk_response(response: Any, *, source_id: str) -> None:
         raise FlightProviderError(f"{source_id} anti-bot challenge detected; automated bypass is forbidden")
 
 
-def _source_env(source_id: str, suffix: str) -> str | None:
-    return os.getenv(f"TRAVEL_SOURCE_{source_id.upper()}_{suffix}")
-
-
 def _base_url_matches_allowed_hosts(base_url: str, allowed_hosts: tuple[str, ...]) -> bool:
     parsed = urlparse(base_url)
     if parsed.scheme.lower() != "https":
@@ -781,16 +823,7 @@ def _offer_with_cache_metadata(offer: FlightOffer, *, cache_hit: bool, ttl_secon
     )
 
 
-def _public_query_cache_ttl_seconds(source_id: str) -> int:
-    return int(_source_env(source_id, "CACHE_TTL_SECONDS") or str(DEFAULT_FLIGHT_CACHE_TTL_SECONDS))
-
-
-def _provider_timeout_seconds() -> float:
-    return float(os.getenv("TRAVEL_PROVIDER_TIMEOUT_SECONDS", "10"))
-
-
-def _respect_provider_rate_limit(source_id: str) -> None:
-    interval_seconds = _provider_min_interval_seconds(source_id)
+def _respect_provider_rate_limit(source_id: str, interval_seconds: float) -> None:
     if interval_seconds <= 0:
         return
     with _RATE_LIMIT_LOCK:
@@ -805,19 +838,7 @@ def _respect_provider_rate_limit(source_id: str) -> None:
         _LAST_PROVIDER_CALL_AT[source_id] = now
 
 
-def _provider_min_interval_seconds(source_id: str) -> float:
-    env_override = _source_env(source_id, "MIN_INTERVAL_SECONDS")
-    if env_override:
-        return _safe_float(env_override, 1.0)
-    configs = {config.source_id: config for config in load_data_source_configs()}
-    config = configs.get(source_id)
-    if config and config.qps_limit > 0:
-        return 1.0 / config.qps_limit
-    return 1.0
-
-
-def _init_flight_snapshot_store() -> None:
-    path = _flight_snapshot_path()
+def _init_flight_snapshot_store(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(path) as conn:
         conn.execute(
@@ -844,14 +865,6 @@ def _init_flight_snapshot_store() -> None:
             )
             """
         )
-
-
-def _flight_snapshot_path() -> Path:
-    return Path(os.getenv("TRAVEL_FLIGHT_SNAPSHOT_SQLITE_PATH", "logs/flight_harvest.sqlite3"))
-
-
-def _snapshot_backend_disabled() -> bool:
-    return os.getenv("TRAVEL_FLIGHT_SNAPSHOT_BACKEND", "sqlite").lower() == "disabled"
 
 
 def _offer_to_json(offer: FlightOffer) -> str:
@@ -922,10 +935,3 @@ def _optional_int(value: Any) -> int | None:
 
 def _normalize_option_token(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "_", value.lower()).strip("_") or "option"
-
-
-def _safe_float(value: str, fallback: float) -> float:
-    try:
-        return max(0.0, float(value))
-    except ValueError:
-        return fallback

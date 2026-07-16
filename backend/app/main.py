@@ -16,6 +16,7 @@ from app.core.context import get_context, new_context
 from app.core.logging import configure_logging
 from app.core.security import evaluate_request_security
 from app.data_sources.config_loader import load_data_source_configs, runtime_statuses
+from app.data_sources.provider_registry import validate_enabled_provider_factories
 from app.data_sources.redirect_providers import create_booking_redirect
 from app.models.schemas import (
     AsyncJob,
@@ -53,6 +54,7 @@ logger = logging.getLogger("app.api")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     load_data_source_configs()
+    validate_enabled_provider_factories()
     init_persistence()
     yield
 

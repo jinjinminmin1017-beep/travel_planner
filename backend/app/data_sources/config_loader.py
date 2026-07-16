@@ -1,39 +1,257 @@
 from __future__ import annotations
 
-import json
 import os
+import re
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal, Mapping
 from urllib.parse import urlparse
 
-from app.data_sources.flight_provider_contracts import AIRLINE_PUBLIC_QUERY_CONTRACTS, public_airline_contract_ready
-from app.models.schemas import DataSourceConfig, DataSourceRuntimeStatus, now_timepoint
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
+
+from app.models.schemas import DataSourceConfig, DataSourceRuntimeStatus, DataSourceType, now_timepoint
 
 BASE_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = BASE_DIR.parents[2]
 _ENV_LOADED = False
+_SETTINGS_SNAPSHOTS: dict[str, "DataSourceSettingsSnapshot"] = {}
 
-REQUIRED_SECRET_ENVS = {
-    "amap_route": ("AMAP_WEB_SERVICE_KEY", "AMAP_API_KEY"),
-    "amap_geocode": ("AMAP_WEB_SERVICE_KEY", "AMAP_API_KEY"),
-    "amap_place_search": ("AMAP_WEB_SERVICE_KEY", "AMAP_API_KEY"),
-    "baidu_map_route": ("BAIDU_MAP_AK", "BAIDU_MAP_API_KEY"),
-    "osrm_route": (),
-    "nominatim_geocode": (),
-    "amap_uri_redirect": (),
-    "baidu_uri_redirect": (),
-    "opensky_states": (),
-    "variflight_status": ("VARIFLIGHT_API_KEY",),
-    "rail_12306_public_query": (),
-    "open_meteo_forecast": (),
-    "airline_official_redirect": (),
-    "rail_12306_redirect": (),
-    "real_llm": ("OPENAI_API_KEY", "LLM_API_KEY"),
+LicenseStatus = Literal["APPROVED", "PENDING_REVIEW", "NOT_APPROVED"]
+AuthorityLevel = Literal["S", "A", "B", "C"]
+EnvironmentName = Literal["DEV", "TEST", "PROD"]
+HttpMethod = Literal["GET", "POST"]
+
+
+class DataSourceConfigurationError(ValueError):
+    """A fail-closed configuration error that never includes secret values."""
+
+
+@dataclass(frozen=True)
+class SourceDefinition:
+    source_name: str
+    source_type: DataSourceType
+    authority_level: AuthorityLevel
+    sla_level: str
+    fallback_source_id: str | None = None
+
+
+SOURCE_DEFINITIONS: dict[str, SourceDefinition] = {
+    "internal_calc": SourceDefinition("Internal Deterministic Calculator", DataSourceType.INTERNAL_CALCULATION, "B", "INTERNAL"),
+    "amap_route": SourceDefinition("AMap Route Planning API", DataSourceType.MAP, "A", "PENDING_REVIEW", "baidu_map_route"),
+    "baidu_map_route": SourceDefinition("Baidu Map Route Planning API", DataSourceType.MAP, "A", "PENDING_REVIEW"),
+    "amap_geocode": SourceDefinition("AMap Address Geocoding API", DataSourceType.MAP, "A", "PENDING_REVIEW", "amap_place_search"),
+    "amap_place_search": SourceDefinition("AMap Place Search API", DataSourceType.MAP, "A", "PENDING_REVIEW", "nominatim_geocode"),
+    "osrm_route": SourceDefinition("OSRM Route Service", DataSourceType.MAP, "B", "PUBLIC_DEMO_READ_ONLY"),
+    "nominatim_geocode": SourceDefinition("Nominatim Search API", DataSourceType.MAP, "B", "PUBLIC_READ_ONLY_RATE_LIMITED"),
+    "amap_uri_redirect": SourceDefinition("AMap URI Redirect", DataSourceType.MAP, "A", "REDIRECT_ONLY", "baidu_uri_redirect"),
+    "baidu_uri_redirect": SourceDefinition("Baidu URI Redirect", DataSourceType.MAP, "A", "PENDING_REVIEW"),
+    "airline_mu_public_query": SourceDefinition("China Eastern Official Public Flight Query", DataSourceType.FLIGHT, "A", "PENDING_REVIEW"),
+    "airline_cz_public_query": SourceDefinition("China Southern Official Public Flight Query", DataSourceType.FLIGHT, "A", "PENDING_REVIEW"),
+    "airline_sc_public_query": SourceDefinition("Shandong Airlines Official Public Flight Query", DataSourceType.FLIGHT, "A", "TECHNICAL_REVIEW"),
+    "airline_ca_public_query": SourceDefinition("Air China Official Public Flight Query", DataSourceType.FLIGHT, "A", "TECHNICAL_REVIEW"),
+    "airline_hna_micro_public_query": SourceDefinition("HNA Micro Official Public Flight Query", DataSourceType.FLIGHT, "A", "TECHNICAL_REVIEW"),
+    "airline_zh_public_query": SourceDefinition("Shenzhen Airlines Official Public Flight Query", DataSourceType.FLIGHT, "A", "TECHNICAL_REVIEW"),
+    "airline_3u_public_query": SourceDefinition("Sichuan Airlines Official Public Flight Query", DataSourceType.FLIGHT, "A", "TECHNICAL_REVIEW"),
+    "airline_9c_public_query": SourceDefinition("Spring Airlines Official Public Flight Query", DataSourceType.FLIGHT, "A", "TECHNICAL_REVIEW"),
+    "airline_ho_public_query": SourceDefinition("Juneyao Airlines Official Public Flight Query", DataSourceType.FLIGHT, "A", "TECHNICAL_REVIEW"),
+    "airline_qw_public_query": SourceDefinition("Qingdao Airlines Official Public Flight Query", DataSourceType.FLIGHT, "A", "TECHNICAL_REVIEW"),
+    "opensky_states": SourceDefinition("OpenSky Network States API", DataSourceType.FLIGHT, "B", "PUBLIC_READ_ONLY_RATE_LIMITED"),
+    "variflight_status": SourceDefinition("VariFlight Flight Status API", DataSourceType.FLIGHT, "A", "PENDING_REVIEW"),
+    "open_meteo_forecast": SourceDefinition("Open-Meteo Forecast API", DataSourceType.WEATHER, "B", "PUBLIC_READ_ONLY_RATE_LIMITED"),
+    "airline_official_redirect": SourceDefinition("Airline Official Redirect", DataSourceType.FLIGHT, "A", "REDIRECT_ONLY"),
+    "rail_12306_redirect": SourceDefinition("12306 Official Redirect", DataSourceType.RAIL, "S", "REDIRECT_ONLY"),
+    "rail_12306_public_query": SourceDefinition("12306 Public Ticket Query", DataSourceType.RAIL, "S", "PUBLIC_ANONYMOUS_QUERY"),
+    "real_llm": SourceDefinition("Real LLM Provider", DataSourceType.LLM, "A", "DISABLED_BY_DEFAULT"),
 }
-REQUIRED_SECRET_ENVS.update({source_id: () for source_id in AIRLINE_PUBLIC_QUERY_CONTRACTS})
-PUBLIC_AIRLINE_QUERY_SOURCE_IDS = frozenset(AIRLINE_PUBLIC_QUERY_CONTRACTS)
-PUBLIC_AIRLINE_ALLOWED_HOSTS = {
-    source_id: contract.allowed_hosts for source_id, contract in AIRLINE_PUBLIC_QUERY_CONTRACTS.items()
+
+
+class DataSourceSettings(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    source_id: str
+    adapter: str
+    source_name: str
+    source_type: DataSourceType
+    authority_level: AuthorityLevel
+    environment: EnvironmentName
+    license_status: LicenseStatus
+    commercial_allowed: bool
+    enabled: bool
+    qps_limit: int = Field(ge=0)
+    sla_level: str
+    fallback_source_id: str | None = None
+    base_url: str | None = None
+    search_path: str | None = None
+    http_method: HttpMethod | None = None
+    allowed_hosts: tuple[str, ...] = ()
+    timeout_seconds: float = Field(default=10.0, gt=0)
+    cache_ttl_seconds: int = Field(default=0, ge=0)
+    min_interval_seconds: float | None = Field(default=None, ge=0)
+    api_key: SecretStr | None = None
+    user_agent: str | None = None
+    carrier_codes: tuple[str, ...] = ()
+    model: str | None = None
+    max_tokens: int | None = Field(default=None, ge=1)
+    thinking_disabled: bool = True
+    snapshot_backend: Literal["sqlite", "disabled"] = "sqlite"
+    snapshot_sqlite_path: str | None = None
+
+    @model_validator(mode="after")
+    def validate_common_enabled_fields(self) -> "DataSourceSettings":
+        if self.enabled and self.qps_limit <= 0:
+            raise ValueError("QPS_LIMIT")
+        if self.commercial_allowed and self.license_status != "APPROVED":
+            raise ValueError("COMMERCIAL_ALLOWED")
+        return self
+
+    def to_runtime_config(self) -> DataSourceConfig:
+        return DataSourceConfig(
+            source_id=self.source_id,
+            source_name=self.source_name,
+            source_type=self.source_type,
+            authority_level=self.authority_level,
+            environment=self.environment,
+            license_status=self.license_status,
+            commercial_allowed=self.commercial_allowed,
+            enabled=self.enabled,
+            qps_limit=self.qps_limit,
+            sla_level=self.sla_level,
+            fallback_source_id=self.fallback_source_id,
+            last_checked_at=None,
+        )
+
+
+class InternalSourceSettings(DataSourceSettings):
+    pass
+
+
+class RedirectSourceSettings(DataSourceSettings):
+    pass
+
+
+class HttpSourceSettings(DataSourceSettings):
+    @model_validator(mode="after")
+    def validate_http_fields(self) -> "HttpSourceSettings":
+        if self.enabled and not self.base_url:
+            raise ValueError("BASE_URL")
+        if self.base_url:
+            parsed = urlparse(self.base_url)
+            if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+                raise ValueError("BASE_URL")
+            if self.allowed_hosts and not _host_matches_allowed_hosts(parsed.hostname, self.allowed_hosts):
+                raise ValueError("BASE_URL/ALLOWED_HOSTS")
+        return self
+
+
+class CredentialedHttpSourceSettings(HttpSourceSettings):
+    @model_validator(mode="after")
+    def validate_api_key(self) -> "CredentialedHttpSourceSettings":
+        if self.enabled and self.api_key is None:
+            raise ValueError("API_KEY")
+        return self
+
+
+class OfficialAirlineSourceSettings(HttpSourceSettings):
+    @model_validator(mode="after")
+    def validate_airline_fields(self) -> "OfficialAirlineSourceSettings":
+        if self.enabled:
+            missing: list[str] = []
+            if not self.search_path:
+                missing.append("SEARCH_PATH")
+            if not self.http_method:
+                missing.append("HTTP_METHOD")
+            if not self.allowed_hosts:
+                missing.append("ALLOWED_HOSTS")
+            if not self.carrier_codes:
+                missing.append("CARRIER_CODES")
+            if missing:
+                raise ValueError("/".join(missing))
+        return self
+
+
+class RailSourceSettings(HttpSourceSettings):
+    @model_validator(mode="after")
+    def validate_rail_fields(self) -> "RailSourceSettings":
+        if self.enabled and not self.user_agent:
+            raise ValueError("USER_AGENT")
+        return self
+
+
+class NominatimSourceSettings(HttpSourceSettings):
+    @model_validator(mode="after")
+    def validate_user_agent(self) -> "NominatimSourceSettings":
+        if self.enabled and not self.user_agent:
+            raise ValueError("USER_AGENT")
+        return self
+
+
+class RealLlmSourceSettings(CredentialedHttpSourceSettings):
+    @model_validator(mode="after")
+    def validate_llm_fields(self) -> "RealLlmSourceSettings":
+        if self.enabled and not self.model:
+            raise ValueError("MODEL")
+        return self
+
+
+ADAPTER_SETTINGS_MODELS: dict[str, type[DataSourceSettings]] = {
+    "internal_calculation": InternalSourceSettings,
+    "amap_route": CredentialedHttpSourceSettings,
+    "baidu_map_route": CredentialedHttpSourceSettings,
+    "amap_geocode": CredentialedHttpSourceSettings,
+    "amap_place_search": CredentialedHttpSourceSettings,
+    "osrm_route": HttpSourceSettings,
+    "nominatim_geocode": NominatimSourceSettings,
+    "amap_uri_redirect": RedirectSourceSettings,
+    "baidu_uri_redirect": RedirectSourceSettings,
+    "official_airline_public_query": OfficialAirlineSourceSettings,
+    "opensky_states": HttpSourceSettings,
+    "variflight_status": CredentialedHttpSourceSettings,
+    "open_meteo_forecast": HttpSourceSettings,
+    "airline_official_redirect": RedirectSourceSettings,
+    "rail_12306_redirect": RedirectSourceSettings,
+    "rail_12306_public_query": RailSourceSettings,
+    "real_llm": RealLlmSourceSettings,
 }
+
+COMMON_ENV_SUFFIXES = frozenset(
+    {
+        "ADAPTER",
+        "ENABLED",
+        "LICENSE_STATUS",
+        "COMMERCIAL_ALLOWED",
+        "QPS_LIMIT",
+        "BASE_URL",
+        "SEARCH_PATH",
+        "HTTP_METHOD",
+        "ALLOWED_HOSTS",
+        "TIMEOUT_SECONDS",
+        "CACHE_TTL_SECONDS",
+        "MIN_INTERVAL_SECONDS",
+        "API_KEY",
+        "USER_AGENT",
+        "CARRIER_CODES",
+        "MODEL",
+        "MAX_TOKENS",
+        "THINKING_DISABLED",
+        "SNAPSHOT_BACKEND",
+        "SNAPSHOT_SQLITE_PATH",
+    }
+)
+REQUIRED_COMMON_SUFFIXES = ("ADAPTER", "ENABLED", "LICENSE_STATUS", "COMMERCIAL_ALLOWED", "QPS_LIMIT")
+
+
+class DataSourceSettingsSnapshot(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    environment: EnvironmentName
+    sources: tuple[DataSourceSettings, ...]
+
+    def get(self, source_id: str) -> DataSourceSettings | None:
+        normalized = source_id.strip().lower()
+        return next((source for source in self.sources if source.source_id == normalized), None)
+
+    def by_adapter(self, adapter: str) -> tuple[DataSourceSettings, ...]:
+        return tuple(source for source in self.sources if source.adapter == adapter)
 
 
 def load_project_env(path: Path | None = None) -> None:
@@ -42,6 +260,7 @@ def load_project_env(path: Path | None = None) -> None:
         return
     env_path = path or PROJECT_ROOT / ".env"
     _ENV_LOADED = True
+    reset_data_source_settings_cache()
     if not env_path.exists():
         return
     for raw_line in env_path.read_text(encoding="utf-8").splitlines():
@@ -55,142 +274,337 @@ def load_project_env(path: Path | None = None) -> None:
             os.environ[key] = value
 
 
-def _env_flag(name: str) -> bool | None:
-    load_project_env()
-    value = os.getenv(name)
-    if value is None:
-        return None
-    return value.strip().lower() in {"1", "true", "yes", "on"}
+def reset_data_source_settings_cache() -> None:
+    _SETTINGS_SNAPSHOTS.clear()
 
 
-def _env_int(name: str) -> int | None:
-    load_project_env()
-    value = os.getenv(name)
-    if value is None or value == "":
-        return None
-    return int(value)
+def load_data_source_settings(
+    environment: str | None = None,
+    *,
+    force_reload: bool = False,
+    environ: Mapping[str, str] | None = None,
+) -> DataSourceSettingsSnapshot:
+    if environ is None:
+        load_project_env()
+        values: Mapping[str, str] = os.environ
+    else:
+        values = environ
+        force_reload = True
+    env = _parse_environment(environment or values.get("APP_ENV", "DEV"))
+    if not force_reload and env in _SETTINGS_SNAPSHOTS:
+        return _SETTINGS_SNAPSHOTS[env]
+    snapshot = _parse_settings_snapshot(values, env)
+    if environ is None:
+        _SETTINGS_SNAPSHOTS[env] = snapshot
+    return snapshot
+
+
+def load_data_source_configs(environment: str | None = None) -> list[DataSourceConfig]:
+    return [source.to_runtime_config() for source in load_data_source_settings(environment).sources]
+
+
+def get_data_source_settings(source_id: str, environment: str | None = None) -> DataSourceSettings | None:
+    return load_data_source_settings(environment).get(source_id)
+
+
+def required_secret_envs(source_id: str) -> tuple[str, ...]:
+    source = get_data_source_settings(source_id)
+    if isinstance(source, (CredentialedHttpSourceSettings, RealLlmSourceSettings)):
+        return (_source_env_name(source_id, "API_KEY"),)
+    return ()
+
+
+def has_required_secret(source_id: str, environment: str | None = None) -> bool:
+    source = get_data_source_settings(source_id, environment)
+    if source is None:
+        return False
+    return not isinstance(source, CredentialedHttpSourceSettings) or source.api_key is not None
+
+
+def secret_value(value: SecretStr | None) -> str | None:
+    return value.get_secret_value() if value is not None else None
+
+
+def validate_production_data_source_configs(configs: list[DataSourceConfig]) -> None:
+    for config in configs:
+        if config.enabled and config.license_status != "APPROVED":
+            raise DataSourceConfigurationError(f"{config.source_id}: LICENSE_STATUS must be APPROVED in PROD")
+        if config.enabled and config.authority_level == "C":
+            raise DataSourceConfigurationError(f"{config.source_id}: AUTHORITY_LEVEL C is not allowed in PROD")
+        if config.enabled and config.commercial_allowed and config.license_status != "APPROVED":
+            raise DataSourceConfigurationError(f"{config.source_id}: COMMERCIAL_ALLOWED requires APPROVED")
+
+
+def runtime_statuses(environment: str | None = None) -> list[DataSourceRuntimeStatus]:
+    snapshot = load_data_source_settings(environment)
+    statuses: list[DataSourceRuntimeStatus] = []
+    for source in snapshot.sources:
+        degraded_reason: str | None = None
+        if source.enabled and source.license_status != "APPROVED":
+            degraded_reason = "data source license is not approved"
+        health_status = "DEGRADED" if degraded_reason else ("OK" if source.enabled else "DISABLED")
+        statuses.append(
+            DataSourceRuntimeStatus(
+                source_id=source.source_id,
+                source_name=source.source_name,
+                source_type=source.source_type,
+                enabled=source.enabled,
+                health_status=health_status,
+                degraded_reason=degraded_reason,
+                authority_level=source.authority_level,
+                license_status=source.license_status,
+                commercial_allowed=source.commercial_allowed,
+                last_success_at=now_timepoint() if source.enabled and not degraded_reason else None,
+                last_failure_at=now_timepoint() if degraded_reason else None,
+                latest_failure=None,
+                average_latency_ms=None,
+                checked_at=now_timepoint(),
+            )
+        )
+    return statuses
+
+
+def registered_source_env_keys(environ: Mapping[str, str]) -> set[str]:
+    source_ids = _parse_source_ids(environ.get("TRAVEL_DATA_SOURCE_IDS"))
+    keys = {"TRAVEL_DATA_SOURCE_IDS"}
+    for source_id in source_ids:
+        for suffix in REQUIRED_COMMON_SUFFIXES:
+            keys.add(_source_env_name(source_id, suffix))
+    return keys
+
+
+def _parse_settings_snapshot(values: Mapping[str, str], environment: EnvironmentName) -> DataSourceSettingsSnapshot:
+    source_ids = _parse_source_ids(values.get("TRAVEL_DATA_SOURCE_IDS"))
+    _validate_unknown_source_keys(values, source_ids)
+    sources = tuple(_parse_source_settings(source_id, values, environment) for source_id in source_ids)
+    if environment == "PROD":
+        validate_production_data_source_configs([source.to_runtime_config() for source in sources])
+    return DataSourceSettingsSnapshot(environment=environment, sources=sources)
+
+
+def _parse_source_settings(
+    source_id: str,
+    values: Mapping[str, str],
+    environment: EnvironmentName,
+) -> DataSourceSettings:
+    definition = SOURCE_DEFINITIONS.get(source_id)
+    if definition is None:
+        raise DataSourceConfigurationError(f"{source_id}: source_id is not registered in code")
+    raw: dict[str, str] = {}
+    for suffix in COMMON_ENV_SUFFIXES:
+        value = values.get(_source_env_name(source_id, suffix))
+        if value is not None and value.strip() != "":
+            raw[suffix] = value.strip()
+    missing = [suffix for suffix in REQUIRED_COMMON_SUFFIXES if suffix not in raw]
+    if missing:
+        raise DataSourceConfigurationError(f"{source_id}: missing keys {', '.join(_source_env_name(source_id, item) for item in missing)}")
+    adapter = raw["ADAPTER"].strip().lower()
+    model = ADAPTER_SETTINGS_MODELS.get(adapter)
+    if model is None:
+        raise DataSourceConfigurationError(f"{source_id}: unknown adapter key {_source_env_name(source_id, 'ADAPTER')}")
+    try:
+        payload = {
+            "source_id": source_id,
+            "adapter": adapter,
+            "source_name": definition.source_name,
+            "source_type": definition.source_type,
+            "authority_level": definition.authority_level,
+            "environment": environment,
+            "license_status": _parse_enum(source_id, "LICENSE_STATUS", raw["LICENSE_STATUS"], {"APPROVED", "PENDING_REVIEW", "NOT_APPROVED"}),
+            "commercial_allowed": _parse_bool(source_id, "COMMERCIAL_ALLOWED", raw["COMMERCIAL_ALLOWED"]),
+            "enabled": _parse_bool(source_id, "ENABLED", raw["ENABLED"]),
+            "qps_limit": _parse_int(source_id, "QPS_LIMIT", raw["QPS_LIMIT"], minimum=0),
+            "sla_level": definition.sla_level,
+            "fallback_source_id": definition.fallback_source_id,
+            "base_url": raw.get("BASE_URL"),
+            "search_path": raw.get("SEARCH_PATH"),
+            "http_method": _optional_enum(source_id, "HTTP_METHOD", raw.get("HTTP_METHOD"), {"GET", "POST"}),
+            "allowed_hosts": _parse_csv(raw.get("ALLOWED_HOSTS"), lower=True),
+            "timeout_seconds": _parse_float(source_id, "TIMEOUT_SECONDS", raw.get("TIMEOUT_SECONDS", "10"), minimum=0.001),
+            "cache_ttl_seconds": _parse_int(source_id, "CACHE_TTL_SECONDS", raw.get("CACHE_TTL_SECONDS", "0"), minimum=0),
+            "min_interval_seconds": _optional_float(source_id, "MIN_INTERVAL_SECONDS", raw.get("MIN_INTERVAL_SECONDS"), minimum=0),
+            "api_key": SecretStr(raw["API_KEY"]) if raw.get("API_KEY") else None,
+            "user_agent": raw.get("USER_AGENT"),
+            "carrier_codes": _parse_csv(raw.get("CARRIER_CODES"), upper=True),
+            "model": raw.get("MODEL"),
+            "max_tokens": _optional_int(source_id, "MAX_TOKENS", raw.get("MAX_TOKENS"), minimum=1),
+            "thinking_disabled": _parse_bool(source_id, "THINKING_DISABLED", raw.get("THINKING_DISABLED", "true")),
+            "snapshot_backend": _parse_enum(source_id, "SNAPSHOT_BACKEND", raw.get("SNAPSHOT_BACKEND", "sqlite"), {"sqlite", "disabled"}),
+            "snapshot_sqlite_path": raw.get("SNAPSHOT_SQLITE_PATH"),
+        }
+        _validate_adapter_payload(source_id, model, payload)
+        return model.model_validate(payload)
+    except DataSourceConfigurationError:
+        raise
+    except Exception as exc:
+        field_names = sorted(
+            {
+                str((item.get("loc") or ("configuration",))[-1]).upper()
+                for item in getattr(exc, "errors", lambda: [])()
+            }
+        )
+        keys = ", ".join(_source_env_name(source_id, field) for field in field_names) if field_names else "source settings"
+        raise DataSourceConfigurationError(f"{source_id}: invalid configuration keys {keys}") from None
+
+
+def _validate_adapter_payload(
+    source_id: str,
+    model: type[DataSourceSettings],
+    payload: dict[str, object],
+) -> None:
+    enabled = bool(payload["enabled"])
+    qps_limit = int(payload["qps_limit"])
+    if enabled and qps_limit <= 0:
+        raise DataSourceConfigurationError(
+            f"{source_id}: invalid integer key {_source_env_name(source_id, 'QPS_LIMIT')}"
+        )
+    if payload["commercial_allowed"] and payload["license_status"] != "APPROVED":
+        raise DataSourceConfigurationError(
+            f"{source_id}: invalid boolean key {_source_env_name(source_id, 'COMMERCIAL_ALLOWED')}"
+        )
+    base_url = payload.get("base_url")
+    allowed_hosts = payload.get("allowed_hosts") or ()
+    if base_url:
+        parsed = urlparse(str(base_url))
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            raise DataSourceConfigurationError(
+                f"{source_id}: invalid URL key {_source_env_name(source_id, 'BASE_URL')}"
+            )
+        if allowed_hosts and not _host_matches_allowed_hosts(parsed.hostname, allowed_hosts):
+            raise DataSourceConfigurationError(
+                f"{source_id}: invalid host keys {_source_env_name(source_id, 'BASE_URL')}, "
+                f"{_source_env_name(source_id, 'ALLOWED_HOSTS')}"
+            )
+    if not enabled:
+        return
+    missing: list[str] = []
+    if issubclass(model, HttpSourceSettings) and not base_url:
+        missing.append("BASE_URL")
+    if issubclass(model, CredentialedHttpSourceSettings) and payload.get("api_key") is None:
+        missing.append("API_KEY")
+    if issubclass(model, (NominatimSourceSettings, RailSourceSettings)) and not payload.get("user_agent"):
+        missing.append("USER_AGENT")
+    if issubclass(model, OfficialAirlineSourceSettings):
+        for suffix, field in (
+            ("SEARCH_PATH", "search_path"),
+            ("HTTP_METHOD", "http_method"),
+            ("ALLOWED_HOSTS", "allowed_hosts"),
+            ("CARRIER_CODES", "carrier_codes"),
+        ):
+            if not payload.get(field):
+                missing.append(suffix)
+    if issubclass(model, RealLlmSourceSettings) and not payload.get("model"):
+        missing.append("MODEL")
+    if missing:
+        raise DataSourceConfigurationError(
+            f"{source_id}: missing keys {', '.join(_source_env_name(source_id, item) for item in missing)}"
+        )
+
+
+def _parse_source_ids(value: str | None) -> tuple[str, ...]:
+    if not value or not value.strip():
+        raise DataSourceConfigurationError("missing key TRAVEL_DATA_SOURCE_IDS")
+    items = tuple(item.strip().lower() for item in value.split(",") if item.strip())
+    if not items:
+        raise DataSourceConfigurationError("TRAVEL_DATA_SOURCE_IDS is empty")
+    duplicates = sorted({item for item in items if items.count(item) > 1})
+    if duplicates:
+        raise DataSourceConfigurationError(f"TRAVEL_DATA_SOURCE_IDS contains duplicate source_id keys: {', '.join(duplicates)}")
+    invalid = [item for item in items if not re.fullmatch(r"[a-z0-9]+(?:_[a-z0-9]+)*", item)]
+    if invalid:
+        raise DataSourceConfigurationError("TRAVEL_DATA_SOURCE_IDS contains invalid source_id keys")
+    return items
+
+
+def _validate_unknown_source_keys(values: Mapping[str, str], source_ids: tuple[str, ...]) -> None:
+    prefixes = {source_id: f"TRAVEL_SOURCE_{source_id.upper()}_" for source_id in source_ids}
+    unknown: list[str] = []
+    for key in values:
+        if not key.startswith("TRAVEL_SOURCE_"):
+            continue
+        match = next(((source_id, prefix) for source_id, prefix in prefixes.items() if key.startswith(prefix)), None)
+        if match is None:
+            unknown.append(key)
+            continue
+        suffix = key[len(match[1]) :]
+        if suffix not in COMMON_ENV_SUFFIXES:
+            unknown.append(key)
+    if unknown:
+        raise DataSourceConfigurationError(f"unknown data source configuration keys: {', '.join(sorted(unknown))}")
 
 
 def _source_env_name(source_id: str, suffix: str) -> str:
     return f"TRAVEL_SOURCE_{source_id.upper()}_{suffix}"
 
 
-def _apply_env_overrides(config: DataSourceConfig) -> DataSourceConfig:
-    updates = {}
-    enabled = _env_flag(_source_env_name(config.source_id, "ENABLED"))
-    if enabled is not None:
-        updates["enabled"] = enabled
-    qps_limit = _env_int(_source_env_name(config.source_id, "QPS_LIMIT"))
-    if qps_limit is not None:
-        updates["qps_limit"] = qps_limit
-    license_status = os.getenv(_source_env_name(config.source_id, "LICENSE_STATUS"))
-    if license_status:
-        updates["license_status"] = license_status
-        if config.source_id in PUBLIC_AIRLINE_QUERY_SOURCE_IDS and license_status == "APPROVED" and enabled is None:
-            updates["enabled"] = True
-            if qps_limit is None and config.qps_limit <= 0:
-                updates["qps_limit"] = 1
-    commercial_allowed = _env_flag(_source_env_name(config.source_id, "COMMERCIAL_ALLOWED"))
-    if commercial_allowed is not None:
-        updates["commercial_allowed"] = commercial_allowed
-    return config.model_copy(update=updates) if updates else config
+def _parse_environment(value: str) -> EnvironmentName:
+    normalized = value.strip().upper()
+    if normalized not in {"DEV", "TEST", "PROD"}:
+        raise DataSourceConfigurationError("invalid key APP_ENV")
+    return normalized  # type: ignore[return-value]
 
 
-def required_secret_envs(source_id: str) -> tuple[str, ...]:
-    return REQUIRED_SECRET_ENVS.get(source_id, ())
-
-
-def public_airline_allowed_hosts(source_id: str) -> tuple[str, ...]:
-    return PUBLIC_AIRLINE_ALLOWED_HOSTS.get(source_id, ())
-
-
-def public_airline_base_url_allowed(source_id: str, base_url: str | None) -> bool:
-    if not base_url:
+def _parse_bool(source_id: str, suffix: str, value: str) -> bool:
+    normalized = value.strip().lower()
+    if normalized == "true":
+        return True
+    if normalized == "false":
         return False
-    parsed = urlparse(base_url)
-    if parsed.scheme.lower() != "https":
-        return False
-    hostname = (parsed.hostname or "").lower().strip(".")
-    return _host_matches_allowed_hosts(hostname, public_airline_allowed_hosts(source_id))
+    raise DataSourceConfigurationError(f"{source_id}: invalid boolean key {_source_env_name(source_id, suffix)}")
+
+
+def _parse_int(source_id: str, suffix: str, value: str, *, minimum: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        raise DataSourceConfigurationError(f"{source_id}: invalid integer key {_source_env_name(source_id, suffix)}") from None
+    if parsed < minimum:
+        raise DataSourceConfigurationError(f"{source_id}: invalid integer key {_source_env_name(source_id, suffix)}")
+    return parsed
+
+
+def _optional_int(source_id: str, suffix: str, value: str | None, *, minimum: int) -> int | None:
+    return None if value is None else _parse_int(source_id, suffix, value, minimum=minimum)
+
+
+def _parse_float(source_id: str, suffix: str, value: str, *, minimum: float) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        raise DataSourceConfigurationError(f"{source_id}: invalid number key {_source_env_name(source_id, suffix)}") from None
+    if parsed < minimum:
+        raise DataSourceConfigurationError(f"{source_id}: invalid number key {_source_env_name(source_id, suffix)}")
+    return parsed
+
+
+def _optional_float(source_id: str, suffix: str, value: str | None, *, minimum: float) -> float | None:
+    return None if value is None else _parse_float(source_id, suffix, value, minimum=minimum)
+
+
+def _parse_enum(source_id: str, suffix: str, value: str, allowed: set[str]) -> str:
+    normalized = value.strip().upper() if all(item == item.upper() for item in allowed) else value.strip().lower()
+    if normalized not in allowed:
+        raise DataSourceConfigurationError(f"{source_id}: invalid enum key {_source_env_name(source_id, suffix)}")
+    return normalized
+
+
+def _optional_enum(source_id: str, suffix: str, value: str | None, allowed: set[str]) -> str | None:
+    return None if value is None else _parse_enum(source_id, suffix, value, allowed)
+
+
+def _parse_csv(value: str | None, *, lower: bool = False, upper: bool = False) -> tuple[str, ...]:
+    items = tuple(item.strip() for item in (value or "").split(",") if item.strip())
+    if lower:
+        return tuple(item.lower().strip(".") for item in items)
+    if upper:
+        return tuple(item.upper() for item in items)
+    return items
 
 
 def _host_matches_allowed_hosts(hostname: str, allowed_hosts: tuple[str, ...]) -> bool:
-    for allowed_host in allowed_hosts:
-        normalized = allowed_host.lower().strip(".")
-        if hostname == normalized or hostname.endswith(f".{normalized}"):
-            return True
-    return False
-
-
-def has_required_secret(source_id: str) -> bool:
-    load_project_env()
-    secrets = required_secret_envs(source_id)
-    return not secrets or any(os.getenv(name) for name in secrets)
-
-
-def load_data_source_configs(environment: str | None = None) -> list[DataSourceConfig]:
-    load_project_env()
-    env = (environment or os.getenv("APP_ENV", "DEV")).upper()
-    path = BASE_DIR / f"data_sources.{env.lower()}.json"
-    if not path.exists():
-        path = BASE_DIR / "data_sources.dev.json"
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    configs = [_apply_env_overrides(DataSourceConfig.model_validate(item)) for item in payload]
-    if env == "PROD":
-        validate_production_data_source_configs(configs)
-    return configs
-
-
-def validate_production_data_source_configs(configs: list[DataSourceConfig]) -> None:
-    for config in configs:
-        if config.enabled and config.license_status != "APPROVED":
-            raise ValueError(f"data source {config.source_id} is enabled but not production approved")
-        if config.enabled and config.authority_level == "C":
-            raise ValueError(f"data source {config.source_id} is enabled with unsupported production authority level C")
-        if config.enabled and config.commercial_allowed and config.license_status != "APPROVED":
-            raise ValueError(f"data source {config.source_id} allows commercial usage without approval")
-
-
-def runtime_statuses(environment: str | None = None) -> list[DataSourceRuntimeStatus]:
-    statuses: list[DataSourceRuntimeStatus] = []
-    for config in load_data_source_configs(environment):
-        missing_secret = config.enabled and not has_required_secret(config.source_id)
-        contract = AIRLINE_PUBLIC_QUERY_CONTRACTS.get(config.source_id)
-        public_airline_base_url = os.getenv(_source_env_name(config.source_id, "BASE_URL")) or (contract.base_url if contract else None)
-        missing_public_airline_base_url = config.enabled and config.source_id in PUBLIC_AIRLINE_QUERY_SOURCE_IDS and not public_airline_base_url
-        invalid_public_airline_base_url = config.enabled and config.source_id in PUBLIC_AIRLINE_QUERY_SOURCE_IDS and bool(public_airline_base_url) and not public_airline_base_url_allowed(config.source_id, public_airline_base_url)
-        unverified_public_airline_contract = config.enabled and config.source_id in PUBLIC_AIRLINE_QUERY_SOURCE_IDS and not public_airline_contract_ready(config.source_id)
-        pending_license = config.enabled and config.license_status != "APPROVED"
-        degraded = missing_secret or pending_license or unverified_public_airline_contract or missing_public_airline_base_url or invalid_public_airline_base_url
-        if missing_secret:
-            degraded_reason = "required API credential environment variable is missing"
-        elif invalid_public_airline_base_url:
-            degraded_reason = "official airline public query base URL is outside the source allowlist"
-        elif unverified_public_airline_contract:
-            degraded_reason = "official airline source-specific technical contract is not verified"
-        elif pending_license:
-            degraded_reason = "data source license is not approved"
-        elif missing_public_airline_base_url:
-            degraded_reason = "official airline public query base URL is missing"
-        else:
-            degraded_reason = None
-        health_status = "DEGRADED" if degraded else ("OK" if config.enabled else "DISABLED")
-        statuses.append(
-            DataSourceRuntimeStatus(
-                source_id=config.source_id,
-                source_name=config.source_name,
-                source_type=config.source_type,
-                enabled=config.enabled,
-                health_status=health_status,
-                degraded_reason=degraded_reason,
-                authority_level=config.authority_level,
-                license_status=config.license_status,
-                commercial_allowed=config.commercial_allowed,
-                last_success_at=now_timepoint() if config.enabled and not degraded else None,
-                last_failure_at=now_timepoint() if degraded else None,
-                latest_failure=None,
-                average_latency_ms=12,
-                checked_at=now_timepoint(),
-            )
-        )
-    return statuses
+    normalized_hostname = hostname.lower().strip(".")
+    return any(
+        normalized_hostname == allowed_host.lower().strip(".")
+        or normalized_hostname.endswith(f".{allowed_host.lower().strip('.')}")
+        for allowed_host in allowed_hosts
+    )

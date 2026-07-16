@@ -33,7 +33,7 @@ def test_product_capability_matrix_documents_fixture_and_route_boundaries():
     for required_text in [
         "backend/app/tests/conftest.py",
         "backend/app/tests/test_no_simulated_fallback.py",
-        "backend/app/data_sources/data_sources.test.json",
+        ".env.example",
         "不得作为运行时 fallback",
         "上海嘉定南翔格林公馆",
         "青岛金水假日酒店",

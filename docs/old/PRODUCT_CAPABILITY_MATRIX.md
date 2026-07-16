@@ -85,7 +85,7 @@
 |---|---|---|---|
 | `backend/app/tests/conftest.py` | 自动化专用 | 用 `monkeypatch` 注入 fake flight/map/rail provider，保证 pytest 可稳定覆盖规划路径。 | 不得复制到业务路径；不得作为 Provider 失败后的运行时 fallback。 |
 | `backend/app/tests/test_no_simulated_fallback.py` | 验收通过 | 验证地图 Provider 空结果时会标记 `SourceFailure` 并仅以 `internal_calc` 做明示降级。 | 不允许静默伪造真实地图路线。 |
-| `backend/app/data_sources/data_sources.test.json` | 自动化专用 | 为测试环境固定 DataSourceConfig 行为。 | 不代表生产授权状态，不得被产品文案解读为真实可售能力。 |
+| `.env.example` | 自动化专用 | 由测试夹具注入安全默认的 ENV-only DataSourceSettings。 | 不代表生产授权状态，不得被产品文案解读为真实可售能力。 |
 | `backend/app/tests/*_providers.py` | 自动化专用 | 使用 fake HTTP client 映射 Provider 响应结构。 | 只验证 Adapter 解析逻辑，不证明外部服务实时可用。 |
 | `frontend/ui-preview.html` 与 `frontend/ui-preview-screenshot.png` | 自动化专用 | App 输入、规划中、结果详情、数据来源、错误和空结果状态的视觉预览。 | 不作为运行时数据来源，不代表真实规划结果或外部平台实时可用。 |
 

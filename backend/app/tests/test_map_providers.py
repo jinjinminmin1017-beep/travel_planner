@@ -3,6 +3,7 @@ from decimal import Decimal
 import pytest
 
 from app.core.context import RequestContext
+from app.data_sources.config_loader import DataSourceConfigurationError, reset_data_source_settings_cache
 from app.data_sources.map_providers import (
     AmapRouteProvider,
     BaiduDirectionLiteProvider,
@@ -220,26 +221,28 @@ def test_osrm_route_maps_real_response():
 
 
 def test_enabled_map_provider_requires_flag_approved_license_and_key(monkeypatch):
-    monkeypatch.delenv("TRAVEL_SOURCE_AMAP_ROUTE_ENABLED", raising=False)
-    monkeypatch.delenv("TRAVEL_SOURCE_AMAP_ROUTE_LICENSE_STATUS", raising=False)
-    monkeypatch.delenv("AMAP_WEB_SERVICE_KEY", raising=False)
-    monkeypatch.delenv("TRAVEL_SOURCE_BAIDU_MAP_ROUTE_ENABLED", raising=False)
-    monkeypatch.delenv("TRAVEL_SOURCE_BAIDU_MAP_ROUTE_LICENSE_STATUS", raising=False)
-    monkeypatch.delenv("BAIDU_MAP_AK", raising=False)
-
     assert [provider.source_id for provider in build_enabled_map_providers("DEV")] == ["osrm_route"]
 
     monkeypatch.setenv("TRAVEL_SOURCE_AMAP_ROUTE_ENABLED", "true")
-    monkeypatch.setenv("AMAP_WEB_SERVICE_KEY", "test-key")
+    monkeypatch.setenv("TRAVEL_SOURCE_AMAP_ROUTE_QPS_LIMIT", "1")
+    reset_data_source_settings_cache()
+    with pytest.raises(DataSourceConfigurationError):
+        build_enabled_map_providers("DEV")
+
+    monkeypatch.setenv("TRAVEL_SOURCE_AMAP_ROUTE_API_KEY", "test-key")
+    reset_data_source_settings_cache()
     assert [provider.source_id for provider in build_enabled_map_providers("DEV")] == ["osrm_route"]
 
     monkeypatch.setenv("TRAVEL_SOURCE_AMAP_ROUTE_LICENSE_STATUS", "APPROVED")
+    reset_data_source_settings_cache()
     providers = build_enabled_map_providers("DEV")
     assert [provider.source_id for provider in providers] == ["amap_route", "osrm_route"]
 
     monkeypatch.setenv("TRAVEL_SOURCE_BAIDU_MAP_ROUTE_ENABLED", "true")
     monkeypatch.setenv("TRAVEL_SOURCE_BAIDU_MAP_ROUTE_LICENSE_STATUS", "APPROVED")
-    monkeypatch.setenv("BAIDU_MAP_AK", "test-ak")
+    monkeypatch.setenv("TRAVEL_SOURCE_BAIDU_MAP_ROUTE_QPS_LIMIT", "1")
+    monkeypatch.setenv("TRAVEL_SOURCE_BAIDU_MAP_ROUTE_API_KEY", "test-ak")
+    reset_data_source_settings_cache()
     providers = build_enabled_map_providers("DEV")
     assert [provider.source_id for provider in providers] == ["amap_route", "baidu_map_route", "osrm_route"]
 
