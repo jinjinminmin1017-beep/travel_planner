@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 
 import pytest
 
@@ -19,17 +20,6 @@ from scripts.check_real_api_config import validate_env_example_sync, validate_pu
 PLANNED_REAL_SOURCE_IDS = {
     "amap_route",
     "baidu_map_route",
-    "airline_mu_public_query",
-    "airline_cz_public_query",
-    "airline_sc_public_query",
-    "airline_ca_public_query",
-    "airline_hna_micro_public_query",
-    "airline_zh_public_query",
-    "airline_3u_public_query",
-    "airline_9c_public_query",
-    "airline_ho_public_query",
-    "airline_qw_public_query",
-    "variflight_status",
     "real_llm",
 }
 DEFAULT_ENABLED_REAL_SOURCE_IDS = {
@@ -130,6 +120,21 @@ def test_unknown_source_key_fails_without_echoing_value(monkeypatch):
     assert "super-secret" not in str(error.value)
 
 
+@pytest.mark.parametrize(
+    "key",
+    [
+        "TRAVEL_SOURCE_INTERNAL_CALC_QPS_LIMIT",
+        "TRAVEL_SOURCE_OSRM_ROUTE_CACHE_TTL_SECONDS",
+    ],
+)
+def test_behaviorally_ineffective_adapter_keys_are_rejected(monkeypatch, key):
+    monkeypatch.setenv(key, "1")
+    _reload()
+
+    with pytest.raises(DataSourceConfigurationError, match="unsupported keys"):
+        load_data_source_settings()
+
+
 def test_duplicate_source_id_and_unknown_adapter_fail(monkeypatch):
     registered = os.environ["TRAVEL_DATA_SOURCE_IDS"]
     monkeypatch.setenv("TRAVEL_DATA_SOURCE_IDS", f"{registered},internal_calc")
@@ -202,6 +207,20 @@ def test_project_env_loader_does_not_override_existing_values(tmp_path, monkeypa
 def test_env_example_and_adapter_registry_are_consistent():
     assert validate_env_example_sync() == []
     assert set(ADAPTER_REGISTRY) == {source.adapter for source in load_data_source_settings().sources}
+
+
+def test_env_example_contains_only_behaviorally_effective_provider_keys():
+    env_example = (Path(__file__).resolve().parents[3] / ".env.example").read_text(encoding="utf-8")
+    cache_ttl_keys = [
+        line.split("=", 1)[0]
+        for line in env_example.splitlines()
+        if line.startswith("TRAVEL_SOURCE_") and "_CACHE_TTL_SECONDS=" in line
+    ]
+
+    assert "_HTTP_METHOD=" not in env_example
+    assert "AIRLINE_MU_PUBLIC_QUERY" not in env_example
+    assert "VARIFLIGHT_STATUS" not in env_example
+    assert cache_ttl_keys == ["TRAVEL_SOURCE_RAIL_12306_PUBLIC_QUERY_CACHE_TTL_SECONDS"]
 
 
 def test_public_provider_config_and_factories_are_ready_without_secrets():

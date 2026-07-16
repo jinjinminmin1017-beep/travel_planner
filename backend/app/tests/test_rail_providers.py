@@ -2,7 +2,6 @@ from datetime import date
 
 import pytest
 
-from app.data_sources import rail_providers
 from app.data_sources.rail_providers import (
     Official12306RailProvider,
     RailProviderError,
@@ -125,36 +124,6 @@ def test_12306_public_query_filters_no_ticket_seats():
                 departure_date=date(2026, 7, 10),
             )
         )
-
-
-def test_rail_offer_search_respects_12306_public_query_qps_between_calls(monkeypatch):
-    class _EmptyRailProvider:
-        source_id = "rail_12306_public_query"
-
-        def search_offers(self, request):
-            return []
-
-    fake_time = {"now": 100.0}
-    slept: list[float] = []
-
-    def fake_sleep(seconds):
-        slept.append(seconds)
-        fake_time["now"] += seconds
-
-    monkeypatch.setattr("app.data_sources.rail_providers.build_enabled_rail_providers", lambda environment=None: [_EmptyRailProvider()])
-    monkeypatch.setattr(rail_providers, "_monotonic", lambda: fake_time["now"])
-    monkeypatch.setattr(rail_providers, "_sleep", fake_sleep)
-    monkeypatch.setenv("TRAVEL_SOURCE_RAIL_12306_PUBLIC_QUERY_MIN_INTERVAL_SECONDS", "1")
-    rail_providers._LAST_PROVIDER_CALL_AT.clear()
-
-    request = RailSearchRequest(train_number="", origin_station="上海虹桥", destination_station="北京南", departure_date=date(2026, 7, 10))
-    first = search_rail_offers_with_enabled_provider_result(request)
-    fake_time["now"] += 0.2
-    second = search_rail_offers_with_enabled_provider_result(request)
-
-    assert first.offers == []
-    assert second.offers == []
-    assert [round(value, 2) for value in slept] == [0.8]
 
 
 def test_planner_blocks_rail_plans_when_12306_public_query_is_empty(monkeypatch):

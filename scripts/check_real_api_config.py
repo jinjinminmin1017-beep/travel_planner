@@ -14,19 +14,13 @@ BACKEND = ROOT / "backend"
 sys.path.insert(0, str(BACKEND))
 
 from app.data_sources.config_loader import (  # noqa: E402
-    CredentialedHttpSourceSettings,
     DataSourceConfigurationError,
-    HttpSourceSettings,
-    NominatimSourceSettings,
-    OfficialAirlineSourceSettings,
-    RailSourceSettings,
-    RealLlmSourceSettings,
+    expected_source_env_suffixes,
     load_data_source_configs,
     load_data_source_settings,
     required_secret_envs,
     runtime_statuses,
 )
-from app.data_sources.flight_providers import OFFICIAL_AIRLINE_REQUEST_SCHEMAS  # noqa: E402
 from app.data_sources.provider_registry import ADAPTER_REGISTRY  # noqa: E402
 
 MAP_PROVIDER_SOURCE_IDS = ("amap_route", "baidu_map_route", "osrm_route")
@@ -69,29 +63,7 @@ def validate_env_example_sync() -> list[str]:
     if unused_factories:
         failures.append(f"adapter 注册表存在未使用项：{', '.join(unused_factories)}")
     for source in snapshot.sources:
-        required_suffixes = {"ADAPTER", "ENABLED", "LICENSE_STATUS", "COMMERCIAL_ALLOWED", "QPS_LIMIT"}
-        if isinstance(source, HttpSourceSettings):
-            required_suffixes.update({"BASE_URL", "ALLOWED_HOSTS", "TIMEOUT_SECONDS", "CACHE_TTL_SECONDS"})
-        if isinstance(source, CredentialedHttpSourceSettings):
-            required_suffixes.add("API_KEY")
-        if isinstance(source, (NominatimSourceSettings, RailSourceSettings)):
-            required_suffixes.add("USER_AGENT")
-        if isinstance(source, OfficialAirlineSourceSettings):
-            required_suffixes.update(
-                {
-                    "SEARCH_PATH",
-                    "HTTP_METHOD",
-                    "CARRIER_CODES",
-                    "USER_AGENT",
-                    "SNAPSHOT_BACKEND",
-                    "SNAPSHOT_SQLITE_PATH",
-                }
-            )
-        if isinstance(source, RailSourceSettings):
-            required_suffixes.add("MIN_INTERVAL_SECONDS")
-        if isinstance(source, RealLlmSourceSettings):
-            required_suffixes.update({"MODEL", "MAX_TOKENS", "THINKING_DISABLED"})
-        for suffix in sorted(required_suffixes):
+        for suffix in sorted(expected_source_env_suffixes(source.adapter)):
             key = f"TRAVEL_SOURCE_{source.source_id.upper()}_{suffix}"
             if key not in values:
                 failures.append(f".env.example 缺少 {key}")
@@ -102,13 +74,6 @@ def _configs_and_statuses():
     return (
         {item.source_id: item for item in load_data_source_configs()},
         {item.source_id: item for item in runtime_statuses()},
-    )
-
-
-def _official_airline_source_ids() -> tuple[str, ...]:
-    return tuple(
-        source.source_id
-        for source in load_data_source_settings().by_adapter("official_airline_public_query")
     )
 
 
@@ -151,20 +116,10 @@ def validate_public_tier() -> list[str]:
 
 
 def validate_secret_tier(selected_sources: list[str]) -> list[str]:
-    _, statuses = _configs_and_statuses()
     failures: list[str] = []
     if "flight" not in selected_sources:
         return failures
-    for source_id in _official_airline_source_ids():
-        status = statuses[source_id]
-        if not status.enabled:
-            failures.append(f"{source_id}: 未启用")
-        elif status.license_status != "APPROVED":
-            failures.append(f"{source_id}: 许可未批准")
-        elif source_id not in OFFICIAL_AIRLINE_REQUEST_SCHEMAS:
-            failures.append(f"{source_id}: 代码中没有已验证请求实现")
-        elif status.health_status != "OK":
-            failures.append(f"{source_id}: 状态不是 OK（{status.degraded_reason or status.health_status}）")
+    failures.append("flight: 当前没有已实现并获准登记的官方航司查询 Provider")
     return failures
 
 

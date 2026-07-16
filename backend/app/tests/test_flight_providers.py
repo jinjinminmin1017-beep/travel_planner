@@ -3,7 +3,7 @@ from datetime import date, datetime
 
 import pytest
 
-from app.data_sources.config_loader import DataSourceConfigurationError, reset_data_source_settings_cache
+from app.data_sources.config_loader import DataSourceConfigurationError, load_data_source_settings, reset_data_source_settings_cache
 from app.data_sources.flight_providers import (
     OFFICIAL_AIRLINE_REQUEST_SCHEMAS,
     FlightOffer,
@@ -25,20 +25,6 @@ from app.data_sources.flight_providers import (
 )
 from app.models.schemas import PlanType, RecommendationType, TravelHardConstraints, TravelRequest, TravelSoftPreferences, money
 from app.services.planner import build_plans
-
-
-AIRLINE_SOURCE_IDS = (
-    "airline_mu_public_query",
-    "airline_cz_public_query",
-    "airline_sc_public_query",
-    "airline_ca_public_query",
-    "airline_hna_micro_public_query",
-    "airline_zh_public_query",
-    "airline_3u_public_query",
-    "airline_9c_public_query",
-    "airline_ho_public_query",
-    "airline_qw_public_query",
-)
 
 
 class _FakeResponse:
@@ -181,7 +167,7 @@ def test_public_airline_provider_rejects_base_url_outside_allowlist():
         provider.search_offers(FlightSearchRequest(origin_iata="SHA", destination_iata="TAO", departure_date=date(2026, 5, 21)))
 
 
-def test_enabled_public_airline_provider_requires_code_implementation(monkeypatch):
+def test_unimplemented_public_airline_cannot_be_enabled_through_env(monkeypatch):
     assert build_enabled_flight_providers("DEV") == []
 
     monkeypatch.setenv("TRAVEL_SOURCE_AIRLINE_MU_PUBLIC_QUERY_ENABLED", "true")
@@ -190,13 +176,13 @@ def test_enabled_public_airline_provider_requires_code_implementation(monkeypatc
     monkeypatch.setenv("TRAVEL_SOURCE_AIRLINE_MU_PUBLIC_QUERY_SEARCH_PATH", "/api/flight/search")
     reset_data_source_settings_cache()
 
-    with pytest.raises(DataSourceConfigurationError, match="adapter implementation is missing"):
-        build_enabled_flight_providers("DEV")
+    with pytest.raises(DataSourceConfigurationError, match="unknown data source configuration keys"):
+        load_data_source_settings("DEV")
 
 
 def test_official_airline_implementation_registry_is_program_owned_and_fail_closed():
-    assert len(AIRLINE_SOURCE_IDS) == 10
     assert OFFICIAL_AIRLINE_REQUEST_SCHEMAS == {}
+    assert load_data_source_settings().by_adapter("official_airline_public_query") == ()
 
 
 def test_public_airline_provider_blocks_captcha_and_rate_limit():
@@ -268,7 +254,7 @@ def test_flight_search_result_reports_disabled_provider_when_not_configured():
     )
 
     assert result.offers == []
-    assert result.attempted_source_ids == list(AIRLINE_SOURCE_IDS)
+    assert result.attempted_source_ids == []
     assert result.failure_message == "no enabled official-airline flight provider implementation"
 
 

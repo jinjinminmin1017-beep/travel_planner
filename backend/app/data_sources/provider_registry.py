@@ -10,12 +10,12 @@ from app.data_sources.config_loader import (
     DataSourceSettings,
     HttpSourceSettings,
     NominatimSourceSettings,
-    OfficialAirlineSourceSettings,
     RailSourceSettings,
     RealLlmSourceSettings,
     load_data_source_settings,
     secret_value,
 )
+from app.data_sources.rate_limiter import RateLimitedHttpClient
 from app.models.schemas import DataSourceMetadata, now_timepoint
 
 ProviderFactory = Callable[[DataSourceSettings], object | None]
@@ -56,6 +56,7 @@ def _amap_route_factory(settings: DataSourceSettings) -> object:
     typed = _require_type(settings, CredentialedHttpSourceSettings)
     return AmapRouteProvider(
         secret_value(typed.api_key) or "",
+        client=_rate_limited_client(typed),
         base_url=typed.base_url or "",
         timeout_seconds=typed.timeout_seconds,
     )
@@ -67,6 +68,7 @@ def _baidu_route_factory(settings: DataSourceSettings) -> object:
     typed = _require_type(settings, CredentialedHttpSourceSettings)
     return BaiduDirectionLiteProvider(
         secret_value(typed.api_key) or "",
+        client=_rate_limited_client(typed),
         base_url=typed.base_url or "",
         timeout_seconds=typed.timeout_seconds,
     )
@@ -78,6 +80,7 @@ def _amap_geocode_factory(settings: DataSourceSettings) -> object:
     typed = _require_type(settings, CredentialedHttpSourceSettings)
     return AmapAddressGeocodingProvider(
         secret_value(typed.api_key) or "",
+        client=_rate_limited_client(typed),
         base_url=typed.base_url or "",
         timeout_seconds=typed.timeout_seconds,
     )
@@ -89,6 +92,7 @@ def _amap_place_factory(settings: DataSourceSettings) -> object:
     typed = _require_type(settings, CredentialedHttpSourceSettings)
     return AmapPlaceSearchProvider(
         secret_value(typed.api_key) or "",
+        client=_rate_limited_client(typed),
         base_url=typed.base_url or "",
         timeout_seconds=typed.timeout_seconds,
     )
@@ -98,7 +102,11 @@ def _osrm_factory(settings: DataSourceSettings) -> object:
     from app.data_sources.map_providers import OsrmRouteProvider
 
     typed = _require_type(settings, HttpSourceSettings)
-    return OsrmRouteProvider(base_url=typed.base_url or "", timeout_seconds=typed.timeout_seconds)
+    return OsrmRouteProvider(
+        client=_rate_limited_client(typed),
+        base_url=typed.base_url or "",
+        timeout_seconds=typed.timeout_seconds,
+    )
 
 
 def _nominatim_factory(settings: DataSourceSettings) -> object:
@@ -106,6 +114,7 @@ def _nominatim_factory(settings: DataSourceSettings) -> object:
 
     typed = _require_type(settings, NominatimSourceSettings)
     return NominatimGeocodingProvider(
+        client=_rate_limited_client(typed),
         base_url=typed.base_url or "",
         user_agent=typed.user_agent or "",
         timeout_seconds=typed.timeout_seconds,
@@ -132,53 +141,26 @@ def _redirect_factory(settings: DataSourceSettings) -> object:
     return provider(_metadata(settings))
 
 
-def _official_airline_factory(settings: DataSourceSettings) -> object:
-    from app.data_sources.flight_providers import (
-        OFFICIAL_AIRLINE_REQUEST_SCHEMAS,
-        OfficialAirlinePublicQueryProvider,
-    )
-
-    typed = _require_type(settings, OfficialAirlineSourceSettings)
-    request_schema = OFFICIAL_AIRLINE_REQUEST_SCHEMAS.get(typed.source_id)
-    if request_schema is None:
-        raise DataSourceConfigurationError(
-            f"{typed.source_id}: official_airline_public_query adapter implementation is missing"
-        )
-    return OfficialAirlinePublicQueryProvider(
-        source_id=typed.source_id,
-        source_name=typed.source_name,
-        allowed_carriers=typed.carrier_codes,
-        base_url=typed.base_url,
-        search_path=typed.search_path,
-        user_agent=typed.user_agent,
-        cache_ttl_seconds=typed.cache_ttl_seconds,
-        allowed_hosts=typed.allowed_hosts,
-        request_schema=request_schema,
-        timeout_seconds=typed.timeout_seconds,
-        min_interval_seconds=typed.min_interval_seconds
-        if typed.min_interval_seconds is not None
-        else 1.0 / typed.qps_limit,
-        snapshot_backend=typed.snapshot_backend,
-        snapshot_sqlite_path=typed.snapshot_sqlite_path or "logs/flight_harvest.sqlite3",
-    )
-
-
 def _opensky_factory(settings: DataSourceSettings) -> object:
     from app.data_sources.flight_providers import OpenSkyStatesProvider
 
     typed = _require_type(settings, HttpSourceSettings)
-    return OpenSkyStatesProvider(base_url=typed.base_url or "", timeout_seconds=typed.timeout_seconds)
-
-
-def _unsupported_factory(settings: DataSourceSettings) -> object:
-    raise DataSourceConfigurationError(f"{settings.source_id}: adapter implementation is missing")
+    return OpenSkyStatesProvider(
+        client=_rate_limited_client(typed),
+        base_url=typed.base_url or "",
+        timeout_seconds=typed.timeout_seconds,
+    )
 
 
 def _weather_factory(settings: DataSourceSettings) -> object:
     from app.data_sources.weather_providers import OpenMeteoForecastProvider
 
     typed = _require_type(settings, HttpSourceSettings)
-    return OpenMeteoForecastProvider(base_url=typed.base_url or "", timeout_seconds=typed.timeout_seconds)
+    return OpenMeteoForecastProvider(
+        client=_rate_limited_client(typed),
+        base_url=typed.base_url or "",
+        timeout_seconds=typed.timeout_seconds,
+    )
 
 
 def _rail_factory(settings: DataSourceSettings) -> object:
@@ -186,6 +168,11 @@ def _rail_factory(settings: DataSourceSettings) -> object:
 
     typed = _require_type(settings, RailSourceSettings)
     return Official12306RailProvider(
+        client=_rate_limited_client(
+            typed,
+            min_interval_seconds=typed.min_interval_seconds,
+            follow_redirects=True,
+        ),
         base_url=typed.base_url or "",
         user_agent=typed.user_agent or "",
         cache_ttl_seconds=typed.cache_ttl_seconds,
@@ -200,6 +187,7 @@ def _llm_factory(settings: DataSourceSettings) -> object:
     return OpenAICompatibleLLMProvider(
         api_key=secret_value(typed.api_key) or "",
         model=typed.model or "",
+        client=_rate_limited_client(typed),
         base_url=typed.base_url or "",
         timeout_seconds=typed.timeout_seconds,
         max_tokens=typed.max_tokens or DEFAULT_REAL_LLM_MAX_TOKENS,
@@ -217,11 +205,7 @@ ADAPTER_REGISTRY: dict[str, AdapterRegistration] = {
     "nominatim_geocode": AdapterRegistration(ADAPTER_SETTINGS_MODELS["nominatim_geocode"], _nominatim_factory),
     "amap_uri_redirect": AdapterRegistration(ADAPTER_SETTINGS_MODELS["amap_uri_redirect"], _redirect_factory),
     "baidu_uri_redirect": AdapterRegistration(ADAPTER_SETTINGS_MODELS["baidu_uri_redirect"], _redirect_factory),
-    "official_airline_public_query": AdapterRegistration(
-        ADAPTER_SETTINGS_MODELS["official_airline_public_query"], _official_airline_factory
-    ),
     "opensky_states": AdapterRegistration(ADAPTER_SETTINGS_MODELS["opensky_states"], _opensky_factory),
-    "variflight_status": AdapterRegistration(ADAPTER_SETTINGS_MODELS["variflight_status"], _unsupported_factory),
     "open_meteo_forecast": AdapterRegistration(ADAPTER_SETTINGS_MODELS["open_meteo_forecast"], _weather_factory),
     "airline_official_redirect": AdapterRegistration(
         ADAPTER_SETTINGS_MODELS["airline_official_redirect"], _redirect_factory
@@ -232,6 +216,21 @@ ADAPTER_REGISTRY: dict[str, AdapterRegistration] = {
     ),
     "real_llm": AdapterRegistration(ADAPTER_SETTINGS_MODELS["real_llm"], _llm_factory),
 }
+
+
+def _rate_limited_client(
+    settings: HttpSourceSettings,
+    *,
+    min_interval_seconds: float | None = None,
+    follow_redirects: bool = False,
+) -> RateLimitedHttpClient:
+    return RateLimitedHttpClient(
+        source_id=settings.source_id,
+        qps_limit=settings.qps_limit,
+        min_interval_seconds=min_interval_seconds,
+        timeout=settings.timeout_seconds,
+        follow_redirects=follow_redirects,
+    )
 
 
 def build_provider(settings: DataSourceSettings) -> object | None:

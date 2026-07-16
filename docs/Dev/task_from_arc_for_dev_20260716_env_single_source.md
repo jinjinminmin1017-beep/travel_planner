@@ -104,3 +104,11 @@ rg -n "data_sources\.(dev|test|prod)\.json|flight_provider_contracts|public_airl
 - 启动验证：`/api/health` 返回 200，`/api/data-sources/status` 返回 200 并列出 26 个数据源；航班 gate 连续 3 次通过。
 - 真实接口验证：地图、地点解析和天气 smoke 通过；12306 一次真实 smoke 收到上游非 JSON 响应，未伪报成功，铁路 Provider 与规划回归仍由全量测试覆盖并通过。
 - 兼容性：未修改 API schema version，未修改数据库和前端，不需要数据库迁移。
+
+## 后续配置有效性收口
+
+- 2026-07-16 按“配置必须有真实消费者且修改后必须影响行为”的原则继续收口。
+- 未实现的 10 个官方航司查询源与 VariFlight 不再进入运行时 ENV 清单；相关能力仅保留在能力矩阵，完成代码实现与审批后再重新登记。
+- 航司请求方法由代码内 `OfficialAirlineRequestSchema` 唯一决定，不再暴露无效 `HTTP_METHOD` 环境变量。
+- `CACHE_TTL_SECONDS` 只保留给确实实现查询缓存的 12306；其余未实现缓存的 Provider 不再声明 TTL。
+- 内部计算与纯跳转 Provider 不发起数据源 HTTP 请求，因此不再声明 `QPS_LIMIT`；外部 HTTP Provider 的 QPS 通过统一请求门控或既有 12306 门控真实执行。

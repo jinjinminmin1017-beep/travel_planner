@@ -37,7 +37,8 @@ def test_health_and_data_source_status():
     body = status.json()
     assert body["schema_version"] == "1.17"
     source_ids = {source["source_id"] for source in body["sources"]}
-    assert {"amap_route", "baidu_map_route", "airline_mu_public_query", "rail_12306_public_query", "real_llm", "internal_calc"}.issubset(source_ids)
+    assert {"amap_route", "baidu_map_route", "rail_12306_public_query", "real_llm", "internal_calc"}.issubset(source_ids)
+    assert "airline_mu_public_query" not in source_ids
     assert not any(source_id.startswith("simulated_") for source_id in source_ids)
     assert "source_id" in body["sources"][0]
     assert "qps_limit" not in body["sources"][0]

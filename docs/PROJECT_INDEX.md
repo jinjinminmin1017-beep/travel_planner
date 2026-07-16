@@ -28,6 +28,7 @@
 - `backend/app/data_sources/`：地图、地理编码、铁路、航班、天气、LLM、跳转和数据源配置适配器。
   - `config_loader.py`：从 `TRAVEL_DATA_SOURCE_IDS` 与 `TRAVEL_SOURCE_<ID>_*` 构造不可变、类型化的 ENV-only 配置快照。
   - `provider_registry.py`：统一的 adapter settings model 与 Provider factory 注册表；启用源在启动期完成构造校验。
+  - `rate_limiter.py`：按 source_id 共享的线程安全 HTTP 请求门控，使外部 Provider 的 `QPS_LIMIT` 在真实请求边界生效。
   - `flight_providers.py`：航班请求构造、响应解析、快照脱敏和代码内请求实现注册；环境变量不能声明技术就绪。
 - `backend/app/core/`：请求上下文、安全策略、日志配置。
 - `backend/app/data/`：本地数据目录，如交通节点和目的地资产。
@@ -70,8 +71,8 @@
 - TTL 缓存服务：`backend/app/services/cache_store.py`。
 - 运行时 store：`backend/app/services/store.py`。
 - 默认 SQLite 路径配置：`.env.example` 中的 `TRAVEL_SQLITE_PATH=logs/travel_planner.sqlite3`。
-- 飞行快照 SQLite 配置：官方航司 source 的 `TRAVEL_SOURCE_<ID>_SNAPSHOT_BACKEND` 与 `TRAVEL_SOURCE_<ID>_SNAPSHOT_SQLITE_PATH`。
-- Redis/PostgreSQL 配置入口存在于 `.env.example`，当前依赖文件未包含对应驱动。
+- 官方航司查询尚未实现，因此不登记运行时 source，也不暴露飞行快照 ENV 配置。
+- Redis/PostgreSQL 尚未实现，当前不提供对应运行配置。
 
 ## 配置文件
 

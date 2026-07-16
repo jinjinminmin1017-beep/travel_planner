@@ -19,7 +19,6 @@ _SETTINGS_SNAPSHOTS: dict[str, "DataSourceSettingsSnapshot"] = {}
 LicenseStatus = Literal["APPROVED", "PENDING_REVIEW", "NOT_APPROVED"]
 AuthorityLevel = Literal["S", "A", "B", "C"]
 EnvironmentName = Literal["DEV", "TEST", "PROD"]
-HttpMethod = Literal["GET", "POST"]
 
 
 class DataSourceConfigurationError(ValueError):
@@ -45,18 +44,7 @@ SOURCE_DEFINITIONS: dict[str, SourceDefinition] = {
     "nominatim_geocode": SourceDefinition("Nominatim Search API", DataSourceType.MAP, "B", "PUBLIC_READ_ONLY_RATE_LIMITED"),
     "amap_uri_redirect": SourceDefinition("AMap URI Redirect", DataSourceType.MAP, "A", "REDIRECT_ONLY", "baidu_uri_redirect"),
     "baidu_uri_redirect": SourceDefinition("Baidu URI Redirect", DataSourceType.MAP, "A", "PENDING_REVIEW"),
-    "airline_mu_public_query": SourceDefinition("China Eastern Official Public Flight Query", DataSourceType.FLIGHT, "A", "PENDING_REVIEW"),
-    "airline_cz_public_query": SourceDefinition("China Southern Official Public Flight Query", DataSourceType.FLIGHT, "A", "PENDING_REVIEW"),
-    "airline_sc_public_query": SourceDefinition("Shandong Airlines Official Public Flight Query", DataSourceType.FLIGHT, "A", "TECHNICAL_REVIEW"),
-    "airline_ca_public_query": SourceDefinition("Air China Official Public Flight Query", DataSourceType.FLIGHT, "A", "TECHNICAL_REVIEW"),
-    "airline_hna_micro_public_query": SourceDefinition("HNA Micro Official Public Flight Query", DataSourceType.FLIGHT, "A", "TECHNICAL_REVIEW"),
-    "airline_zh_public_query": SourceDefinition("Shenzhen Airlines Official Public Flight Query", DataSourceType.FLIGHT, "A", "TECHNICAL_REVIEW"),
-    "airline_3u_public_query": SourceDefinition("Sichuan Airlines Official Public Flight Query", DataSourceType.FLIGHT, "A", "TECHNICAL_REVIEW"),
-    "airline_9c_public_query": SourceDefinition("Spring Airlines Official Public Flight Query", DataSourceType.FLIGHT, "A", "TECHNICAL_REVIEW"),
-    "airline_ho_public_query": SourceDefinition("Juneyao Airlines Official Public Flight Query", DataSourceType.FLIGHT, "A", "TECHNICAL_REVIEW"),
-    "airline_qw_public_query": SourceDefinition("Qingdao Airlines Official Public Flight Query", DataSourceType.FLIGHT, "A", "TECHNICAL_REVIEW"),
     "opensky_states": SourceDefinition("OpenSky Network States API", DataSourceType.FLIGHT, "B", "PUBLIC_READ_ONLY_RATE_LIMITED"),
-    "variflight_status": SourceDefinition("VariFlight Flight Status API", DataSourceType.FLIGHT, "A", "PENDING_REVIEW"),
     "open_meteo_forecast": SourceDefinition("Open-Meteo Forecast API", DataSourceType.WEATHER, "B", "PUBLIC_READ_ONLY_RATE_LIMITED"),
     "airline_official_redirect": SourceDefinition("Airline Official Redirect", DataSourceType.FLIGHT, "A", "REDIRECT_ONLY"),
     "rail_12306_redirect": SourceDefinition("12306 Official Redirect", DataSourceType.RAIL, "S", "REDIRECT_ONLY"),
@@ -77,29 +65,12 @@ class DataSourceSettings(BaseModel):
     license_status: LicenseStatus
     commercial_allowed: bool
     enabled: bool
-    qps_limit: int = Field(ge=0)
+    qps_limit: int = Field(default=0, ge=0)
     sla_level: str
     fallback_source_id: str | None = None
-    base_url: str | None = None
-    search_path: str | None = None
-    http_method: HttpMethod | None = None
-    allowed_hosts: tuple[str, ...] = ()
-    timeout_seconds: float = Field(default=10.0, gt=0)
-    cache_ttl_seconds: int = Field(default=0, ge=0)
-    min_interval_seconds: float | None = Field(default=None, ge=0)
-    api_key: SecretStr | None = None
-    user_agent: str | None = None
-    carrier_codes: tuple[str, ...] = ()
-    model: str | None = None
-    max_tokens: int | None = Field(default=None, ge=1)
-    thinking_disabled: bool = True
-    snapshot_backend: Literal["sqlite", "disabled"] = "sqlite"
-    snapshot_sqlite_path: str | None = None
 
     @model_validator(mode="after")
     def validate_common_enabled_fields(self) -> "DataSourceSettings":
-        if self.enabled and self.qps_limit <= 0:
-            raise ValueError("QPS_LIMIT")
         if self.commercial_allowed and self.license_status != "APPROVED":
             raise ValueError("COMMERCIAL_ALLOWED")
         return self
@@ -130,8 +101,14 @@ class RedirectSourceSettings(DataSourceSettings):
 
 
 class HttpSourceSettings(DataSourceSettings):
+    base_url: str | None = None
+    allowed_hosts: tuple[str, ...] = ()
+    timeout_seconds: float = Field(default=10.0, gt=0)
+
     @model_validator(mode="after")
     def validate_http_fields(self) -> "HttpSourceSettings":
+        if self.enabled and self.qps_limit <= 0:
+            raise ValueError("QPS_LIMIT")
         if self.enabled and not self.base_url:
             raise ValueError("BASE_URL")
         if self.base_url:
@@ -144,6 +121,8 @@ class HttpSourceSettings(DataSourceSettings):
 
 
 class CredentialedHttpSourceSettings(HttpSourceSettings):
+    api_key: SecretStr | None = None
+
     @model_validator(mode="after")
     def validate_api_key(self) -> "CredentialedHttpSourceSettings":
         if self.enabled and self.api_key is None:
@@ -151,25 +130,11 @@ class CredentialedHttpSourceSettings(HttpSourceSettings):
         return self
 
 
-class OfficialAirlineSourceSettings(HttpSourceSettings):
-    @model_validator(mode="after")
-    def validate_airline_fields(self) -> "OfficialAirlineSourceSettings":
-        if self.enabled:
-            missing: list[str] = []
-            if not self.search_path:
-                missing.append("SEARCH_PATH")
-            if not self.http_method:
-                missing.append("HTTP_METHOD")
-            if not self.allowed_hosts:
-                missing.append("ALLOWED_HOSTS")
-            if not self.carrier_codes:
-                missing.append("CARRIER_CODES")
-            if missing:
-                raise ValueError("/".join(missing))
-        return self
-
-
 class RailSourceSettings(HttpSourceSettings):
+    user_agent: str | None = None
+    cache_ttl_seconds: int = Field(default=0, ge=0)
+    min_interval_seconds: float | None = Field(default=None, ge=0)
+
     @model_validator(mode="after")
     def validate_rail_fields(self) -> "RailSourceSettings":
         if self.enabled and not self.user_agent:
@@ -178,6 +143,8 @@ class RailSourceSettings(HttpSourceSettings):
 
 
 class NominatimSourceSettings(HttpSourceSettings):
+    user_agent: str | None = None
+
     @model_validator(mode="after")
     def validate_user_agent(self) -> "NominatimSourceSettings":
         if self.enabled and not self.user_agent:
@@ -186,6 +153,10 @@ class NominatimSourceSettings(HttpSourceSettings):
 
 
 class RealLlmSourceSettings(CredentialedHttpSourceSettings):
+    model: str | None = None
+    max_tokens: int | None = Field(default=None, ge=1)
+    thinking_disabled: bool = True
+
     @model_validator(mode="after")
     def validate_llm_fields(self) -> "RealLlmSourceSettings":
         if self.enabled and not self.model:
@@ -203,9 +174,7 @@ ADAPTER_SETTINGS_MODELS: dict[str, type[DataSourceSettings]] = {
     "nominatim_geocode": NominatimSourceSettings,
     "amap_uri_redirect": RedirectSourceSettings,
     "baidu_uri_redirect": RedirectSourceSettings,
-    "official_airline_public_query": OfficialAirlineSourceSettings,
     "opensky_states": HttpSourceSettings,
-    "variflight_status": CredentialedHttpSourceSettings,
     "open_meteo_forecast": HttpSourceSettings,
     "airline_official_redirect": RedirectSourceSettings,
     "rail_12306_redirect": RedirectSourceSettings,
@@ -213,31 +182,37 @@ ADAPTER_SETTINGS_MODELS: dict[str, type[DataSourceSettings]] = {
     "real_llm": RealLlmSourceSettings,
 }
 
-COMMON_ENV_SUFFIXES = frozenset(
-    {
-        "ADAPTER",
-        "ENABLED",
-        "LICENSE_STATUS",
-        "COMMERCIAL_ALLOWED",
-        "QPS_LIMIT",
-        "BASE_URL",
-        "SEARCH_PATH",
-        "HTTP_METHOD",
-        "ALLOWED_HOSTS",
-        "TIMEOUT_SECONDS",
-        "CACHE_TTL_SECONDS",
-        "MIN_INTERVAL_SECONDS",
-        "API_KEY",
-        "USER_AGENT",
-        "CARRIER_CODES",
-        "MODEL",
-        "MAX_TOKENS",
-        "THINKING_DISABLED",
-        "SNAPSHOT_BACKEND",
-        "SNAPSHOT_SQLITE_PATH",
-    }
+COMMON_ENV_SUFFIXES = frozenset({"ADAPTER", "ENABLED", "LICENSE_STATUS", "COMMERCIAL_ALLOWED"})
+HTTP_ENV_SUFFIXES = COMMON_ENV_SUFFIXES | frozenset(
+    {"QPS_LIMIT", "BASE_URL", "ALLOWED_HOSTS", "TIMEOUT_SECONDS"}
 )
-REQUIRED_COMMON_SUFFIXES = ("ADAPTER", "ENABLED", "LICENSE_STATUS", "COMMERCIAL_ALLOWED", "QPS_LIMIT")
+CREDENTIALED_HTTP_ENV_SUFFIXES = HTTP_ENV_SUFFIXES | frozenset({"API_KEY"})
+NOMINATIM_ENV_SUFFIXES = HTTP_ENV_SUFFIXES | frozenset({"USER_AGENT"})
+RAIL_ENV_SUFFIXES = HTTP_ENV_SUFFIXES | frozenset(
+    {"USER_AGENT", "CACHE_TTL_SECONDS", "MIN_INTERVAL_SECONDS"}
+)
+REAL_LLM_ENV_SUFFIXES = CREDENTIALED_HTTP_ENV_SUFFIXES | frozenset(
+    {"MODEL", "MAX_TOKENS", "THINKING_DISABLED"}
+)
+ADAPTER_ENV_SUFFIXES: dict[str, frozenset[str]] = {
+    "internal_calculation": COMMON_ENV_SUFFIXES,
+    "amap_route": CREDENTIALED_HTTP_ENV_SUFFIXES,
+    "baidu_map_route": CREDENTIALED_HTTP_ENV_SUFFIXES,
+    "amap_geocode": CREDENTIALED_HTTP_ENV_SUFFIXES,
+    "amap_place_search": CREDENTIALED_HTTP_ENV_SUFFIXES,
+    "osrm_route": HTTP_ENV_SUFFIXES,
+    "nominatim_geocode": NOMINATIM_ENV_SUFFIXES,
+    "amap_uri_redirect": COMMON_ENV_SUFFIXES,
+    "baidu_uri_redirect": COMMON_ENV_SUFFIXES,
+    "opensky_states": HTTP_ENV_SUFFIXES,
+    "open_meteo_forecast": HTTP_ENV_SUFFIXES,
+    "airline_official_redirect": COMMON_ENV_SUFFIXES,
+    "rail_12306_redirect": COMMON_ENV_SUFFIXES,
+    "rail_12306_public_query": RAIL_ENV_SUFFIXES,
+    "real_llm": REAL_LLM_ENV_SUFFIXES,
+}
+ALL_ENV_SUFFIXES = frozenset().union(*ADAPTER_ENV_SUFFIXES.values())
+REQUIRED_COMMON_SUFFIXES = tuple(sorted(COMMON_ENV_SUFFIXES))
 
 
 class DataSourceSettingsSnapshot(BaseModel):
@@ -368,9 +343,14 @@ def registered_source_env_keys(environ: Mapping[str, str]) -> set[str]:
     source_ids = _parse_source_ids(environ.get("TRAVEL_DATA_SOURCE_IDS"))
     keys = {"TRAVEL_DATA_SOURCE_IDS"}
     for source_id in source_ids:
-        for suffix in REQUIRED_COMMON_SUFFIXES:
+        adapter = environ.get(_source_env_name(source_id, "ADAPTER"), "").strip().lower()
+        for suffix in ADAPTER_ENV_SUFFIXES.get(adapter, COMMON_ENV_SUFFIXES):
             keys.add(_source_env_name(source_id, suffix))
     return keys
+
+
+def expected_source_env_suffixes(adapter: str) -> frozenset[str]:
+    return ADAPTER_ENV_SUFFIXES.get(adapter.strip().lower(), frozenset())
 
 
 def _parse_settings_snapshot(values: Mapping[str, str], environment: EnvironmentName) -> DataSourceSettingsSnapshot:
@@ -391,7 +371,7 @@ def _parse_source_settings(
     if definition is None:
         raise DataSourceConfigurationError(f"{source_id}: source_id is not registered in code")
     raw: dict[str, str] = {}
-    for suffix in COMMON_ENV_SUFFIXES:
+    for suffix in ALL_ENV_SUFFIXES:
         value = values.get(_source_env_name(source_id, suffix))
         if value is not None and value.strip() != "":
             raw[suffix] = value.strip()
@@ -402,6 +382,16 @@ def _parse_source_settings(
     model = ADAPTER_SETTINGS_MODELS.get(adapter)
     if model is None:
         raise DataSourceConfigurationError(f"{source_id}: unknown adapter key {_source_env_name(source_id, 'ADAPTER')}")
+    allowed_suffixes = ADAPTER_ENV_SUFFIXES[adapter]
+    configured_suffixes = {
+        suffix for suffix in ALL_ENV_SUFFIXES if _source_env_name(source_id, suffix) in values
+    }
+    unexpected = sorted(configured_suffixes - allowed_suffixes)
+    if unexpected:
+        raise DataSourceConfigurationError(
+            f"{source_id}: unsupported keys "
+            f"{', '.join(_source_env_name(source_id, suffix) for suffix in unexpected)}"
+        )
     try:
         payload = {
             "source_id": source_id,
@@ -413,25 +403,57 @@ def _parse_source_settings(
             "license_status": _parse_enum(source_id, "LICENSE_STATUS", raw["LICENSE_STATUS"], {"APPROVED", "PENDING_REVIEW", "NOT_APPROVED"}),
             "commercial_allowed": _parse_bool(source_id, "COMMERCIAL_ALLOWED", raw["COMMERCIAL_ALLOWED"]),
             "enabled": _parse_bool(source_id, "ENABLED", raw["ENABLED"]),
-            "qps_limit": _parse_int(source_id, "QPS_LIMIT", raw["QPS_LIMIT"], minimum=0),
+            "qps_limit": _parse_int(source_id, "QPS_LIMIT", raw.get("QPS_LIMIT", "0"), minimum=0),
             "sla_level": definition.sla_level,
             "fallback_source_id": definition.fallback_source_id,
-            "base_url": raw.get("BASE_URL"),
-            "search_path": raw.get("SEARCH_PATH"),
-            "http_method": _optional_enum(source_id, "HTTP_METHOD", raw.get("HTTP_METHOD"), {"GET", "POST"}),
-            "allowed_hosts": _parse_csv(raw.get("ALLOWED_HOSTS"), lower=True),
-            "timeout_seconds": _parse_float(source_id, "TIMEOUT_SECONDS", raw.get("TIMEOUT_SECONDS", "10"), minimum=0.001),
-            "cache_ttl_seconds": _parse_int(source_id, "CACHE_TTL_SECONDS", raw.get("CACHE_TTL_SECONDS", "0"), minimum=0),
-            "min_interval_seconds": _optional_float(source_id, "MIN_INTERVAL_SECONDS", raw.get("MIN_INTERVAL_SECONDS"), minimum=0),
-            "api_key": SecretStr(raw["API_KEY"]) if raw.get("API_KEY") else None,
-            "user_agent": raw.get("USER_AGENT"),
-            "carrier_codes": _parse_csv(raw.get("CARRIER_CODES"), upper=True),
-            "model": raw.get("MODEL"),
-            "max_tokens": _optional_int(source_id, "MAX_TOKENS", raw.get("MAX_TOKENS"), minimum=1),
-            "thinking_disabled": _parse_bool(source_id, "THINKING_DISABLED", raw.get("THINKING_DISABLED", "true")),
-            "snapshot_backend": _parse_enum(source_id, "SNAPSHOT_BACKEND", raw.get("SNAPSHOT_BACKEND", "sqlite"), {"sqlite", "disabled"}),
-            "snapshot_sqlite_path": raw.get("SNAPSHOT_SQLITE_PATH"),
         }
+        if issubclass(model, HttpSourceSettings):
+            payload.update(
+                {
+                    "base_url": raw.get("BASE_URL"),
+                    "allowed_hosts": _parse_csv(raw.get("ALLOWED_HOSTS"), lower=True),
+                    "timeout_seconds": _parse_float(
+                        source_id,
+                        "TIMEOUT_SECONDS",
+                        raw.get("TIMEOUT_SECONDS", "10"),
+                        minimum=0.001,
+                    ),
+                }
+            )
+        if issubclass(model, CredentialedHttpSourceSettings):
+            payload["api_key"] = SecretStr(raw["API_KEY"]) if raw.get("API_KEY") else None
+        if issubclass(model, (NominatimSourceSettings, RailSourceSettings)):
+            payload["user_agent"] = raw.get("USER_AGENT")
+        if issubclass(model, RailSourceSettings):
+            payload["cache_ttl_seconds"] = _parse_int(
+                source_id,
+                "CACHE_TTL_SECONDS",
+                raw.get("CACHE_TTL_SECONDS", "0"),
+                minimum=0,
+            )
+            payload["min_interval_seconds"] = _optional_float(
+                source_id,
+                "MIN_INTERVAL_SECONDS",
+                raw.get("MIN_INTERVAL_SECONDS"),
+                minimum=0,
+            )
+        if issubclass(model, RealLlmSourceSettings):
+            payload.update(
+                {
+                    "model": raw.get("MODEL"),
+                    "max_tokens": _optional_int(
+                        source_id,
+                        "MAX_TOKENS",
+                        raw.get("MAX_TOKENS"),
+                        minimum=1,
+                    ),
+                    "thinking_disabled": _parse_bool(
+                        source_id,
+                        "THINKING_DISABLED",
+                        raw.get("THINKING_DISABLED", "true"),
+                    ),
+                }
+            )
         _validate_adapter_payload(source_id, model, payload)
         return model.model_validate(payload)
     except DataSourceConfigurationError:
@@ -454,7 +476,7 @@ def _validate_adapter_payload(
 ) -> None:
     enabled = bool(payload["enabled"])
     qps_limit = int(payload["qps_limit"])
-    if enabled and qps_limit <= 0:
+    if enabled and issubclass(model, HttpSourceSettings) and qps_limit <= 0:
         raise DataSourceConfigurationError(
             f"{source_id}: invalid integer key {_source_env_name(source_id, 'QPS_LIMIT')}"
         )
@@ -484,15 +506,6 @@ def _validate_adapter_payload(
         missing.append("API_KEY")
     if issubclass(model, (NominatimSourceSettings, RailSourceSettings)) and not payload.get("user_agent"):
         missing.append("USER_AGENT")
-    if issubclass(model, OfficialAirlineSourceSettings):
-        for suffix, field in (
-            ("SEARCH_PATH", "search_path"),
-            ("HTTP_METHOD", "http_method"),
-            ("ALLOWED_HOSTS", "allowed_hosts"),
-            ("CARRIER_CODES", "carrier_codes"),
-        ):
-            if not payload.get(field):
-                missing.append(suffix)
     if issubclass(model, RealLlmSourceSettings) and not payload.get("model"):
         missing.append("MODEL")
     if missing:
@@ -527,7 +540,7 @@ def _validate_unknown_source_keys(values: Mapping[str, str], source_ids: tuple[s
             unknown.append(key)
             continue
         suffix = key[len(match[1]) :]
-        if suffix not in COMMON_ENV_SUFFIXES:
+        if suffix not in ALL_ENV_SUFFIXES:
             unknown.append(key)
     if unknown:
         raise DataSourceConfigurationError(f"unknown data source configuration keys: {', '.join(sorted(unknown))}")
@@ -588,16 +601,10 @@ def _parse_enum(source_id: str, suffix: str, value: str, allowed: set[str]) -> s
     return normalized
 
 
-def _optional_enum(source_id: str, suffix: str, value: str | None, allowed: set[str]) -> str | None:
-    return None if value is None else _parse_enum(source_id, suffix, value, allowed)
-
-
-def _parse_csv(value: str | None, *, lower: bool = False, upper: bool = False) -> tuple[str, ...]:
+def _parse_csv(value: str | None, *, lower: bool = False) -> tuple[str, ...]:
     items = tuple(item.strip() for item in (value or "").split(",") if item.strip())
     if lower:
         return tuple(item.lower().strip(".") for item in items)
-    if upper:
-        return tuple(item.upper() for item in items)
     return items
 
 

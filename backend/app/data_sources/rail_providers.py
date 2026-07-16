@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import logging
 import re
-import threading
 import time
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
@@ -29,11 +28,8 @@ DEFAULT_12306_BASE_URL = "https://kyfw.12306.cn"
 DEFAULT_12306_USER_AGENT = "AITravelPlanner/0.1 public-12306-query"
 SHANGHAI_TZ = timezone(timedelta(hours=8))
 
-_RATE_LIMIT_LOCK = threading.Lock()
-_LAST_PROVIDER_CALL_AT: dict[str, float] = {}
 _SEARCH_CACHE: dict[str, tuple[float, list["RailOffer"]]] = {}
 _monotonic = time.monotonic
-_sleep = time.sleep
 
 
 @dataclass(frozen=True)
@@ -331,7 +327,6 @@ def search_rail_offers_with_enabled_provider_result(request: RailSearchRequest, 
                 request.departure_date.isoformat(),
                 request.train_number or "",
             )
-            _respect_provider_rate_limit(provider.source_id, environment)
             offers = provider.search_offers(request)
             if offers:
                 logger.info("rail_provider_search_success source_id=%s offer_count=%s", provider.source_id, len(offers))
@@ -480,31 +475,6 @@ def _duration_minutes(value: Any, departure_at: datetime, arrival_at: datetime) 
         minutes = int(match.group(3) or 0)
         return days * 24 * 60 + hours * 60 + minutes
     return max(0, int((arrival_at - departure_at).total_seconds() // 60))
-
-
-def _respect_provider_rate_limit(source_id: str, environment: str | None) -> None:
-    interval_seconds = _provider_min_interval_seconds(source_id, environment)
-    if interval_seconds <= 0:
-        return
-    with _RATE_LIMIT_LOCK:
-        now = _monotonic()
-        previous = _LAST_PROVIDER_CALL_AT.get(source_id)
-        if previous is not None:
-            wait_seconds = interval_seconds - (now - previous)
-            if wait_seconds > 0:
-                logger.info("rail_provider_rate_limit_wait source_id=%s wait_seconds=%.3f", source_id, wait_seconds)
-                _sleep(wait_seconds)
-                now = _monotonic()
-        _LAST_PROVIDER_CALL_AT[source_id] = now
-
-
-def _provider_min_interval_seconds(source_id: str, environment: str | None) -> float:
-    settings = load_data_source_settings(environment).get(source_id)
-    if settings and settings.min_interval_seconds is not None:
-        return settings.min_interval_seconds
-    if settings and settings.qps_limit > 0:
-        return 1.0 / settings.qps_limit
-    return 1.0 if source_id == "rail_12306_public_query" else 0.0
 
 
 def _cache_get(key: str, ttl_seconds: int) -> list[RailOffer] | None:

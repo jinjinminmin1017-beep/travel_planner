@@ -7,20 +7,6 @@ ROOT = Path(__file__).resolve().parents[1]
 ENV_PATH = ROOT / ".env"
 EXAMPLE_PATH = ROOT / ".env.example"
 
-AIRLINE_SOURCE_IDS = (
-    "AIRLINE_MU_PUBLIC_QUERY",
-    "AIRLINE_CZ_PUBLIC_QUERY",
-    "AIRLINE_SC_PUBLIC_QUERY",
-    "AIRLINE_CA_PUBLIC_QUERY",
-    "AIRLINE_HNA_MICRO_PUBLIC_QUERY",
-    "AIRLINE_ZH_PUBLIC_QUERY",
-    "AIRLINE_3U_PUBLIC_QUERY",
-    "AIRLINE_9C_PUBLIC_QUERY",
-    "AIRLINE_HO_PUBLIC_QUERY",
-    "AIRLINE_QW_PUBLIC_QUERY",
-)
-
-
 def _read_values(path: Path) -> dict[str, str]:
     values: dict[str, str] = {}
     if not path.exists():
@@ -58,7 +44,6 @@ def _migrated_values(old: dict[str, str]) -> dict[str, str]:
         "NOMINATIM_USER_AGENT": ("TRAVEL_SOURCE_NOMINATIM_GEOCODE_USER_AGENT",),
         "OPENSKY_BASE_URL": ("TRAVEL_SOURCE_OPENSKY_STATES_BASE_URL",),
         "OPEN_METEO_BASE_URL": ("TRAVEL_SOURCE_OPEN_METEO_FORECAST_BASE_URL",),
-        "VARIFLIGHT_API_KEY": ("TRAVEL_SOURCE_VARIFLIGHT_STATUS_API_KEY",),
         "OPENAI_API_KEY": ("TRAVEL_SOURCE_REAL_LLM_API_KEY",),
         "LLM_API_KEY": ("TRAVEL_SOURCE_REAL_LLM_API_KEY",),
         "REAL_LLM_MODEL": ("TRAVEL_SOURCE_REAL_LLM_MODEL",),
@@ -75,13 +60,6 @@ def _migrated_values(old: dict[str, str]) -> dict[str, str]:
             if not migrated.get(new_key):
                 migrated[new_key] = value
 
-    snapshot_backend = old.get("TRAVEL_FLIGHT_SNAPSHOT_BACKEND")
-    snapshot_path = old.get("TRAVEL_FLIGHT_SNAPSHOT_SQLITE_PATH")
-    for source_id in AIRLINE_SOURCE_IDS:
-        if snapshot_backend:
-            migrated[f"TRAVEL_SOURCE_{source_id}_SNAPSHOT_BACKEND"] = snapshot_backend
-        if snapshot_path:
-            migrated[f"TRAVEL_SOURCE_{source_id}_SNAPSHOT_SQLITE_PATH"] = snapshot_path
     for key, value in list(migrated.items()):
         if not key.startswith("TRAVEL_SOURCE_") or not key.endswith("_ENABLED") or value.lower() != "true":
             continue
@@ -111,7 +89,8 @@ def migrate() -> tuple[int, int]:
             output.append(raw_line)
             continue
         key, default = raw_line.split("=", 1)
-        value = migrated.get(key, default)
+        is_structural_key = key == "TRAVEL_DATA_SOURCE_IDS" or key.endswith("_ADAPTER")
+        value = default if is_structural_key else migrated.get(key, default)
         retained += int(key in migrated and value != default)
         output.append(f"{key}={value}")
     ENV_PATH.write_text("\n".join(output) + "\n", encoding="utf-8")

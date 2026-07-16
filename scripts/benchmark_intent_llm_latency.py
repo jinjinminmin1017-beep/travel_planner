@@ -37,11 +37,11 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Benchmark intent LLM latency without logging secrets or full outputs.")
     parser.add_argument("--runs", type=int, default=50)
     parser.add_argument("--raw-input", default=DEFAULT_RAW_INPUT)
-    parser.add_argument("--timeout", type=float, default=None, help="Override request timeout seconds. Defaults to REAL_LLM_TIMEOUT_SECONDS.")
-    parser.add_argument("--max-tokens", type=int, default=None, help="Override REAL_LLM_MAX_TOKENS. Defaults to 800.")
+    parser.add_argument("--timeout", type=float, default=None, help="Override the real_llm source timeout.")
+    parser.add_argument("--max-tokens", type=int, default=None, help="Override the real_llm source max token limit.")
     parser.add_argument("--enable-thinking", action="store_true", help="Omit the GLM thinking disabled request field for comparison.")
     parser.add_argument("--no-response-format", action="store_true")
-    parser.add_argument("--sleep-seconds", type=float, default=0.2)
+    parser.add_argument("--sleep-seconds", type=float, default=None, help="Extra delay between runs; cannot bypass source QPS_LIMIT.")
     parser.add_argument("--label", default="baseline")
     return parser.parse_args()
 
@@ -138,6 +138,8 @@ def main() -> int:
     settings = load_data_source_settings().get("real_llm")
     if not isinstance(settings, RealLlmSourceSettings) or settings.api_key is None:
         raise RuntimeError("real_llm: missing key TRAVEL_SOURCE_REAL_LLM_API_KEY")
+    if not settings.enabled or settings.license_status != "APPROVED" or settings.qps_limit <= 0:
+        raise RuntimeError("real_llm: source must be enabled, approved, and rate limited")
     api_key = secret_value(settings.api_key) or ""
     model = settings.model or "gpt-4.1-mini"
     base_url = (settings.base_url or "https://api.openai.com/v1").rstrip("/")
@@ -148,6 +150,7 @@ def main() -> int:
         else settings.max_tokens or DEFAULT_REAL_LLM_MAX_TOKENS
     )
     thinking_disabled = not args.enable_thinking and settings.thinking_disabled
+    sleep_seconds = max(args.sleep_seconds or 0.0, 1.0 / settings.qps_limit)
     system_prompt = prompt_text("intent_parser_prompt_v1_0.txt")
     response_format = not args.no_response_format
     current_date = date.today()
@@ -216,8 +219,8 @@ def main() -> int:
                 output.flush()
                 records.append(record)
                 print(f"{index}/{args.runs} {record['status']} {record['total_ms']}ms")
-                if index < args.runs and args.sleep_seconds > 0:
-                    time.sleep(args.sleep_seconds)
+                if index < args.runs:
+                    time.sleep(sleep_seconds)
 
     summary = summarize(records)
     summary.update(

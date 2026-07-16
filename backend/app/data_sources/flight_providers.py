@@ -17,7 +17,6 @@ from uuid import uuid4
 
 import httpx
 
-from app.data_sources.config_loader import load_data_source_settings
 from app.models.schemas import CacheMetadata, DataSourceMetadata, DataSourceType, Money, money, now_timepoint
 
 logger = logging.getLogger("app.flight")
@@ -338,12 +337,7 @@ class OpenSkyStatesProvider:
 
 
 def build_enabled_flight_providers(environment: str | None = None) -> list[FlightOfferProvider]:
-    from app.data_sources.provider_registry import build_enabled_providers
-
-    return [
-        cast(FlightOfferProvider, provider)
-        for provider in build_enabled_providers({"official_airline_public_query"}, environment)
-    ]
+    return []
 
 
 def build_enabled_flight_state_providers(environment: str | None = None) -> list[FlightStateProvider]:
@@ -364,13 +358,9 @@ def search_flight_offers_with_enabled_provider_result(request: FlightSearchReque
     failure_messages: list[str] = []
     providers = build_enabled_flight_providers(environment)
     if not providers:
-        source_ids = [
-            source.source_id
-            for source in load_data_source_settings(environment).by_adapter("official_airline_public_query")
-        ]
         return FlightProviderSearchResult(
             offers=[],
-            attempted_source_ids=source_ids,
+            attempted_source_ids=[],
             failure_message="no enabled official-airline flight provider implementation",
         )
     for provider in providers:
