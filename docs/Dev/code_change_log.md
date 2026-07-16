@@ -296,3 +296,23 @@
   - `scripts/check_real_api_config.py --tier public`：通过。
   - 数据源与能力矩阵专项测试：20 passed。
   - 全仓运行代码和配置引用检查为空；`git diff --check` 通过。
+
+## 2026-07-16 22:19:55 +08:00
+
+- 任务：按“每个运行配置必须有真实消费者且修改后影响行为”原则收口 Provider ENV。
+- 代码提交：`80d387c`。
+- 修改内容：
+  - 运行数据源从 26 个收敛到 15 个真实可构造源；10 个未实现官方航司查询源与 VariFlight 只保留为能力待办，不再占用 ENV、运行注册表和状态 API。
+  - 删除航司 `HTTP_METHOD`、未实现缓存 Provider 的 `CACHE_TTL_SECONDS`、内部计算与纯跳转 Provider 的 `QPS_LIMIT`；adapter-specific loader 会拒绝无行为意义的字段。
+  - 新增按 source_id 共享的线程安全 HTTP 请求门控，让地图、地点解析、OSRM、Nominatim、OpenSky、Open-Meteo、LLM 与 12306 的 `QPS_LIMIT` 在真实请求边界生效。
+  - 12306 的 `MIN_INTERVAL_SECONDS` 与 QPS 取更严格值，查询缓存 TTL 继续保留并实际控制缓存；LLM benchmark 不能绕过源级 QPS。
+  - 修正 `.env` 迁移器，使数据源注册清单和 adapter 结构始终以模板为准，同时安全保留合法本机值与凭证。
+- 验证：
+  - 后端全量：221 passed。
+  - `.env` 与 `.env.example` 均为 151 个键，键集合差异为 0，禁用假字段剩余 0。
+  - `scripts/check_real_api_config.py --tier public`：通过。
+  - FastAPI startup smoke：`/api/health` 与 `/api/data-sources/status` 均返回 200，状态接口登记 15 个真实运行数据源。
+  - 航班 gate 连续 3 次通过：运行 adapter 未登记、请求实现注册表为空。
+  - 公开真实接口 smoke 全部通过：地图四种方式、4 条地点解析与接驳、OpenSky、Open-Meteo、12306/航司/地图跳转均成功。
+  - `git diff --check` 与 Python 编译检查通过。
+- 兼容性：状态 API schema 保持不变，未修改数据库和前端，无需迁移。
