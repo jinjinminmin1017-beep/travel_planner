@@ -282,3 +282,17 @@
   - 地图、地点解析和天气真实 smoke 通过；12306 一次真实 smoke 收到上游非 JSON 响应，未伪报成功，铁路 Provider 与规划回归由全量测试覆盖并通过。
   - 旧 JSON、`flight_provider_contracts` 和 `public_airline_contract_ready` 引用检查为空；`git diff --check` 通过。
 - 兼容性：未修改 API schema version，未修改数据库和前端，无需数据库迁移。
+
+## 2026-07-16 22:00:48 +08:00
+
+- 任务：清理 `.env` 中没有项目消费者的遗留键。
+- 代码提交：`847a7b0`。
+- 修改内容：
+  - 从本地 `.env` 与 `.env.example` 同步删除未被代码读取的 `POSTGRES_DSN`、`REDIS_URL` 和三个废弃的地理编码 smoke 输入键。
+  - 纠正文档中 PostgreSQL/Redis 已可通过环境变量接入的错误描述；当前真实能力为 SQLite 持久化与进程内 TTL 缓存。
+  - 保留其他仍被运行代码或 smoke 工具消费的配置，不提交本地 `.env` 和任何凭证值。
+- 验证：
+  - `.env` 与 `.env.example` 均为 325 个键，键集合差异为 0，目标遗留键剩余 0。
+  - `scripts/check_real_api_config.py --tier public`：通过。
+  - 数据源与能力矩阵专项测试：20 passed。
+  - 全仓运行代码和配置引用检查为空；`git diff --check` 通过。
