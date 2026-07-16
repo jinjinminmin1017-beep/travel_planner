@@ -8,7 +8,7 @@
 
 - Disable newly enabled providers first when the issue is provider-specific.
 - Restore the previous backend image or deployment revision.
-- Restore previous environment variables for provider enablement, API key requirement, rate limits, `POSTGRES_DSN`, and `REDIS_URL`.
+- Restore previous environment variables for provider enablement, API key requirement, and rate limits.
 - Verify `/api/health`, `/api/data-sources/status`, and a known golden route.
 
 ## App

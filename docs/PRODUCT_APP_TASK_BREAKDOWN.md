@@ -449,7 +449,7 @@
 
 ### P3-01 持久化与缓存
 
-状态：已完成（2026-06-12：已新增持久化层 `backend/app/services/persistence.py` 和 TTL 缓存层 `backend/app/services/cache_store.py`；本地默认使用 SQLite 保存 TravelPlanResponse、TravelPlan 快照和反馈，支持清空内存索引后按 plan_id 读取短期方案详情；缓存层保存异步任务和重算幂等结果并定义 TTL；`.env.example` 已补充 PostgreSQL/Redis 配置入口，生产可通过 `TRAVEL_PERSISTENCE_BACKEND=postgres`、`POSTGRES_DSN`、`REDIS_URL` 接入外部服务。）
+状态：部分完成（2026-06-12：已新增持久化层 `backend/app/services/persistence.py` 和 TTL 缓存层 `backend/app/services/cache_store.py`；本地默认使用 SQLite 保存 TravelPlanResponse、TravelPlan 快照和反馈，支持清空内存索引后按 plan_id 读取短期方案详情；缓存层保存异步任务和重算幂等结果并定义 TTL。PostgreSQL 持久化与 Redis 缓存尚未实现，当前不提供对应运行配置。）
 
 任务：
 

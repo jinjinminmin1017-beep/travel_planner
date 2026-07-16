@@ -11,7 +11,7 @@
 - Run `python -m pytest backend/app/tests`.
 - Run `python scripts/check_real_api_config.py --tier public`.
 - Run secret smoke only when approved provider credentials are configured.
-- Set production values for `TRAVEL_REQUIRE_API_KEY`, `TRAVEL_API_KEY`, `POSTGRES_DSN`, `REDIS_URL`, rate limits, and provider enablement.
+- Set production values for `TRAVEL_REQUIRE_API_KEY`, `TRAVEL_API_KEY`, rate limits, and provider enablement.
 - Verify `/api/health`, `/api/data-sources/status`, and `/api/observability/metrics`.
 
 ## App
