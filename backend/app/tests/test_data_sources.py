@@ -27,6 +27,7 @@ DEFAULT_ENABLED_REAL_SOURCE_IDS = {
     "nominatim_geocode",
     "opensky_states",
     "rail_12306_public_query",
+    "airline_9c_public_query",
     "open_meteo_forecast",
     "amap_uri_redirect",
     "airline_official_redirect",
@@ -220,7 +221,10 @@ def test_env_example_contains_only_behaviorally_effective_provider_keys():
     assert "_HTTP_METHOD=" not in env_example
     assert "AIRLINE_MU_PUBLIC_QUERY" not in env_example
     assert "VARIFLIGHT_STATUS" not in env_example
-    assert cache_ttl_keys == ["TRAVEL_SOURCE_RAIL_12306_PUBLIC_QUERY_CACHE_TTL_SECONDS"]
+    assert cache_ttl_keys == [
+        "TRAVEL_SOURCE_AIRLINE_9C_PUBLIC_QUERY_CACHE_TTL_SECONDS",
+        "TRAVEL_SOURCE_RAIL_12306_PUBLIC_QUERY_CACHE_TTL_SECONDS",
+    ]
 
 
 def test_public_provider_config_and_factories_are_ready_without_secrets():

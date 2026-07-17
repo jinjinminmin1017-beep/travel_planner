@@ -11,9 +11,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "backend"))
 
-from app.data_sources.config_loader import load_project_env  # noqa: E402
+from app.data_sources.config_loader import load_data_source_settings, load_project_env  # noqa: E402
 from app.data_sources.flight_providers import (  # noqa: E402
-    OFFICIAL_AIRLINE_REQUEST_SCHEMAS,
     FlightSearchRequest,
     search_flight_offers_with_enabled_provider_result,
 )
@@ -21,12 +20,19 @@ from app.data_sources.provider_registry import ADAPTER_REGISTRY  # noqa: E402
 
 
 def gate_smoke() -> tuple[bool, dict[str, object]]:
-    registered_implementations = tuple(sorted(OFFICIAL_AIRLINE_REQUEST_SCHEMAS))
-    adapter_registered = "official_airline_public_query" in ADAPTER_REGISTRY
-    passed = not adapter_registered and not registered_implementations
+    settings = load_data_source_settings().get("airline_9c_public_query")
+    adapter_registered = "spring_airlines_public_query" in ADAPTER_REGISTRY
+    passed = bool(
+        adapter_registered
+        and settings
+        and settings.enabled
+        and settings.license_status == "APPROVED"
+    )
     return passed, {
         "runtime_adapter_registered": adapter_registered,
-        "registered_request_implementations": list(registered_implementations),
+        "source_registered": settings is not None,
+        "source_enabled": bool(settings and settings.enabled),
+        "license_status": settings.license_status if settings else None,
     }
 
 
@@ -36,6 +42,8 @@ def live_smoke(args: argparse.Namespace) -> tuple[bool, dict[str, object]]:
             origin_iata=args.origin,
             destination_iata=args.destination,
             departure_date=date.fromisoformat(args.departure_date),
+            origin_city_name=args.origin_city,
+            destination_city_name=args.destination_city,
             adults=args.adults,
             currency_code=args.currency,
             max_results=args.max_results,
@@ -56,7 +64,9 @@ def main() -> int:
     parser.add_argument("--interval-seconds", type=float, default=60.0)
     parser.add_argument("--stop-on-failure", action="store_true")
     parser.add_argument("--origin", default="SHA")
-    parser.add_argument("--destination", default="TAO")
+    parser.add_argument("--destination", default="CAN")
+    parser.add_argument("--origin-city", default="上海")
+    parser.add_argument("--destination-city", default="广州")
     parser.add_argument("--departure-date", default=(date.today() + timedelta(days=30)).isoformat())
     parser.add_argument("--adults", type=int, default=1)
     parser.add_argument("--currency", default="CNY")

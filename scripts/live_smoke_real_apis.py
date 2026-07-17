@@ -54,10 +54,11 @@ RELEVANT_SOURCE_IDS = [
     "rail_12306_public_query",
     "rail_12306_redirect",
     "airline_official_redirect",
+    "airline_9c_public_query",
     "amap_uri_redirect",
 ]
-PUBLIC_SMOKE_PROVIDERS = ["map", "geocode", "flight-status", "weather", "redirect"]
-SECRET_SMOKE_PROVIDERS = ["flight"]
+PUBLIC_SMOKE_PROVIDERS = ["map", "geocode", "flight", "flight-status", "weather", "redirect"]
+SECRET_SMOKE_PROVIDERS: list[str] = []
 
 
 def _env(name: str, default: str) -> str:
@@ -167,8 +168,10 @@ def smoke_flight() -> bool:
     print("航班官方公开采集 Provider live smoke:")
     request = FlightSearchRequest(
         origin_iata=_env("LIVE_SMOKE_FLIGHT_ORIGIN", "SHA"),
-        destination_iata=_env("LIVE_SMOKE_FLIGHT_DESTINATION", "TAO"),
+        destination_iata=_env("LIVE_SMOKE_FLIGHT_DESTINATION", "CAN"),
         departure_date=_date_env("LIVE_SMOKE_DEPARTURE_DATE"),
+        origin_city_name=_env("LIVE_SMOKE_FLIGHT_ORIGIN_CITY", "上海"),
+        destination_city_name=_env("LIVE_SMOKE_FLIGHT_DESTINATION_CITY", "广州"),
         adults=int(_env("LIVE_SMOKE_ADULTS", "1")),
         currency_code=_env("LIVE_SMOKE_CURRENCY", "CNY"),
         max_results=int(_env("LIVE_SMOKE_FLIGHT_MAX_RESULTS", "3")),

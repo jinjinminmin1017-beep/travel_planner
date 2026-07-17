@@ -10,6 +10,7 @@ import threading
 import time
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
 from typing import Any, Literal, Protocol, cast
 from urllib.parse import urlparse
@@ -45,6 +46,8 @@ OFFICIAL_AIRLINE_REQUEST_SCHEMAS: dict[str, OfficialAirlineRequestSchema] = {}
 DEFAULT_AIRLINE_PUBLIC_USER_AGENT = "AITravelPlanner/0.1 public-airline-query"
 DEFAULT_FLIGHT_CACHE_TTL_SECONDS = 60
 DEFAULT_FLIGHT_SNAPSHOT_PATH = Path("logs/flight_harvest.sqlite3")
+SPRING_AIRLINES_SOURCE_ID = "airline_9c_public_query"
+SPRING_AIRLINES_SEARCH_PATH = "/Flights/SearchByTime"
 SHANGHAI_TZ = timezone(timedelta(hours=8))
 
 _RATE_LIMIT_LOCK = threading.Lock()
@@ -59,6 +62,8 @@ class FlightSearchRequest:
     origin_iata: str
     destination_iata: str
     departure_date: date
+    origin_city_name: str | None = None
+    destination_city_name: str | None = None
     adults: int = 1
     currency_code: str = "CNY"
     max_results: int = 5
@@ -292,6 +297,132 @@ class OfficialAirlinePublicQueryProvider:
         }
 
 
+class SpringAirlinesPublicQueryProvider:
+    """Anonymous 9C fare search used by Spring Airlines' public booking page."""
+
+    source_id = SPRING_AIRLINES_SOURCE_ID
+    source_name = "Spring Airlines Official Public Flight Query"
+
+    def __init__(
+        self,
+        *,
+        client: httpx.Client | None = None,
+        base_url: str = "https://flights.ch.com",
+        user_agent: str = DEFAULT_AIRLINE_PUBLIC_USER_AGENT,
+        cache_ttl_seconds: int = DEFAULT_FLIGHT_CACHE_TTL_SECONDS,
+        allowed_hosts: tuple[str, ...] = ("flights.ch.com",),
+        timeout_seconds: float = 60.0,
+        snapshot_backend: Literal["sqlite", "disabled"] = "sqlite",
+        snapshot_sqlite_path: str | Path = DEFAULT_FLIGHT_SNAPSHOT_PATH,
+    ) -> None:
+        self.base_url = base_url.rstrip("/")
+        self.user_agent = user_agent
+        self.cache_ttl_seconds = cache_ttl_seconds
+        self.allowed_hosts = tuple(host.lower().strip(".") for host in allowed_hosts)
+        self.snapshot_backend = snapshot_backend
+        self.snapshot_sqlite_path = Path(snapshot_sqlite_path)
+        self.client = client or httpx.Client(
+            timeout=timeout_seconds,
+            follow_redirects=False,
+            headers=self._headers(),
+        )
+
+    def search_offers(self, request: FlightSearchRequest) -> list[FlightOffer]:
+        if not _base_url_matches_allowed_hosts(self.base_url, self.allowed_hosts):
+            raise FlightProviderError(f"{self.source_id} base URL is outside the source allowlist")
+        if request.adults < 1:
+            raise FlightProviderError(f"{self.source_id} adults must be positive")
+        if request.currency_code.upper() != "CNY":
+            raise FlightProviderError(f"{self.source_id} only supports CNY")
+        if not request.origin_city_name or not request.destination_city_name:
+            raise FlightProviderError(f"{self.source_id} requires origin and destination city names")
+
+        cache_key = _cache_key(self.source_id, request)
+        cached = _cache_get(cache_key, self.cache_ttl_seconds)
+        if cached is not None:
+            logger.info(
+                "flight_public_cache_hit source_id=%s cache_key=%s offer_count=%s",
+                self.source_id,
+                cache_key,
+                len(cached),
+            )
+            return [
+                _offer_with_cache_metadata(
+                    offer,
+                    cache_hit=True,
+                    ttl_seconds=self.cache_ttl_seconds,
+                )
+                for offer in cached
+            ]
+
+        endpoint = f"{self.base_url}{SPRING_AIRLINES_SEARCH_PATH}"
+        logger.info(
+            "flight_public_search_start source_id=%s origin_iata=%s destination_iata=%s departure_date=%s",
+            self.source_id,
+            request.origin_iata,
+            request.destination_iata,
+            request.departure_date.isoformat(),
+        )
+        response = self.client.post(
+            endpoint,
+            data=_spring_airlines_form_data(request),
+            headers=self._headers(request),
+        )
+        _raise_for_airline_risk_response(response, source_id=self.source_id)
+        response.raise_for_status()
+        payload = _response_payload(response)
+        if str(payload.get("Code")) != "0":
+            raise FlightProviderError(f"{self.source_id} returned business code {payload.get('Code')}")
+        snapshot_id = save_flight_raw_snapshot(
+            source_id=self.source_id,
+            request_key=cache_key,
+            payload_text=_response_text(response),
+            content_type=str(response.headers.get("content-type", "")) if hasattr(response, "headers") else "",
+            snapshot_backend=self.snapshot_backend,
+            snapshot_path=self.snapshot_sqlite_path,
+        )
+        offers = _parse_spring_airlines_payload(
+            payload,
+            request=request,
+            evidence_id=snapshot_id,
+            cache_ttl_seconds=self.cache_ttl_seconds,
+        )
+        offers.sort(
+            key=lambda offer: (
+                offer.total_price.amount_minor,
+                offer.segments[0].departure_at or datetime.max.replace(tzinfo=SHANGHAI_TZ),
+            )
+        )
+        offers = offers[: max(1, request.max_results)]
+        if not offers:
+            logger.info("flight_public_search_empty source_id=%s", self.source_id)
+            return []
+
+        _cache_set(cache_key, offers, self.cache_ttl_seconds)
+        save_flight_canonical_offers(
+            source_id=self.source_id,
+            request_key=cache_key,
+            offers=offers,
+            ttl_seconds=self.cache_ttl_seconds,
+            snapshot_backend=self.snapshot_backend,
+            snapshot_path=self.snapshot_sqlite_path,
+        )
+        logger.info("flight_public_search_success source_id=%s offer_count=%s", self.source_id, len(offers))
+        return offers
+
+    def _headers(self, request: FlightSearchRequest | None = None) -> dict[str, str]:
+        headers = {
+            "User-Agent": self.user_agent,
+            "Accept": "application/json, text/javascript, */*; q=0.01",
+            "X-Requested-With": "XMLHttpRequest",
+        }
+        if request is not None:
+            headers["Referer"] = (
+                f"{self.base_url}/{request.origin_iata.upper()}-{request.destination_iata.upper()}.html"
+            )
+        return headers
+
+
 class OpenSkyStatesProvider:
     source_id = "opensky_states"
 
@@ -337,7 +468,12 @@ class OpenSkyStatesProvider:
 
 
 def build_enabled_flight_providers(environment: str | None = None) -> list[FlightOfferProvider]:
-    return []
+    from app.data_sources.provider_registry import build_enabled_providers
+
+    return [
+        cast(FlightOfferProvider, provider)
+        for provider in build_enabled_providers({"spring_airlines_public_query"}, environment)
+    ]
 
 
 def build_enabled_flight_state_providers(environment: str | None = None) -> list[FlightStateProvider]:
@@ -361,7 +497,7 @@ def search_flight_offers_with_enabled_provider_result(request: FlightSearchReque
         return FlightProviderSearchResult(
             offers=[],
             attempted_source_ids=[],
-            failure_message="no enabled official-airline flight provider implementation",
+            failure_message="no enabled approved official-airline flight provider",
         )
     for provider in providers:
         attempted_source_ids.append(provider.source_id)
@@ -454,6 +590,175 @@ def save_flight_canonical_offers(
                     expires_at.isoformat(),
                 ),
             )
+
+
+def _spring_airlines_form_data(request: FlightSearchRequest) -> dict[str, str]:
+    return {
+        "Active9s": "",
+        "IsJC": "false",
+        "IsShowTaxprice": "false",
+        "Currency": "0",
+        "SType": "0",
+        "Departure": request.origin_city_name or "",
+        "Arrival": request.destination_city_name or "",
+        "DepartureDate": request.departure_date.isoformat(),
+        "ReturnDate": "",
+        "IsIJFlight": "false",
+        "IsBg": "false",
+        "IsEmployee": "false",
+        "IsLittleGroupFlight": "false",
+        "SeatsNum": str(request.adults),
+        "ActId": "0",
+        "IfRet": "false",
+        "IsUM": "false",
+        "SpecTravTypeId": "0",
+        "IsContains9CAndIJ": "false",
+        "DepCityCode": request.origin_iata.upper(),
+        "ArrCityCode": request.destination_iata.upper(),
+        "DepAirportCode": "",
+        "ArrAirportCode": "",
+        "IsSearchDepAirport": "false",
+        "IsSearchArrAirport": "false",
+    }
+
+
+def _parse_spring_airlines_payload(
+    payload: dict[str, Any],
+    *,
+    request: FlightSearchRequest,
+    evidence_id: str,
+    cache_ttl_seconds: int,
+) -> list[FlightOffer]:
+    raw_routes = payload.get("Route")
+    if not isinstance(raw_routes, list):
+        return []
+
+    offers: list[FlightOffer] = []
+    for route_group in raw_routes:
+        raw_flights = route_group if isinstance(route_group, list) else [route_group]
+        for raw_flight in raw_flights:
+            if not isinstance(raw_flight, dict):
+                continue
+            flight_no = str(raw_flight.get("No") or "").strip().upper()
+            if not re.fullmatch(r"9C\d+[A-Z]?", flight_no):
+                continue
+            origin_iata = str(
+                raw_flight.get("DepartureAirportCode")
+                or raw_flight.get("DepartureCode")
+                or request.origin_iata
+            ).strip().upper()
+            destination_iata = str(
+                raw_flight.get("ArrivalAirportCode")
+                or raw_flight.get("ArrivalCode")
+                or request.destination_iata
+            ).strip().upper()
+            if origin_iata != request.origin_iata.upper() or destination_iata != request.destination_iata.upper():
+                continue
+            stopovers = raw_flight.get("Stopovers")
+            if request.non_stop is True and isinstance(stopovers, list) and stopovers:
+                continue
+            departure_at = _parse_datetime(raw_flight.get("DepartureTime"), request.departure_date)
+            arrival_at = _parse_datetime(raw_flight.get("ArrivalTime"), request.departure_date)
+            if departure_at is None or arrival_at is None or arrival_at <= departure_at:
+                continue
+            cabins = _spring_airlines_cabin_options(
+                raw_flight,
+                flight_no=flight_no,
+                evidence_id=evidence_id,
+            )
+            if not cabins:
+                continue
+            selected = min(cabins, key=lambda cabin: cabin.price.amount_minor)
+            segment_id = str(raw_flight.get("SegmentId") or raw_flight.get("RouteId") or "").strip()
+            offer_id = segment_id or f"spring_{flight_no}_{request.departure_date.isoformat()}"
+            data_source = flight_data_source_metadata(
+                SPRING_AIRLINES_SOURCE_ID,
+                SpringAirlinesPublicQueryProvider.source_name,
+                cache_hit=False,
+                cache_ttl_seconds=cache_ttl_seconds,
+                evidence_id=evidence_id,
+            )
+            offers.append(
+                FlightOffer(
+                    offer_id=offer_id,
+                    source="SPRING_AIRLINES_PUBLIC_FRONTEND",
+                    total_price=selected.price,
+                    currency=selected.price.currency,
+                    segments=[
+                        FlightOfferSegment(
+                            carrier_code="9C",
+                            flight_number=flight_no[2:],
+                            origin_iata=origin_iata,
+                            destination_iata=destination_iata,
+                            departure_at=departure_at,
+                            arrival_at=arrival_at,
+                            duration=str(raw_flight.get("FlightTimeM") or raw_flight.get("FlightTime") or "") or None,
+                        )
+                    ],
+                    validating_airline_codes=["9C"],
+                    raw_offer={
+                        "flight_number": flight_no,
+                        "segment_id": segment_id or None,
+                        "departure_airport": raw_flight.get("DepartureStation"),
+                        "arrival_airport": raw_flight.get("ArrivalStation"),
+                        "evidence_id": evidence_id,
+                    },
+                    data_source=data_source,
+                    cabin_options=cabins,
+                    evidence_id=evidence_id,
+                )
+            )
+    return offers
+
+
+def _spring_airlines_cabin_options(
+    raw_flight: dict[str, Any],
+    *,
+    flight_no: str,
+    evidence_id: str,
+) -> list[FlightOfferCabinOption]:
+    groups = raw_flight.get("AircraftCabins")
+    if not isinstance(groups, list):
+        return []
+    cabins: list[FlightOfferCabinOption] = []
+    for group_index, group in enumerate(groups, start=1):
+        if not isinstance(group, dict) or group.get("IsHide") is True:
+            continue
+        raw_infos = group.get("AircraftCabinInfos")
+        if not isinstance(raw_infos, list):
+            continue
+        cabin_type = _spring_airlines_cabin_type(group)
+        for info_index, info in enumerate(raw_infos, start=1):
+            if not isinstance(info, dict):
+                continue
+            price = _money_from_value(info.get("Price"))
+            if price is None or price.amount_minor <= 0:
+                continue
+            fare_code = str(info.get("Name") or f"fare_{group_index}_{info_index}").strip()
+            remaining = _optional_int(info.get("Remain"))
+            availability = "LIMITED" if remaining is not None and remaining > 0 else "AVAILABLE"
+            remaining_count = remaining if remaining is not None and remaining > 0 else None
+            option_token = _normalize_option_token(f"{fare_code}_{group_index}_{info_index}_{price.amount_minor}")
+            cabins.append(
+                FlightOfferCabinOption(
+                    option_id=f"spring_{flight_no.lower()}_{option_token}",
+                    cabin_type=cabin_type,
+                    price=price,
+                    availability=availability,
+                    source_option_version=f"spring_{flight_no}_{evidence_id}_{option_token}",
+                    inventory_evidence=f"public_response_price_with_remain={remaining if remaining is not None else 'unknown'}",
+                    remaining_count=remaining_count,
+                )
+            )
+    return cabins
+
+
+def _spring_airlines_cabin_type(group: dict[str, Any]) -> str:
+    label = str(group.get("CabinLevelName") or "").strip()
+    for expected in ("头等舱", "商务舱", "经济舱"):
+        if expected in label:
+            return expected
+    return "经济舱"
 
 
 def _parse_public_airline_payload(
@@ -769,6 +1074,8 @@ def _cache_key(source_id: str, request: FlightSearchRequest) -> str:
             source_id,
             request.origin_iata.upper(),
             request.destination_iata.upper(),
+            request.origin_city_name or "",
+            request.destination_city_name or "",
             request.departure_date.isoformat(),
             str(request.adults),
             request.currency_code.upper(),
@@ -902,9 +1209,19 @@ def _parse_datetime(value: Any, departure_date: date | None = None) -> datetime 
 
 
 def _price_to_money(total: str, currency: str) -> Money:
-    amount_minor = int(round(float(total) * 100))
-    value = abs(amount_minor) / 100
-    return Money(amount_minor=amount_minor, currency=currency, scale=2, is_estimated=False, display_text=f"{currency} {value:.2f}")
+    try:
+        decimal_value = Decimal(str(total))
+    except InvalidOperation as exc:
+        raise ValueError("invalid flight price") from exc
+    amount_minor = int((decimal_value * Decimal("100")).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+    display_value = (Decimal(abs(amount_minor)) / Decimal("100")).quantize(Decimal("0.01"))
+    return Money(
+        amount_minor=amount_minor,
+        currency=currency,
+        scale=2,
+        is_estimated=False,
+        display_text=f"{currency} {display_value}",
+    )
 
 
 def _optional_float(value: Any) -> float | None:

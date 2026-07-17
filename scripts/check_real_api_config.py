@@ -32,6 +32,7 @@ PUBLIC_READ_ONLY_SOURCE_IDS = {
     "rail_12306_public_query": "12306 公开匿名车次、票价和席别查询",
     "rail_12306_redirect": "12306 官方入口跳转",
     "airline_official_redirect": "航司官网跳转",
+    "airline_9c_public_query": "春秋航空公开匿名航班、票价和舱位查询",
     "amap_uri_redirect": "地图导航跳转",
 }
 
@@ -116,15 +117,13 @@ def validate_public_tier() -> list[str]:
 
 
 def validate_secret_tier(selected_sources: list[str]) -> list[str]:
-    failures: list[str] = []
-    if "flight" not in selected_sources:
-        return failures
-    failures.append("flight: 当前没有已实现并获准登记的官方航司查询 Provider")
-    return failures
+    if "flight" in selected_sources:
+        return ["flight: 已实现的春秋航空查询无需密钥，请使用 public tier 验证"]
+    return []
 
 
 def validate_full_tier() -> list[str]:
-    return validate_public_tier() + validate_secret_tier(["flight"])
+    return validate_public_tier()
 
 
 def _print_failures(title: str, failures: list[str]) -> None:

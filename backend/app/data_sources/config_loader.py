@@ -47,6 +47,12 @@ SOURCE_DEFINITIONS: dict[str, SourceDefinition] = {
     "opensky_states": SourceDefinition("OpenSky Network States API", DataSourceType.FLIGHT, "B", "PUBLIC_READ_ONLY_RATE_LIMITED"),
     "open_meteo_forecast": SourceDefinition("Open-Meteo Forecast API", DataSourceType.WEATHER, "B", "PUBLIC_READ_ONLY_RATE_LIMITED"),
     "airline_official_redirect": SourceDefinition("Airline Official Redirect", DataSourceType.FLIGHT, "A", "REDIRECT_ONLY"),
+    "airline_9c_public_query": SourceDefinition(
+        "Spring Airlines Official Public Flight Query",
+        DataSourceType.FLIGHT,
+        "A",
+        "PUBLIC_AIRLINE_FRONTEND_QUERY",
+    ),
     "rail_12306_redirect": SourceDefinition("12306 Official Redirect", DataSourceType.RAIL, "S", "REDIRECT_ONLY"),
     "rail_12306_public_query": SourceDefinition("12306 Public Ticket Query", DataSourceType.RAIL, "S", "PUBLIC_ANONYMOUS_QUERY"),
     "real_llm": SourceDefinition("Real LLM Provider", DataSourceType.LLM, "A", "DISABLED_BY_DEFAULT"),
@@ -142,6 +148,17 @@ class RailSourceSettings(HttpSourceSettings):
         return self
 
 
+class FlightSourceSettings(HttpSourceSettings):
+    user_agent: str | None = None
+    cache_ttl_seconds: int = Field(default=60, ge=0)
+
+    @model_validator(mode="after")
+    def validate_flight_fields(self) -> "FlightSourceSettings":
+        if self.enabled and not self.user_agent:
+            raise ValueError("USER_AGENT")
+        return self
+
+
 class NominatimSourceSettings(HttpSourceSettings):
     user_agent: str | None = None
 
@@ -177,6 +194,7 @@ ADAPTER_SETTINGS_MODELS: dict[str, type[DataSourceSettings]] = {
     "opensky_states": HttpSourceSettings,
     "open_meteo_forecast": HttpSourceSettings,
     "airline_official_redirect": RedirectSourceSettings,
+    "spring_airlines_public_query": FlightSourceSettings,
     "rail_12306_redirect": RedirectSourceSettings,
     "rail_12306_public_query": RailSourceSettings,
     "real_llm": RealLlmSourceSettings,
@@ -191,6 +209,7 @@ NOMINATIM_ENV_SUFFIXES = HTTP_ENV_SUFFIXES | frozenset({"USER_AGENT"})
 RAIL_ENV_SUFFIXES = HTTP_ENV_SUFFIXES | frozenset(
     {"USER_AGENT", "CACHE_TTL_SECONDS", "MIN_INTERVAL_SECONDS"}
 )
+FLIGHT_ENV_SUFFIXES = HTTP_ENV_SUFFIXES | frozenset({"USER_AGENT", "CACHE_TTL_SECONDS"})
 REAL_LLM_ENV_SUFFIXES = CREDENTIALED_HTTP_ENV_SUFFIXES | frozenset(
     {"MODEL", "MAX_TOKENS", "THINKING_DISABLED"}
 )
@@ -207,6 +226,7 @@ ADAPTER_ENV_SUFFIXES: dict[str, frozenset[str]] = {
     "opensky_states": HTTP_ENV_SUFFIXES,
     "open_meteo_forecast": HTTP_ENV_SUFFIXES,
     "airline_official_redirect": COMMON_ENV_SUFFIXES,
+    "spring_airlines_public_query": FLIGHT_ENV_SUFFIXES,
     "rail_12306_redirect": COMMON_ENV_SUFFIXES,
     "rail_12306_public_query": RAIL_ENV_SUFFIXES,
     "real_llm": REAL_LLM_ENV_SUFFIXES,
@@ -422,8 +442,15 @@ def _parse_source_settings(
             )
         if issubclass(model, CredentialedHttpSourceSettings):
             payload["api_key"] = SecretStr(raw["API_KEY"]) if raw.get("API_KEY") else None
-        if issubclass(model, (NominatimSourceSettings, RailSourceSettings)):
+        if issubclass(model, (NominatimSourceSettings, RailSourceSettings, FlightSourceSettings)):
             payload["user_agent"] = raw.get("USER_AGENT")
+        if issubclass(model, FlightSourceSettings):
+            payload["cache_ttl_seconds"] = _parse_int(
+                source_id,
+                "CACHE_TTL_SECONDS",
+                raw.get("CACHE_TTL_SECONDS", "60"),
+                minimum=0,
+            )
         if issubclass(model, RailSourceSettings):
             payload["cache_ttl_seconds"] = _parse_int(
                 source_id,
@@ -504,7 +531,7 @@ def _validate_adapter_payload(
         missing.append("BASE_URL")
     if issubclass(model, CredentialedHttpSourceSettings) and payload.get("api_key") is None:
         missing.append("API_KEY")
-    if issubclass(model, (NominatimSourceSettings, RailSourceSettings)) and not payload.get("user_agent"):
+    if issubclass(model, (NominatimSourceSettings, RailSourceSettings, FlightSourceSettings)) and not payload.get("user_agent"):
         missing.append("USER_AGENT")
     if issubclass(model, RealLlmSourceSettings) and not payload.get("model"):
         missing.append("MODEL")

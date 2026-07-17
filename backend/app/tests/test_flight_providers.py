@@ -16,6 +16,7 @@ from app.data_sources.flight_providers import (
     OfficialAirlineRequestSchema,
     OfficialAirlinePublicQueryProvider,
     OpenSkyStatesProvider,
+    SpringAirlinesPublicQueryProvider,
     build_enabled_flight_providers,
     flight_data_source_metadata,
     price_flight_offer_with_enabled_provider_result,
@@ -50,6 +51,10 @@ class _FakeClient:
 
     def get(self, url, **kwargs):
         self.calls.append(("GET", url, kwargs))
+        return self.response
+
+    def post(self, url, **kwargs):
+        self.calls.append(("POST", url, kwargs))
         return self.response
 
 
@@ -167,8 +172,73 @@ def test_public_airline_provider_rejects_base_url_outside_allowlist():
         provider.search_offers(FlightSearchRequest(origin_iata="SHA", destination_iata="TAO", departure_date=date(2026, 5, 21)))
 
 
+def test_spring_airlines_provider_posts_public_form_and_maps_real_shape():
+    client = _FakeClient(_FakeResponse(_spring_airlines_payload()))
+    provider = SpringAirlinesPublicQueryProvider(
+        client=client,
+        base_url="https://flights.ch.com",
+        cache_ttl_seconds=0,
+        allowed_hosts=("flights.ch.com",),
+        snapshot_backend="disabled",
+    )
+
+    offers = provider.search_offers(
+        FlightSearchRequest(
+            origin_iata="SHA",
+            destination_iata="CAN",
+            departure_date=date(2026, 7, 23),
+            origin_city_name="上海",
+            destination_city_name="广州",
+            max_results=3,
+            non_stop=True,
+        )
+    )
+
+    method, url, kwargs = client.calls[0]
+    assert method == "POST"
+    assert url == "https://flights.ch.com/Flights/SearchByTime"
+    assert kwargs["data"]["Departure"] == "上海"
+    assert kwargs["data"]["Arrival"] == "广州"
+    assert kwargs["data"]["DepCityCode"] == "SHA"
+    assert kwargs["data"]["ArrCityCode"] == "CAN"
+    assert kwargs["data"]["SeatsNum"] == "1"
+    assert kwargs["headers"]["X-Requested-With"] == "XMLHttpRequest"
+    assert kwargs["headers"]["Referer"] == "https://flights.ch.com/SHA-CAN.html"
+    assert len(offers) == 1
+    offer = offers[0]
+    assert offer.data_source.source_id == "airline_9c_public_query"
+    assert offer.data_source.authority_level == "A"
+    assert offer.total_price.amount_minor == 37000
+    assert offer.segments[0].carrier_code == "9C"
+    assert offer.segments[0].flight_number == "8931"
+    assert offer.segments[0].origin_iata == "SHA"
+    assert offer.segments[0].destination_iata == "CAN"
+    assert offer.cabin_options[0].cabin_type == "经济舱"
+    assert offer.cabin_options[0].availability == "AVAILABLE"
+    assert offer.cabin_options[0].remaining_count is None
+    assert offer.cabin_options[1].availability == "LIMITED"
+    assert offer.cabin_options[1].remaining_count == 10
+
+
+def test_spring_airlines_provider_requires_city_names_without_guessing():
+    provider = SpringAirlinesPublicQueryProvider(
+        client=_FakeClient(_FakeResponse(_spring_airlines_payload())),
+        cache_ttl_seconds=0,
+        snapshot_backend="disabled",
+    )
+
+    with pytest.raises(FlightProviderError, match="requires origin and destination city names"):
+        provider.search_offers(
+            FlightSearchRequest(
+                origin_iata="SHA",
+                destination_iata="CAN",
+                departure_date=date(2026, 7, 23),
+            )
+        )
+
+
 def test_unimplemented_public_airline_cannot_be_enabled_through_env(monkeypatch):
-    assert build_enabled_flight_providers("DEV") == []
+    assert [provider.source_id for provider in build_enabled_flight_providers("DEV")] == ["airline_9c_public_query"]
 
     monkeypatch.setenv("TRAVEL_SOURCE_AIRLINE_MU_PUBLIC_QUERY_ENABLED", "true")
     monkeypatch.setenv("TRAVEL_SOURCE_AIRLINE_MU_PUBLIC_QUERY_LICENSE_STATUS", "APPROVED")
@@ -183,6 +253,9 @@ def test_unimplemented_public_airline_cannot_be_enabled_through_env(monkeypatch)
 def test_official_airline_implementation_registry_is_program_owned_and_fail_closed():
     assert OFFICIAL_AIRLINE_REQUEST_SCHEMAS == {}
     assert load_data_source_settings().by_adapter("official_airline_public_query") == ()
+    assert [source.source_id for source in load_data_source_settings().by_adapter("spring_airlines_public_query")] == [
+        "airline_9c_public_query"
+    ]
 
 
 def test_public_airline_provider_blocks_captcha_and_rate_limit():
@@ -247,7 +320,9 @@ def test_redact_flight_snapshot_handles_headers_and_query_tokens():
     assert "route=SHA-TAO" in redacted
 
 
-def test_flight_search_result_reports_disabled_provider_when_not_configured():
+def test_flight_search_result_reports_disabled_provider_when_not_configured(monkeypatch):
+    monkeypatch.setenv("TRAVEL_SOURCE_AIRLINE_9C_PUBLIC_QUERY_ENABLED", "false")
+    reset_data_source_settings_cache()
     result = search_flight_offers_with_enabled_provider_result(
         FlightSearchRequest(origin_iata="SHA", destination_iata="WNZ", departure_date=date(2026, 6, 28)),
         environment="DEV",
@@ -255,7 +330,7 @@ def test_flight_search_result_reports_disabled_provider_when_not_configured():
 
     assert result.offers == []
     assert result.attempted_source_ids == []
-    assert result.failure_message == "no enabled official-airline flight provider implementation"
+    assert result.failure_message == "no enabled approved official-airline flight provider"
 
 
 def test_price_wrapper_keeps_self_harvest_offer_without_second_provider():
@@ -413,6 +488,42 @@ def _public_offer_payload():
                 ],
             }
         ]
+    }
+
+
+def _spring_airlines_payload():
+    return {
+        "Code": "0",
+        "Route": [
+            [
+                {
+                    "No": "9C8931",
+                    "SegmentId": "spring_segment_9c8931",
+                    "Departure": "上海",
+                    "DepartureCode": "SHA",
+                    "DepartureAirportCode": "SHA",
+                    "DepartureStation": "上海虹桥国际机场T1",
+                    "DepartureTime": "2026-07-23 17:35:00",
+                    "Arrival": "广州",
+                    "ArrivalCode": "CAN",
+                    "ArrivalAirportCode": "CAN",
+                    "ArrivalStation": "广州白云国际机场T3",
+                    "ArrivalTime": "2026-07-23 20:10:00",
+                    "FlightTimeM": "2h35m",
+                    "Stopovers": [],
+                    "AircraftCabins": [
+                        {
+                            "CabinLevelName": "经济舱",
+                            "IsHide": False,
+                            "AircraftCabinInfos": [
+                                {"Name": "PB", "Price": 370, "Remain": 0},
+                                {"Name": "Y1", "Price": 2350, "Remain": 10},
+                            ],
+                        }
+                    ],
+                }
+            ]
+        ],
     }
 
 

@@ -282,6 +282,8 @@ def _flight(segment_id: str, flight: str, origin: str, destination: str, day, de
             origin_iata=codes[0],
             destination_iata=codes[1],
             departure_date=day,
+            origin_city_name=AIRPORT_CITY_NAMES.get(origin),
+            destination_city_name=AIRPORT_CITY_NAMES.get(destination),
             adults=1,
             currency_code="CNY",
             max_results=3,
@@ -322,6 +324,8 @@ def _real_direct_flight_segment(segment_id: str, flight: str, origin: str, desti
             origin_iata=codes[0],
             destination_iata=codes[1],
             departure_date=day,
+            origin_city_name=AIRPORT_CITY_NAMES.get(origin),
+            destination_city_name=AIRPORT_CITY_NAMES.get(destination),
             adults=1,
             currency_code="CNY",
             max_results=3,
@@ -364,6 +368,18 @@ AIRPORT_IATA_CODES = {
     "济南遥墙机场": "TNA",
     "武汉天河机场": "WUH",
     "长沙黄花机场": "CSX",
+}
+
+AIRPORT_CITY_NAMES = {
+    "上海虹桥机场": "上海",
+    "上海浦东机场": "上海",
+    "青岛胶东机场": "青岛",
+    "北京首都机场": "北京",
+    "北京大兴机场": "北京",
+    "广州白云机场": "广州",
+    "济南遥墙机场": "济南",
+    "武汉天河机场": "武汉",
+    "长沙黄花机场": "长沙",
 }
 
 
@@ -978,6 +994,8 @@ def _build_dynamic_flight_plans(
                 origin_iata=origin_iata,
                 destination_iata=destination_iata,
                 departure_date=day,
+                origin_city_name=origin_airport.city_name,
+                destination_city_name=destination_airport.city_name,
                 adults=1,
                 currency_code="CNY",
                 max_results=max_plans,
@@ -1369,7 +1387,17 @@ def _build_dynamic_flight_rail_mixed_plans(
                     if not origin_iata or not hub_iata:
                         continue
                     flight_result = search_flight_offers_with_enabled_provider_result(
-                        FlightSearchRequest(origin_iata=origin_iata, destination_iata=hub_iata, departure_date=day, adults=1, currency_code="CNY", max_results=2, non_stop=None)
+                        FlightSearchRequest(
+                            origin_iata=origin_iata,
+                            destination_iata=hub_iata,
+                            departure_date=day,
+                            origin_city_name=origin_airport.city_name,
+                            destination_city_name=hub_airport.city_name,
+                            adults=1,
+                            currency_code="CNY",
+                            max_results=2,
+                            non_stop=None,
+                        )
                     )
                     rail_result = search_rail_offers_with_enabled_provider_result(
                         RailSearchRequest(train_number="", origin_station=transfer_station.station_name, destination_station=destination_station, departure_date=day)
@@ -1447,7 +1475,17 @@ def _build_dynamic_flight_rail_mixed_plans(
                         RailSearchRequest(train_number="", origin_station=origin_station, destination_station=transfer_station.station_name, departure_date=day)
                     )
                     flight_result = search_flight_offers_with_enabled_provider_result(
-                        FlightSearchRequest(origin_iata=hub_iata, destination_iata=destination_iata, departure_date=day, adults=1, currency_code="CNY", max_results=2, non_stop=None)
+                        FlightSearchRequest(
+                            origin_iata=hub_iata,
+                            destination_iata=destination_iata,
+                            departure_date=day,
+                            origin_city_name=hub_airport.city_name,
+                            destination_city_name=destination_airport.city_name,
+                            adults=1,
+                            currency_code="CNY",
+                            max_results=2,
+                            non_stop=None,
+                        )
                     )
                     if not rail_result.offers or not flight_result.offers:
                         failure_messages.append(f"rail-flight via {transfer_station.station_name}: rail={rail_result.failure_message or len(rail_result.offers)} flight={flight_result.failure_message or len(flight_result.offers)}")

@@ -1,6 +1,6 @@
 # Project Index
 
-更新日期：2026-07-16
+更新日期：2026-07-18
 
 ## 技术栈
 
@@ -29,7 +29,7 @@
   - `config_loader.py`：从 `TRAVEL_DATA_SOURCE_IDS` 与 `TRAVEL_SOURCE_<ID>_*` 构造不可变、类型化的 ENV-only 配置快照。
   - `provider_registry.py`：统一的 adapter settings model 与 Provider factory 注册表；启用源在启动期完成构造校验。
   - `rate_limiter.py`：按 source_id 共享的线程安全 HTTP 请求门控，使外部 Provider 的 `QPS_LIMIT` 在真实请求边界生效。
-  - `flight_providers.py`：航班请求构造、响应解析、快照脱敏和代码内请求实现注册；环境变量不能声明技术就绪。
+  - `flight_providers.py`：航班请求构造、响应解析和快照脱敏；已实现春秋航空 `airline_9c_public_query` 匿名公开票价查询，其他航司仍需独立实现与验证，环境变量不能声明技术就绪。
 - `backend/app/core/`：请求上下文、安全策略、日志配置。
 - `backend/app/data/`：本地数据目录，如交通节点和目的地资产。
 - `backend/app/llm/`：Prompt、LLM 调用日志和版本相关文件。
@@ -71,7 +71,7 @@
 - TTL 缓存服务：`backend/app/services/cache_store.py`。
 - 运行时 store：`backend/app/services/store.py`。
 - 默认 SQLite 路径配置：`.env.example` 中的 `TRAVEL_SQLITE_PATH=logs/travel_planner.sqlite3`。
-- 官方航司查询尚未实现，因此不登记运行时 source，也不暴露飞行快照 ENV 配置。
+- 春秋航空匿名公开查询已实现并登记为 `airline_9c_public_query`；报价使用 60 秒进程内缓存，脱敏原始快照与规范化 offer 写入本地 SQLite `logs/flight_harvest.sqlite3`。
 - Redis/PostgreSQL 尚未实现，当前不提供对应运行配置。
 
 ## 配置文件
@@ -95,5 +95,6 @@
 - Schema 导出：`.\.venv\Scripts\python scripts\export_schemas.py`
 - Provider 配置检查：`.\.venv\Scripts\python scripts\check_real_api_config.py --tier public`
 - 公开 live smoke：`.\.venv\Scripts\python scripts\live_smoke_real_apis.py --tier public`
+- 春秋航班 live smoke：`.\.venv\Scripts\python scripts\live_smoke_real_apis.py --tier public --provider flight`
 - 航司连续门禁 smoke：`.\.venv\Scripts\python scripts\continuous_flight_smoke.py --mode gate --iterations 3 --interval-seconds 0`
-- 航司匿名取样与条款证据：`docs/flight_provider_evidence/2026-07-15/`
+- 春秋航空匿名查询验证：`docs/flight_provider_evidence/2026-07-18/spring_airlines_anonymous_query.md`
