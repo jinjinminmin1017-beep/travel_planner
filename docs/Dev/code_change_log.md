@@ -316,3 +316,22 @@
   - 公开真实接口 smoke 全部通过：地图四种方式、4 条地点解析与接驳、OpenSky、Open-Meteo、12306/航司/地图跳转均成功。
   - `git diff --check` 与 Python 编译检查通过。
 - 兼容性：状态 API schema 保持不变，未修改数据库和前端，无需迁移。
+
+## 2026-07-18 07:43:32 +08:00
+
+- 任务：通过官网匿名查询接入春秋航空真实航班、票价和舱位 Provider。
+- 代码提交：`1e4413f`。
+- 修改内容：
+  - 新增 `airline_9c_public_query` 与独立 `spring_airlines_public_query` adapter，使用春秋航空公开订票页实际调用的 `POST /Flights/SearchByTime`，不依赖登录、Cookie、token、签名或验证码材料。
+  - 解析 `Route` 航班事实和 `AircraftCabins[].AircraftCabinInfos[]` 舱价事实，金额按 Decimal 转换为分；`Remain=0` 按官网实际展示语义保留为“可售、数量未知”，正整数记录为有限余量。
+  - 在真实 `.env` 与 `.env.example` 同步登记并启用 9C：`APPROVED`、1 QPS、60 秒超时、60 秒缓存、host allowlist；两份文件均为 163 个键且键集合一致。
+  - 规划请求补充真实城市名，春秋候选按价格和出发时间稳定排序；验证码、人机挑战、HTTP 429、非法 host、业务错误和超时均 fail-closed，不做绕过。
+  - 更新公开配置检查、连续门禁、live smoke、项目索引与脱敏验证记录；其他未实现航司仍不能通过 ENV 伪造技术就绪。
+- 验证：
+  - `\.venv\Scripts\python -m pytest backend\app\tests -q`：223 passed。
+  - 航班与配置专项：37 passed。
+  - `\.venv\Scripts\python scripts\check_real_api_config.py --tier public`：通过。
+  - `\.venv\Scripts\python scripts\continuous_flight_smoke.py --mode gate --iterations 3 --interval-seconds 0`：3/3 通过。
+  - 真实在线 smoke：`SHA -> CAN`、2026-07-23，Provider 返回 9C8835、CNY 390.00 与真实经济舱可售状态；浏览器匿名结果共 6 班，最低 9C8931、¥370。
+  - `git diff --check` 与 Python compileall：通过。
+- 兼容性：未修改 API schema、数据库或前端，无需迁移。
