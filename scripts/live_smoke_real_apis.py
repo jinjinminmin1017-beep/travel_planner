@@ -55,6 +55,8 @@ RELEVANT_SOURCE_IDS = [
     "rail_12306_redirect",
     "airline_official_redirect",
     "airline_9c_public_query",
+    "airline_hu_public_query",
+    "airline_qw_public_query",
     "amap_uri_redirect",
 ]
 PUBLIC_SMOKE_PROVIDERS = ["map", "geocode", "flight", "flight-status", "weather", "redirect"]

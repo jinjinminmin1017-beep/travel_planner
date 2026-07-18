@@ -48,6 +48,12 @@ DEFAULT_FLIGHT_CACHE_TTL_SECONDS = 60
 DEFAULT_FLIGHT_SNAPSHOT_PATH = Path("logs/flight_harvest.sqlite3")
 SPRING_AIRLINES_SOURCE_ID = "airline_9c_public_query"
 SPRING_AIRLINES_SEARCH_PATH = "/Flights/SearchByTime"
+HAINAN_AIRLINES_SOURCE_ID = "airline_hu_public_query"
+HAINAN_AIRLINES_DEEP_LINK_PATH = "/hainanair/ibe/deeplink/ancillary.do"
+HAINAN_AIRLINES_SEARCH_PATH = "/hainanair/ibe/common/processSearch.do"
+QINGDAO_AIRLINES_SOURCE_ID = "airline_qw_public_query"
+QINGDAO_AIRLINES_INIT_PATH = "/api/sale/v1/b2cTicket/get"
+QINGDAO_AIRLINES_SEARCH_PATH = "/api/ewp/sales/v1/air/list"
 SHANGHAI_TZ = timezone(timedelta(hours=8))
 
 _RATE_LIMIT_LOCK = threading.Lock()
@@ -423,6 +429,260 @@ class SpringAirlinesPublicQueryProvider:
         return headers
 
 
+class HainanAirlinesPublicQueryProvider:
+    """Anonymous fare search used by Hainan Airlines' public booking page."""
+
+    source_id = HAINAN_AIRLINES_SOURCE_ID
+    source_name = "Hainan Airlines Official Public Flight Query"
+
+    def __init__(
+        self,
+        *,
+        client: httpx.Client | None = None,
+        base_url: str = "https://new.hnair.com",
+        user_agent: str = DEFAULT_AIRLINE_PUBLIC_USER_AGENT,
+        cache_ttl_seconds: int = DEFAULT_FLIGHT_CACHE_TTL_SECONDS,
+        allowed_hosts: tuple[str, ...] = ("new.hnair.com",),
+        timeout_seconds: float = 60.0,
+        snapshot_backend: Literal["sqlite", "disabled"] = "sqlite",
+        snapshot_sqlite_path: str | Path = DEFAULT_FLIGHT_SNAPSHOT_PATH,
+    ) -> None:
+        self.base_url = base_url.rstrip("/")
+        self.user_agent = user_agent
+        self.cache_ttl_seconds = cache_ttl_seconds
+        self.allowed_hosts = tuple(host.lower().strip(".") for host in allowed_hosts)
+        self.snapshot_backend = snapshot_backend
+        self.snapshot_sqlite_path = Path(snapshot_sqlite_path)
+        self.client = client or httpx.Client(
+            timeout=timeout_seconds,
+            follow_redirects=True,
+            headers=self._headers(),
+        )
+
+    def search_offers(self, request: FlightSearchRequest) -> list[FlightOffer]:
+        self._validate_request(request)
+        cache_key = _cache_key(self.source_id, request)
+        cached = _cache_get(cache_key, self.cache_ttl_seconds)
+        if cached is not None:
+            return [
+                _offer_with_cache_metadata(offer, cache_hit=True, ttl_seconds=self.cache_ttl_seconds)
+                for offer in cached
+            ]
+
+        params = _hainan_airlines_deep_link_params(request)
+        deep_link_endpoint = f"{self.base_url}{HAINAN_AIRLINES_DEEP_LINK_PATH}"
+        search_endpoint = f"{self.base_url}{HAINAN_AIRLINES_SEARCH_PATH}"
+        logger.info(
+            "flight_public_search_start source_id=%s origin_iata=%s destination_iata=%s departure_date=%s",
+            self.source_id,
+            request.origin_iata,
+            request.destination_iata,
+            request.departure_date.isoformat(),
+        )
+        first_response = self.client.get(deep_link_endpoint, params=params, headers=self._headers())
+        _raise_for_airline_risk_response(first_response, source_id=self.source_id)
+        first_response.raise_for_status()
+        second_response = self.client.post(
+            deep_link_endpoint,
+            params={**params, "redirected": "true"},
+            data={"ConversationID": "", "ENCRYPTED_QUERY": "", "QUERY": "", "redirected": "true"},
+            headers=self._headers(),
+        )
+        _raise_for_airline_risk_response(second_response, source_id=self.source_id)
+        second_response.raise_for_status()
+        response = self.client.post(search_endpoint, data="", headers=self._headers())
+        if getattr(response, "status_code", None) == 429:
+            _raise_for_airline_risk_response(response, source_id=self.source_id)
+        response.raise_for_status()
+        response_text = _response_text(response)
+        if "Flights[position] = Flight" not in response_text and _looks_like_airline_challenge(response_text):
+            raise FlightProviderError(f"{self.source_id} anti-bot challenge detected; automated bypass is forbidden")
+
+        snapshot_id = save_flight_raw_snapshot(
+            source_id=self.source_id,
+            request_key=cache_key,
+            payload_text=_sanitize_hainan_snapshot(response_text),
+            content_type=str(response.headers.get("content-type", "")) if hasattr(response, "headers") else "",
+            snapshot_backend=self.snapshot_backend,
+            snapshot_path=self.snapshot_sqlite_path,
+        )
+        offers = _parse_hainan_airlines_response(
+            response_text,
+            request=request,
+            evidence_id=snapshot_id,
+            cache_ttl_seconds=self.cache_ttl_seconds,
+        )
+        offers.sort(
+            key=lambda offer: (
+                offer.total_price.amount_minor,
+                offer.segments[0].departure_at or datetime.max.replace(tzinfo=SHANGHAI_TZ),
+            )
+        )
+        offers = offers[: max(1, request.max_results)]
+        if not offers:
+            logger.info("flight_public_search_empty source_id=%s", self.source_id)
+            return []
+        _cache_set(cache_key, offers, self.cache_ttl_seconds)
+        save_flight_canonical_offers(
+            source_id=self.source_id,
+            request_key=cache_key,
+            offers=offers,
+            ttl_seconds=self.cache_ttl_seconds,
+            snapshot_backend=self.snapshot_backend,
+            snapshot_path=self.snapshot_sqlite_path,
+        )
+        logger.info("flight_public_search_success source_id=%s offer_count=%s", self.source_id, len(offers))
+        return offers
+
+    def _validate_request(self, request: FlightSearchRequest) -> None:
+        if not _base_url_matches_allowed_hosts(self.base_url, self.allowed_hosts):
+            raise FlightProviderError(f"{self.source_id} base URL is outside the source allowlist")
+        if request.adults < 1:
+            raise FlightProviderError(f"{self.source_id} adults must be positive")
+        if request.currency_code.upper() != "CNY":
+            raise FlightProviderError(f"{self.source_id} only supports CNY")
+
+    def _headers(self) -> dict[str, str]:
+        return {
+            "User-Agent": self.user_agent,
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Referer": f"{self.base_url}/",
+        }
+
+
+class QingdaoAirlinesPublicQueryProvider:
+    """Anonymous QW fare search used by Qingdao Airlines' public booking page."""
+
+    source_id = QINGDAO_AIRLINES_SOURCE_ID
+    source_name = "Qingdao Airlines Official Public Flight Query"
+
+    def __init__(
+        self,
+        *,
+        client: httpx.Client | None = None,
+        base_url: str = "https://www.qdairlines.com",
+        user_agent: str = DEFAULT_AIRLINE_PUBLIC_USER_AGENT,
+        cache_ttl_seconds: int = DEFAULT_FLIGHT_CACHE_TTL_SECONDS,
+        allowed_hosts: tuple[str, ...] = ("www.qdairlines.com",),
+        timeout_seconds: float = 60.0,
+        snapshot_backend: Literal["sqlite", "disabled"] = "sqlite",
+        snapshot_sqlite_path: str | Path = DEFAULT_FLIGHT_SNAPSHOT_PATH,
+    ) -> None:
+        self.base_url = base_url.rstrip("/")
+        self.user_agent = user_agent
+        self.cache_ttl_seconds = cache_ttl_seconds
+        self.allowed_hosts = tuple(host.lower().strip(".") for host in allowed_hosts)
+        self.snapshot_backend = snapshot_backend
+        self.snapshot_sqlite_path = Path(snapshot_sqlite_path)
+        self.client = client or httpx.Client(timeout=timeout_seconds, follow_redirects=False)
+
+    def search_offers(self, request: FlightSearchRequest) -> list[FlightOffer]:
+        self._validate_request(request)
+        cache_key = _cache_key(self.source_id, request)
+        cached = _cache_get(cache_key, self.cache_ttl_seconds)
+        if cached is not None:
+            return [
+                _offer_with_cache_metadata(offer, cache_hit=True, ttl_seconds=self.cache_ttl_seconds)
+                for offer in cached
+            ]
+
+        cookie_id = uuid4().hex
+        init_endpoint = f"{self.base_url}{QINGDAO_AIRLINES_INIT_PATH}"
+        search_endpoint = f"{self.base_url}{QINGDAO_AIRLINES_SEARCH_PATH}"
+        init_response = self.client.get(
+            init_endpoint,
+            params={"cookieId": cookie_id},
+            headers=self._headers(),
+        )
+        _raise_for_airline_risk_response(init_response, source_id=self.source_id)
+        init_response.raise_for_status()
+        init_payload = init_response.json()
+        if not isinstance(init_payload, dict):
+            raise FlightProviderError(f"{self.source_id} returned an invalid anonymous initialization payload")
+        now = datetime.now(SHANGHAI_TZ)
+        request_body = _qingdao_airlines_request_body(
+            request,
+            cookie_id=cookie_id,
+            trick_token=_qingdao_airlines_trick_token(init_payload, now),
+        )
+        response = self.client.post(
+            search_endpoint,
+            json=request_body,
+            headers=self._headers(now),
+        )
+        _raise_for_airline_risk_response(response, source_id=self.source_id)
+        response.raise_for_status()
+        payload = response.json()
+        if not isinstance(payload, dict) or str(payload.get("code")) != "1":
+            code = payload.get("code") if isinstance(payload, dict) else "invalid"
+            raise FlightProviderError(f"{self.source_id} returned business code {code}")
+        snapshot_id = save_flight_raw_snapshot(
+            source_id=self.source_id,
+            request_key=cache_key,
+            payload_text=_response_text(response),
+            content_type=str(response.headers.get("content-type", "")) if hasattr(response, "headers") else "",
+            snapshot_backend=self.snapshot_backend,
+            snapshot_path=self.snapshot_sqlite_path,
+        )
+        offers = _parse_qingdao_airlines_payload(
+            payload,
+            request=request,
+            evidence_id=snapshot_id,
+            cache_ttl_seconds=self.cache_ttl_seconds,
+        )
+        offers.sort(
+            key=lambda offer: (
+                offer.total_price.amount_minor,
+                offer.segments[0].departure_at or datetime.max.replace(tzinfo=SHANGHAI_TZ),
+            )
+        )
+        offers = offers[: max(1, request.max_results)]
+        if not offers:
+            logger.info("flight_public_search_empty source_id=%s", self.source_id)
+            return []
+        _cache_set(cache_key, offers, self.cache_ttl_seconds)
+        save_flight_canonical_offers(
+            source_id=self.source_id,
+            request_key=cache_key,
+            offers=offers,
+            ttl_seconds=self.cache_ttl_seconds,
+            snapshot_backend=self.snapshot_backend,
+            snapshot_path=self.snapshot_sqlite_path,
+        )
+        logger.info("flight_public_search_success source_id=%s offer_count=%s", self.source_id, len(offers))
+        return offers
+
+    def _validate_request(self, request: FlightSearchRequest) -> None:
+        if not _base_url_matches_allowed_hosts(self.base_url, self.allowed_hosts):
+            raise FlightProviderError(f"{self.source_id} base URL is outside the source allowlist")
+        if request.adults < 1:
+            raise FlightProviderError(f"{self.source_id} adults must be positive")
+        if request.currency_code.upper() != "CNY":
+            raise FlightProviderError(f"{self.source_id} only supports CNY")
+        if not request.origin_city_name or not request.destination_city_name:
+            raise FlightProviderError(f"{self.source_id} requires origin and destination city names")
+
+    def _headers(self, now: datetime | None = None) -> dict[str, str]:
+        headers = {
+            "User-Agent": self.user_agent,
+            "Accept": "application/json, text/plain, */*",
+            "Origin": self.base_url,
+            "Referer": f"{self.base_url}/",
+        }
+        if now is not None:
+            timestamp = str(int(now.timestamp() * 1000))
+            token_input = f"b2cjhfkjashdfli654654{timestamp}".encode("utf-8")
+            headers.update(
+                {
+                    "Content-Type": "application/json;charset=UTF-8",
+                    "sellerId": "B2C",
+                    "timestamp": timestamp,
+                    "token": hashlib.md5(token_input, usedforsecurity=False).hexdigest().upper(),
+                }
+            )
+        return headers
+
+
 class OpenSkyStatesProvider:
     source_id = "opensky_states"
 
@@ -472,7 +732,14 @@ def build_enabled_flight_providers(environment: str | None = None) -> list[Fligh
 
     return [
         cast(FlightOfferProvider, provider)
-        for provider in build_enabled_providers({"spring_airlines_public_query"}, environment)
+        for provider in build_enabled_providers(
+            {
+                "spring_airlines_public_query",
+                "hainan_airlines_public_query",
+                "qingdao_airlines_public_query",
+            },
+            environment,
+        )
     ]
 
 
@@ -759,6 +1026,385 @@ def _spring_airlines_cabin_type(group: dict[str, Any]) -> str:
         if expected in label:
             return expected
     return "经济舱"
+
+
+def _hainan_airlines_deep_link_params(request: FlightSearchRequest) -> dict[str, str]:
+    return {
+        "PRE": "F",
+        "PT": "F",
+        "MO": "T",
+        "SC": "A",
+        "TA": str(request.adults),
+        "TG": "0",
+        "TC": "0",
+        "TI": "0",
+        "ICS": "F",
+        "ORI": request.origin_iata.upper(),
+        "DES": request.destination_iata.upper(),
+        "FLC": "1",
+        "DD1": request.departure_date.isoformat(),
+        "CTRY": "CN",
+        "LAN": "zh",
+        "SRC": "hn",
+    }
+
+
+def _parse_hainan_airlines_response(
+    response_text: str,
+    *,
+    request: FlightSearchRequest,
+    evidence_id: str,
+    cache_ttl_seconds: int,
+) -> list[FlightOffer]:
+    flight_blocks = re.findall(
+        r"var\s+Flight\s*=\s*\{\};(?P<body>.*?)Flights\[position\]\s*=\s*Flight;",
+        response_text,
+        flags=re.DOTALL,
+    )
+    offers: list[FlightOffer] = []
+    allowed_carriers = {"HU", "Y8", "JD", "8L", "UQ", "FU", "GX", "CN"}
+    for block in flight_blocks:
+        if len(re.findall(r"var\s+Segment\s*=\s*\{\};", block)) != 1:
+            continue
+        carrier = _js_assignment(block, "Segment.marketingAirlineEN").upper()
+        flight_number = _js_assignment(block, "Segment.marketingFlightNum").upper()
+        if carrier not in allowed_carriers or not re.fullmatch(r"\d{3,4}[A-Z]?", flight_number):
+            continue
+        origin_iata = _js_assignment(block, "Segment.departureIATA").upper()
+        destination_iata = _js_assignment(block, "Segment.arrivalIATA").upper()
+        if not re.fullmatch(r"[A-Z]{3}", origin_iata) or not re.fullmatch(r"[A-Z]{3}", destination_iata):
+            continue
+        departure_date_text = _js_assignment(block, "Segment.departureDate")
+        departure_time_text = _js_assignment(block, "Segment.departureTime")
+        arrival_date_text = _js_assignment(block, "Segment.arrivalDate")
+        arrival_time_text = _js_assignment(block, "Segment.arrivalTime")
+        if not all((departure_date_text, departure_time_text, arrival_date_text, arrival_time_text)):
+            continue
+        departure_at = _parse_datetime(
+            f"{departure_date_text}T{departure_time_text}",
+            request.departure_date,
+        )
+        arrival_at = _parse_datetime(
+            f"{arrival_date_text}T{arrival_time_text}",
+            request.departure_date,
+        )
+        if (
+            departure_at is None
+            or arrival_at is None
+            or departure_at.date() != request.departure_date
+            or arrival_at <= departure_at
+        ):
+            continue
+        cabins = _hainan_airlines_cabin_options(
+            block,
+            flight_no=f"{carrier}{flight_number}",
+            evidence_id=evidence_id,
+        )
+        if not cabins:
+            continue
+        selected = min(cabins, key=lambda cabin: cabin.price.amount_minor)
+        duration_hour = _js_assignment(block, "Segment.durationHour")
+        duration_minute = _js_assignment(block, "Segment.durationMin")
+        duration = f"PT{duration_hour or '0'}H{duration_minute or '0'}M"
+        offer_id = (
+            f"hainan_{carrier.lower()}{flight_number.lower()}_"
+            f"{departure_at.date().isoformat()}_{origin_iata.lower()}_{destination_iata.lower()}"
+        )
+        offers.append(
+            FlightOffer(
+                offer_id=offer_id,
+                source="HAINAN_AIRLINES_PUBLIC_FRONTEND",
+                total_price=selected.price,
+                currency=selected.price.currency,
+                segments=[
+                    FlightOfferSegment(
+                        carrier_code=carrier,
+                        flight_number=flight_number,
+                        origin_iata=origin_iata,
+                        destination_iata=destination_iata,
+                        departure_at=departure_at,
+                        arrival_at=arrival_at,
+                        duration=duration,
+                    )
+                ],
+                validating_airline_codes=[carrier],
+                raw_offer={
+                    "flight_number": f"{carrier}{flight_number}",
+                    "departure_airport": _js_assignment(block, "Segment.departureAirportName"),
+                    "arrival_airport": _js_assignment(block, "Segment.arrivalAirportName"),
+                    "equipment": _js_assignment(block, "Segment.EquipType"),
+                    "evidence_id": evidence_id,
+                },
+                data_source=flight_data_source_metadata(
+                    HAINAN_AIRLINES_SOURCE_ID,
+                    HainanAirlinesPublicQueryProvider.source_name,
+                    cache_hit=False,
+                    cache_ttl_seconds=cache_ttl_seconds,
+                    evidence_id=evidence_id,
+                ),
+                cabin_options=cabins,
+                evidence_id=evidence_id,
+            )
+        )
+    return offers
+
+
+def _hainan_airlines_cabin_options(
+    flight_block: str,
+    *,
+    flight_no: str,
+    evidence_id: str,
+) -> list[FlightOfferCabinOption]:
+    fare_blocks = re.findall(
+        r"var\s+FareInfo\s*=\s*\{\};(?P<body>.*?)FareInfos\[FareInfosCode\]\s*=\s*FareInfo;",
+        flight_block,
+        flags=re.DOTALL,
+    )
+    cabins: list[FlightOfferCabinOption] = []
+    seen: set[tuple[str, str, int]] = set()
+    for index, fare_block in enumerate(fare_blocks, start=1):
+        fare_code = _js_assignment(fare_block, "FareInfo.resBookDesigCode").upper()
+        cabin_code = _js_assignment(fare_block, "FareInfo.cabinCode").upper()
+        fare_family = _js_assignment(fare_block, "FareInfo.fareFamilyName")
+        price = _money_from_value(
+            _js_assignment(fare_block, "priceDetails.totalAmount")
+            or _js_assignment(fare_block, "priceDetails.baseAmount")
+        )
+        if price is None or price.amount_minor <= 0:
+            continue
+        identity = (fare_code, fare_family, price.amount_minor)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        seat_value = _js_assignment(fare_block, "seatDetails.seatNum").upper()
+        remaining = _optional_int(seat_value) if seat_value != "A" else None
+        if remaining == 0:
+            continue
+        availability = "LIMITED" if remaining is not None and remaining > 0 else "AVAILABLE"
+        cabin_type = _hainan_airlines_cabin_type(cabin_code, fare_family)
+        option_token = _normalize_option_token(
+            f"{fare_code or cabin_code}_{fare_family}_{index}_{price.amount_minor}"
+        )
+        cabins.append(
+            FlightOfferCabinOption(
+                option_id=f"hainan_{flight_no.lower()}_{option_token}",
+                cabin_type=cabin_type,
+                price=price,
+                availability=availability,
+                source_option_version=f"hainan_{flight_no}_{evidence_id}_{option_token}",
+                inventory_evidence=f"public_response_seatNum={seat_value or 'unknown'}",
+                remaining_count=remaining if remaining is not None and remaining > 0 else None,
+            )
+        )
+    return cabins
+
+
+def _hainan_airlines_cabin_type(cabin_code: str, fare_family: str) -> str:
+    if cabin_code == "F" or "头等" in fare_family:
+        return "FIRST"
+    if cabin_code == "C" or "公务" in fare_family or "商务" in fare_family:
+        return "BUSINESS"
+    if cabin_code == "W" or "超级经济" in fare_family:
+        return "PREMIUM_ECONOMY"
+    return "ECONOMY"
+
+
+def _js_assignment(block: str, property_name: str) -> str:
+    match = re.search(rf"{re.escape(property_name)}\s*=\s*'([^']*)'", block)
+    return html.unescape(match.group(1)).strip() if match else ""
+
+
+def _sanitize_hainan_snapshot(response_text: str) -> str:
+    sanitized = re.sub(r"'[0-9a-fA-F]{128,}'", "'[REDACTED_OPAQUE]'", response_text)
+    return re.sub(
+        r"(?i)(name=[\"'](?:conversationid|encrypted_query|query|sessionid|token)[\"'][^>]*value=[\"'])[^\"']*",
+        r"\1[REDACTED]",
+        sanitized,
+    )
+
+
+def _looks_like_airline_challenge(response_text: str) -> bool:
+    lowered = response_text.lower()
+    return any(marker in lowered for marker in _CHALLENGE_MARKERS) or any(
+        marker in response_text for marker in ("当前访问的人太多", "访问过于频繁", "安全校验失败")
+    )
+
+
+def _qingdao_airlines_trick_token(init_payload: dict[str, Any], now: datetime) -> str:
+    values = init_payload.get("result") if isinstance(init_payload.get("result"), dict) else init_payload
+    try:
+        a = int(values["a"])
+        b = int(values["b"])
+        d = int(values["d"])
+        e = int(values["e"])
+        f = int(values["f"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise FlightProviderError("airline_qw_public_query anonymous initialization payload is incomplete") from exc
+    weekday_values = {
+        0: a + b,
+        1: e,
+        2: a + 2,
+        3: 2 * d,
+        4: e,
+        5: f - 1,
+        6: b + 1,
+    }
+    token_input = f"@#{weekday_values[now.weekday()]}".encode("utf-8")
+    return hashlib.md5(token_input, usedforsecurity=False).hexdigest()
+
+
+def _qingdao_airlines_request_body(
+    request: FlightSearchRequest,
+    *,
+    cookie_id: str,
+    trick_token: str,
+) -> dict[str, Any]:
+    return {
+        "isReturn": False,
+        "departureDate": request.departure_date.isoformat(),
+        "returnDate": "",
+        "iorD": "D",
+        "origName": request.origin_city_name,
+        "origCode3": request.origin_iata.upper(),
+        "destName": request.destination_city_name,
+        "destCode3": request.destination_iata.upper(),
+        "classType": "",
+        "payment": "CASH",
+        "openId": cookie_id,
+        "trickToken": trick_token,
+        "plat": "NB2C",
+    }
+
+
+def _parse_qingdao_airlines_payload(
+    payload: dict[str, Any],
+    *,
+    request: FlightSearchRequest,
+    evidence_id: str,
+    cache_ttl_seconds: int,
+) -> list[FlightOffer]:
+    result = payload.get("result")
+    raw_flights = result.get("departAVFS") if isinstance(result, dict) else None
+    if not isinstance(raw_flights, list):
+        return []
+    offers: list[FlightOffer] = []
+    for raw_flight in raw_flights:
+        if not isinstance(raw_flight, dict):
+            continue
+        flight_no = str(raw_flight.get("flightNo") or "").strip().upper()
+        if not re.fullmatch(r"QW\d{3,4}[A-Z]?", flight_no):
+            continue
+        origin_iata = str(raw_flight.get("departApCode3") or "").strip().upper()
+        destination_iata = str(raw_flight.get("destApCode3") or "").strip().upper()
+        if origin_iata != request.origin_iata.upper() or destination_iata != request.destination_iata.upper():
+            continue
+        departure_date = _date_from_value(raw_flight.get("flightDate"), request.departure_date)
+        arrival_date = _date_from_value(raw_flight.get("destDate"), departure_date)
+        departure_at = _parse_datetime(raw_flight.get("departTime"), departure_date)
+        arrival_at = _parse_datetime(raw_flight.get("destTime"), arrival_date)
+        if departure_at is None or arrival_at is None:
+            continue
+        if arrival_at <= departure_at:
+            arrival_at += timedelta(days=1)
+        cabins = _qingdao_airlines_cabin_options(raw_flight, flight_no=flight_no, evidence_id=evidence_id)
+        if not cabins:
+            continue
+        selected = min(cabins, key=lambda cabin: cabin.price.amount_minor)
+        offers.append(
+            FlightOffer(
+                offer_id=f"qingdao_{flight_no.lower()}_{departure_date.isoformat()}",
+                source="QINGDAO_AIRLINES_PUBLIC_FRONTEND",
+                total_price=selected.price,
+                currency=selected.price.currency,
+                segments=[
+                    FlightOfferSegment(
+                        carrier_code="QW",
+                        flight_number=flight_no[2:],
+                        origin_iata=origin_iata,
+                        destination_iata=destination_iata,
+                        departure_at=departure_at,
+                        arrival_at=arrival_at,
+                        duration=str(raw_flight.get("duration") or "") or None,
+                    )
+                ],
+                validating_airline_codes=["QW"],
+                raw_offer={
+                    "flight_number": flight_no,
+                    "route": raw_flight.get("flight"),
+                    "minimum_price": raw_flight.get("minimumPrice"),
+                    "evidence_id": evidence_id,
+                },
+                data_source=flight_data_source_metadata(
+                    QINGDAO_AIRLINES_SOURCE_ID,
+                    QingdaoAirlinesPublicQueryProvider.source_name,
+                    cache_hit=False,
+                    cache_ttl_seconds=cache_ttl_seconds,
+                    evidence_id=evidence_id,
+                ),
+                cabin_options=cabins,
+                evidence_id=evidence_id,
+            )
+        )
+    return offers
+
+
+def _qingdao_airlines_cabin_options(
+    raw_flight: dict[str, Any],
+    *,
+    flight_no: str,
+    evidence_id: str,
+) -> list[FlightOfferCabinOption]:
+    fares = raw_flight.get("fares")
+    if not isinstance(fares, list):
+        return []
+    cabins: list[FlightOfferCabinOption] = []
+    for index, fare in enumerate(fares, start=1):
+        if not isinstance(fare, dict):
+            continue
+        price = _money_from_value(fare.get("price_ad"))
+        if price is None or price.amount_minor <= 0:
+            continue
+        seat_value = str(fare.get("avTkt") or "").strip().upper()
+        remaining = _optional_int(seat_value) if seat_value != "A" else None
+        if remaining == 0:
+            continue
+        availability = "LIMITED" if remaining is not None and remaining > 0 else "AVAILABLE"
+        fare_code = str(fare.get("name") or f"fare_{index}").strip().upper()
+        cabin_type = _qingdao_airlines_cabin_type(fare)
+        option_token = _normalize_option_token(f"{fare_code}_{cabin_type}_{index}_{price.amount_minor}")
+        cabins.append(
+            FlightOfferCabinOption(
+                option_id=f"qingdao_{flight_no.lower()}_{option_token}",
+                cabin_type=cabin_type,
+                price=price,
+                availability=availability,
+                source_option_version=f"qingdao_{flight_no}_{evidence_id}_{option_token}",
+                inventory_evidence=f"public_response_avTkt={seat_value or 'unknown'}",
+                remaining_count=remaining if remaining is not None and remaining > 0 else None,
+            )
+        )
+    return cabins
+
+
+def _qingdao_airlines_cabin_type(fare: dict[str, Any]) -> str:
+    raw_type = str(fare.get("clazzType") or "").strip().upper()
+    if raw_type in {"FIRST", "F"}:
+        return "FIRST"
+    if raw_type in {"BUSINESS", "BUS", "C"}:
+        return "BUSINESS"
+    if raw_type in {"PREMIUM_ECONOMY", "PREMIUM", "W"}:
+        return "PREMIUM_ECONOMY"
+    return "ECONOMY"
+
+
+def _date_from_value(value: Any, fallback: date) -> date:
+    text = str(value or "").strip()
+    if not text:
+        return fallback
+    try:
+        return date.fromisoformat(text[:10])
+    except ValueError:
+        return fallback
 
 
 def _parse_public_airline_payload(

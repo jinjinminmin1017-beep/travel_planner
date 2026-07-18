@@ -1,3 +1,4 @@
+import re
 import sqlite3
 from datetime import date, datetime
 
@@ -13,9 +14,11 @@ from app.data_sources.flight_providers import (
     FlightProviderSearchResult,
     FlightSearchRequest,
     FlightStateRequest,
+    HainanAirlinesPublicQueryProvider,
     OfficialAirlineRequestSchema,
     OfficialAirlinePublicQueryProvider,
     OpenSkyStatesProvider,
+    QingdaoAirlinesPublicQueryProvider,
     SpringAirlinesPublicQueryProvider,
     build_enabled_flight_providers,
     flight_data_source_metadata,
@@ -46,16 +49,19 @@ class _FakeResponse:
 
 class _FakeClient:
     def __init__(self, response):
-        self.response = response
+        self.responses = list(response) if isinstance(response, list) else [response]
         self.calls = []
+
+    def _next_response(self):
+        return self.responses[min(len(self.calls) - 1, len(self.responses) - 1)]
 
     def get(self, url, **kwargs):
         self.calls.append(("GET", url, kwargs))
-        return self.response
+        return self._next_response()
 
     def post(self, url, **kwargs):
         self.calls.append(("POST", url, kwargs))
-        return self.response
+        return self._next_response()
 
 
 def test_official_airline_public_provider_maps_available_cabin_offer():
@@ -237,8 +243,101 @@ def test_spring_airlines_provider_requires_city_names_without_guessing():
         )
 
 
+def test_hainan_airlines_provider_replays_anonymous_session_and_maps_fares():
+    client = _FakeClient(
+        [
+            _FakeResponse(text="<html><form></form></html>", content_type="text/html"),
+            _FakeResponse(text="<html>loading</html>", content_type="text/html"),
+            _FakeResponse(text=_hainan_airlines_response(), content_type="text/html"),
+        ]
+    )
+    provider = HainanAirlinesPublicQueryProvider(
+        client=client,
+        cache_ttl_seconds=0,
+        snapshot_backend="disabled",
+    )
+
+    offers = provider.search_offers(
+        FlightSearchRequest(
+            origin_iata="BJS",
+            destination_iata="SHA",
+            departure_date=date(2026, 7, 23),
+            max_results=3,
+            non_stop=True,
+        )
+    )
+
+    assert [call[0] for call in client.calls] == ["GET", "POST", "POST"]
+    assert client.calls[0][1].endswith("/hainanair/ibe/deeplink/ancillary.do")
+    assert client.calls[0][2]["params"]["ORI"] == "BJS"
+    assert client.calls[0][2]["params"]["DES"] == "SHA"
+    assert client.calls[1][2]["params"]["redirected"] == "true"
+    assert client.calls[2][1].endswith("/hainanair/ibe/common/processSearch.do")
+    assert len(offers) == 1
+    offer = offers[0]
+    assert offer.data_source.source_id == "airline_hu_public_query"
+    assert offer.total_price.amount_minor == 92000
+    assert offer.segments[0].carrier_code == "HU"
+    assert offer.segments[0].flight_number == "7601"
+    assert offer.segments[0].origin_iata == "PEK"
+    assert offer.segments[0].destination_iata == "SHA"
+    assert offer.cabin_options[0].cabin_type == "ECONOMY"
+    assert offer.cabin_options[0].availability == "AVAILABLE"
+
+
+def test_qingdao_airlines_provider_derives_anonymous_tokens_and_maps_fares():
+    init_payload = {"a": 11, "b": 7, "c": 3, "d": 5, "e": 13, "f": 17, "g": 19}
+    client = _FakeClient(
+        [
+            _FakeResponse(init_payload),
+            _FakeResponse(_qingdao_airlines_payload()),
+        ]
+    )
+    provider = QingdaoAirlinesPublicQueryProvider(
+        client=client,
+        cache_ttl_seconds=0,
+        snapshot_backend="disabled",
+    )
+
+    offers = provider.search_offers(
+        FlightSearchRequest(
+            origin_iata="TAO",
+            destination_iata="TFU",
+            departure_date=date(2026, 7, 20),
+            origin_city_name="青岛",
+            destination_city_name="成都天府",
+            max_results=3,
+            non_stop=True,
+        )
+    )
+
+    assert [call[0] for call in client.calls] == ["GET", "POST"]
+    init_cookie_id = client.calls[0][2]["params"]["cookieId"]
+    request_body = client.calls[1][2]["json"]
+    request_headers = client.calls[1][2]["headers"]
+    assert re.fullmatch(r"[0-9a-f]{32}", init_cookie_id)
+    assert request_body["openId"] == init_cookie_id
+    assert request_body["origCode3"] == "TAO"
+    assert request_body["destCode3"] == "TFU"
+    assert re.fullmatch(r"[0-9a-f]{32}", request_body["trickToken"])
+    assert request_headers["sellerId"] == "B2C"
+    assert re.fullmatch(r"[0-9A-F]{32}", request_headers["token"])
+    assert len(offers) == 1
+    offer = offers[0]
+    assert offer.data_source.source_id == "airline_qw_public_query"
+    assert offer.total_price.amount_minor == 69900
+    assert offer.segments[0].carrier_code == "QW"
+    assert offer.segments[0].flight_number == "9771"
+    assert offer.cabin_options[0].cabin_type == "ECONOMY"
+    assert offer.cabin_options[0].availability == "AVAILABLE"
+
+
 def test_unimplemented_public_airline_cannot_be_enabled_through_env(monkeypatch):
-    assert [provider.source_id for provider in build_enabled_flight_providers("DEV")] == ["airline_9c_public_query"]
+    assert [provider.source_id for provider in build_enabled_flight_providers("DEV")] == [
+        "airline_9c_public_query",
+        "airline_hu_public_query",
+        "airline_qw_public_query",
+    ]
 
     monkeypatch.setenv("TRAVEL_SOURCE_AIRLINE_MU_PUBLIC_QUERY_ENABLED", "true")
     monkeypatch.setenv("TRAVEL_SOURCE_AIRLINE_MU_PUBLIC_QUERY_LICENSE_STATUS", "APPROVED")
@@ -255,6 +354,12 @@ def test_official_airline_implementation_registry_is_program_owned_and_fail_clos
     assert load_data_source_settings().by_adapter("official_airline_public_query") == ()
     assert [source.source_id for source in load_data_source_settings().by_adapter("spring_airlines_public_query")] == [
         "airline_9c_public_query"
+    ]
+    assert [source.source_id for source in load_data_source_settings().by_adapter("hainan_airlines_public_query")] == [
+        "airline_hu_public_query"
+    ]
+    assert [source.source_id for source in load_data_source_settings().by_adapter("qingdao_airlines_public_query")] == [
+        "airline_qw_public_query"
     ]
 
 
@@ -322,6 +427,8 @@ def test_redact_flight_snapshot_handles_headers_and_query_tokens():
 
 def test_flight_search_result_reports_disabled_provider_when_not_configured(monkeypatch):
     monkeypatch.setenv("TRAVEL_SOURCE_AIRLINE_9C_PUBLIC_QUERY_ENABLED", "false")
+    monkeypatch.setenv("TRAVEL_SOURCE_AIRLINE_HU_PUBLIC_QUERY_ENABLED", "false")
+    monkeypatch.setenv("TRAVEL_SOURCE_AIRLINE_QW_PUBLIC_QUERY_ENABLED", "false")
     reset_data_source_settings_cache()
     result = search_flight_offers_with_enabled_provider_result(
         FlightSearchRequest(origin_iata="SHA", destination_iata="WNZ", departure_date=date(2026, 6, 28)),
@@ -524,6 +631,68 @@ def _spring_airlines_payload():
                 }
             ]
         ],
+    }
+
+
+def _hainan_airlines_response() -> str:
+    return """
+    <html><script>
+    var Flight = {};
+    var position = '1';
+    var Segment={};
+    Segment.marketingAirlineEN = 'HU';
+    Segment.marketingFlightNum = '7601';
+    Segment.departureDate = '2026-07-23';
+    Segment.departureTime = '07:45';
+    Segment.departureIATA = 'PEK';
+    Segment.departureAirportName = '北京首都国际';
+    Segment.arrivalDate = '2026-07-23';
+    Segment.arrivalTime = '10:00';
+    Segment.arrivalIATA = 'SHA';
+    Segment.arrivalAirportName = '上海虹桥';
+    Segment.durationHour = '2';
+    Segment.durationMin = '15';
+    Segment.EquipType = '空客330(宽体)';
+    var FareInfo = {};
+    FareInfo.resBookDesigCode='R';
+    FareInfo.cabinCode='Y';
+    FareInfo.fareFamilyName='优惠经济舱';
+    priceDetails.baseAmount ='770.0';
+    priceDetails.totalAmount ='920.0';
+    seatDetails.seatNum ='A';
+    FareInfos[FareInfosCode]=FareInfo;
+    Flights[position] = Flight;
+    </script></html>
+    """
+
+
+def _qingdao_airlines_payload() -> dict:
+    return {
+        "code": 1,
+        "result": {
+            "departAVFS": [
+                {
+                    "flightNo": "QW9771",
+                    "flight": "TAO-TFU",
+                    "departApCode3": "TAO",
+                    "destApCode3": "TFU",
+                    "departTime": "08:00",
+                    "destTime": "11:05",
+                    "minimumPrice": 699,
+                    "flightDate": "2026-07-20",
+                    "duration": "03:05",
+                    "fares": [
+                        {
+                            "name": "R",
+                            "clazzName": "经济舱",
+                            "clazzType": "ECO",
+                            "price_ad": 699,
+                            "avTkt": "A",
+                        }
+                    ],
+                }
+            ]
+        },
     }
 
 

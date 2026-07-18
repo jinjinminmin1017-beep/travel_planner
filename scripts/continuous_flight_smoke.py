@@ -20,19 +20,30 @@ from app.data_sources.provider_registry import ADAPTER_REGISTRY  # noqa: E402
 
 
 def gate_smoke() -> tuple[bool, dict[str, object]]:
-    settings = load_data_source_settings().get("airline_9c_public_query")
-    adapter_registered = "spring_airlines_public_query" in ADAPTER_REGISTRY
-    passed = bool(
-        adapter_registered
-        and settings
-        and settings.enabled
-        and settings.license_status == "APPROVED"
+    expected = {
+        "airline_9c_public_query": "spring_airlines_public_query",
+        "airline_hu_public_query": "hainan_airlines_public_query",
+        "airline_qw_public_query": "qingdao_airlines_public_query",
+    }
+    snapshot = load_data_source_settings()
+    source_details = {
+        source_id: {
+            "adapter_registered": adapter in ADAPTER_REGISTRY,
+            "source_registered": snapshot.get(source_id) is not None,
+            "source_enabled": bool(snapshot.get(source_id) and snapshot.get(source_id).enabled),
+            "license_status": snapshot.get(source_id).license_status if snapshot.get(source_id) else None,
+        }
+        for source_id, adapter in expected.items()
+    }
+    passed = all(
+        detail["adapter_registered"]
+        and detail["source_registered"]
+        and detail["source_enabled"]
+        and detail["license_status"] == "APPROVED"
+        for detail in source_details.values()
     )
     return passed, {
-        "runtime_adapter_registered": adapter_registered,
-        "source_registered": settings is not None,
-        "source_enabled": bool(settings and settings.enabled),
-        "license_status": settings.license_status if settings else None,
+        "sources": source_details,
     }
 
 

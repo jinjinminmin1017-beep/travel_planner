@@ -167,6 +167,34 @@ def _spring_airlines_factory(settings: DataSourceSettings) -> object:
     )
 
 
+def _hainan_airlines_factory(settings: DataSourceSettings) -> object:
+    from app.data_sources.flight_providers import HainanAirlinesPublicQueryProvider
+
+    typed = _require_type(settings, FlightSourceSettings)
+    return HainanAirlinesPublicQueryProvider(
+        client=_rate_limited_client(typed, follow_redirects=True),
+        base_url=typed.base_url or "",
+        user_agent=typed.user_agent or "",
+        cache_ttl_seconds=typed.cache_ttl_seconds,
+        allowed_hosts=typed.allowed_hosts,
+        timeout_seconds=typed.timeout_seconds,
+    )
+
+
+def _qingdao_airlines_factory(settings: DataSourceSettings) -> object:
+    from app.data_sources.flight_providers import QingdaoAirlinesPublicQueryProvider
+
+    typed = _require_type(settings, FlightSourceSettings)
+    return QingdaoAirlinesPublicQueryProvider(
+        client=_rate_limited_client(typed),
+        base_url=typed.base_url or "",
+        user_agent=typed.user_agent or "",
+        cache_ttl_seconds=typed.cache_ttl_seconds,
+        allowed_hosts=typed.allowed_hosts,
+        timeout_seconds=typed.timeout_seconds,
+    )
+
+
 def _weather_factory(settings: DataSourceSettings) -> object:
     from app.data_sources.weather_providers import OpenMeteoForecastProvider
 
@@ -227,6 +255,12 @@ ADAPTER_REGISTRY: dict[str, AdapterRegistration] = {
     ),
     "spring_airlines_public_query": AdapterRegistration(
         ADAPTER_SETTINGS_MODELS["spring_airlines_public_query"], _spring_airlines_factory
+    ),
+    "hainan_airlines_public_query": AdapterRegistration(
+        ADAPTER_SETTINGS_MODELS["hainan_airlines_public_query"], _hainan_airlines_factory
+    ),
+    "qingdao_airlines_public_query": AdapterRegistration(
+        ADAPTER_SETTINGS_MODELS["qingdao_airlines_public_query"], _qingdao_airlines_factory
     ),
     "rail_12306_redirect": AdapterRegistration(ADAPTER_SETTINGS_MODELS["rail_12306_redirect"], _redirect_factory),
     "rail_12306_public_query": AdapterRegistration(

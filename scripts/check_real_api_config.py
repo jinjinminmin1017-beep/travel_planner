@@ -33,6 +33,8 @@ PUBLIC_READ_ONLY_SOURCE_IDS = {
     "rail_12306_redirect": "12306 官方入口跳转",
     "airline_official_redirect": "航司官网跳转",
     "airline_9c_public_query": "春秋航空公开匿名航班、票价和舱位查询",
+    "airline_hu_public_query": "海航公开匿名航班、票价和舱位查询",
+    "airline_qw_public_query": "青岛航空公开匿名航班、票价和舱位查询",
     "amap_uri_redirect": "地图导航跳转",
 }
 
@@ -118,7 +120,7 @@ def validate_public_tier() -> list[str]:
 
 def validate_secret_tier(selected_sources: list[str]) -> list[str]:
     if "flight" in selected_sources:
-        return ["flight: 已实现的春秋航空查询无需密钥，请使用 public tier 验证"]
+        return ["flight: 已实现的春秋、海航和青岛航空查询无需密钥，请使用 public tier 验证"]
     return []
 
 
