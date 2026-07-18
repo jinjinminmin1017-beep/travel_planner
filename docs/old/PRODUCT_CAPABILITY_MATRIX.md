@@ -71,15 +71,16 @@
 | `airline_sc_public_query` | FLIGHT | 阻塞于授权 | 禁用 | 源站审核通过后低频采集山航官方公开前端报价，只返回有真实价格且有可售/余票信号的舱位。 | 登录、绕验证码、逆向强认证、下单、支付、抢票、缺价补价、无可售信号时生成航班方案或作为 fallback。 |
 | `airline_ca_public_query` | FLIGHT | 阻塞于授权 | 禁用 | 国航独立契约；许可审批后仍须通过匿名真实库存响应技术门禁。 | 不得把官网入口可达等同于可执行票价契约。 |
 | `airline_hna_micro_public_query` | FLIGHT | 阻塞于授权 | 禁用 | 海航微服务体系独立契约，覆盖 JD/8L/UQ/FU/Y8。 | 不生成或绕过动态密文、指纹、验证码和频控材料。 |
+| `airline_hu_public_query` | FLIGHT | 验收通过 | 启用 | 海航官网匿名 deep-link 会话查询，解析 HU/Y8 等同站销售航班的真实含税总价和舱位。 | 不登录、不绕验证码、不持久化动态会话或长加密材料。 |
 | `airline_zh_public_query` | FLIGHT | 阻塞于授权 | 禁用 | 深航独立契约；许可审批后仍须通过匿名真实库存响应技术门禁。 | 不得把 B2C 入口可达等同于可执行票价契约。 |
 | `airline_3u_public_query` | FLIGHT | 阻塞于授权 | 禁用 | 川航独立契约。 | 不绕过 Dingxiang CAPTCHA/ConstID 等风险控制。 |
-| `airline_9c_public_query` | FLIGHT | 阻塞于授权 | 禁用 | 春秋航空独立契约。 | 不绕过 Geetest、安全脚本或频控。 |
+| `airline_9c_public_query` | FLIGHT | 验收通过 | 启用 | 春秋航空官网匿名公开航班、票价和舱位查询。 | 不登录、不绕验证码、不下单或支付。 |
 | `airline_ho_public_query` | FLIGHT | 阻塞于授权 | 禁用 | 吉祥航空独立契约；已记录查询 endpoint 与 `INVALID_TOKEN` 匿名响应。 | 不伪造 token、blackBox 或绕过 Geetest。 |
-| `airline_qw_public_query` | FLIGHT | 阻塞于授权 | 禁用 | 青岛航空独立契约；已记录请求/响应字段线索。 | 不伪造 COOKIEID、RANDOM、trickToken 或绕过 NECaptcha。 |
+| `airline_qw_public_query` | FLIGHT | 验收通过 | 启用 | 青岛航空官网匿名初始化与公开前端请求算法，返回真实航班、票价和舱位 JSON。 | 不登录、不绕验证码、不复用浏览器 Cookie、不下单或支付。 |
 | `variflight_status` | FLIGHT | 阻塞于授权 | 禁用 | 授权后提供商业航班状态/延误风险。 | 未授权时调用或把 OpenSky 结果冒充商业状态。 |
 | `real_llm` | LLM | 阻塞于授权 | 禁用 | 用户自有 key 存在时做解析、推荐选择和解释，并经过 Schema/语义校验。 | 生成车次、航班、价格、余票、路线、购买链接等事实字段。 |
 
-处于“阻塞于授权”且没有可执行 adapter 的航司查询与 VariFlight 仅作为能力待办记录，不进入 `TRAVEL_DATA_SOURCE_IDS`、adapter 运行注册表或 `.env.example`。完成实现与审批后，必须通过代码、配置和测试的同一次变更重新登记。
+处于“阻塞于授权”且没有可执行 adapter 的航司查询与 VariFlight 仅作为能力待办记录，不进入 `TRAVEL_DATA_SOURCE_IDS`、adapter 运行注册表或 `.env.example`。春秋、海航和青岛航空已完成实现与审批，并通过代码、配置、测试和在线验收的同一次变更登记。
 
 ## 自动化 Fixture 边界
 

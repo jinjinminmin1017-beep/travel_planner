@@ -214,7 +214,7 @@
 执行记录：2026-07-04 已将航班 Provider 从旧航班报价校验链路迁移为 `airline_mu_public_query`、`airline_cz_public_query`、`airline_sc_public_query` 官方公开前端采集源：Provider 使用 `httpx`、源站 allowlist、每源限流、TTL 缓存、SQLite 原始快照和 canonical offer 索引；Planner 取消报价二次确认和按固定价差生成额外舱位的逻辑，只消费 Provider 返回的真实价格、真实舱位、可售状态和 evidence id；无可售、缺价、解析失败、源站不可用或未启用时写入 `SourceFailure` 并阻断航班方案，不做 fallback。
 执行记录：2026-07-05 已完成国内客运航司官网技术确认台账 `docs/AIRLINE_OFFICIAL_SITE_TECH_CHECK_20260705.xlsx`：按航司逐行记录官网入口、匿名可达、robots、订票/航班查询入口、前端资源/API 线索、票价/航班时间/余票舱位字段线索、验证码/风控信号、是否可继续真实查询取样、Provider 建议和优先级；本次仅做入口层与前端资源层低频确认，不提交真实乘机人信息、不登录、不下单、不支付、不绕验证码。
 执行记录：2026-07-05 已重新生成 `docs/AIRLINE_OFFICIAL_SITE_TECH_CHECK_20260705.xlsx`，修复 Windows Excel 2024 打开时中文显示为 `??` 的编码问题；当前 xlsx 内部 XML 已验证包含中文表头和航司名，且不含 `??` 残留。
-执行记录：2026-07-15 航司独立技术契约从 3 套扩展到 10 套，覆盖 `airline_mu_public_query`、`airline_cz_public_query`、`airline_sc_public_query`、`airline_ca_public_query`、`airline_hna_micro_public_query`、`airline_zh_public_query`、`airline_3u_public_query`、`airline_9c_public_query`、`airline_ho_public_query`、`airline_qw_public_query` 共 16 个承运人代码；配置支持仅修改对应 `LICENSE_STATUS=APPROVED` 即自动启用并采用 1 QPS，但许可状态不能绕过匿名真实响应、动态材料、验证码/限流和字段契约的技术门禁。当前 10 套均保持 fail-closed，详细阻塞证据见 `docs/flight_provider_evidence/2026-07-15/expanded_airline_technical_review.md`。
+执行记录：2026-07-15 完成 10 家航司独立技术审查；2026-07-18 再次以真实浏览器和后端普通 HTTP 逐家复核。春秋 `airline_9c_public_query`、海航 `airline_hu_public_query`、青岛航空 `airline_qw_public_query` 已通过匿名真实响应、字段解析和后端在线验收并以 1 QPS 启用；国航、东航、南航、深航、川航、吉祥和山航仍因动态加密、WAF/指纹或风险验证 fail-closed。许可状态不能替代技术实现，详细证据见 `docs/flight_provider_evidence/2026-07-18/remaining_airlines_browser_and_backend_verification.md`。
 
 任务：
 

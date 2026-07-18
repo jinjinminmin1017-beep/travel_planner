@@ -335,3 +335,23 @@
   - 真实在线 smoke：`SHA -> CAN`、2026-07-23，Provider 返回 9C8835、CNY 390.00 与真实经济舱可售状态；浏览器匿名结果共 6 班，最低 9C8931、¥370。
   - `git diff --check` 与 Python compileall：通过。
 - 兼容性：未修改 API schema、数据库或前端，无需迁移。
+
+## 2026-07-18 08:32:51 +08:00
+
+- 任务：逐一验证除春秋外的 9 家航司，并接入能够由项目后端稳定匿名直连的真实票价 Provider。
+- 代码提交：`c894873`。
+- 修改内容：
+  - 通过真实浏览器验证国航、东航/上航、南航、海航、深航、川航、吉祥、青岛航空和山航官网；再用普通后端 HTTP 客户端逐家复现，记录动态加密、WAF、浏览器指纹和风控材料边界。
+  - 新增海航 `airline_hu_public_query` / `hainan_airlines_public_query`：复现官网匿名 deep-link 三步会话，解析服务端页面中的航班、实际机场、时刻、机型、含税总价、舱位和余量。
+  - 新增青岛航空 `airline_qw_public_query` / `qingdao_airlines_public_query`：调用匿名初始化接口，按官网公开前端逻辑生成请求材料，解析 JSON 航班、价格、舱位和库存信号。
+  - 在真实 `.env` 与 `.env.example` 同步启用 HU、QW，均为 `APPROVED`、1 QPS、60 秒超时、60 秒缓存和严格 host allowlist；两份文件各 183 个键，键集合差异与重复键均为 0。
+  - 海航 HTML 快照在入库前删除长加密串、会话字段和不透明动态材料；HTTP 429、验证码、风控挑战、非法 host、业务错误和不支持的响应继续 fail-closed。
+  - 国航、东航、南航、深航、川航、吉祥和山航没有登记运行 adapter，也没有写入 ENV；浏览器能够展示价格不等于后端能够稳定复现。
+- 验证：
+  - `\.venv\Scripts\python -m pytest backend\app\tests -q`：225 passed。
+  - 航班与配置专项：39 passed。
+  - `\.venv\Scripts\python scripts\check_real_api_config.py --tier public`：通过。
+  - `\.venv\Scripts\python scripts\continuous_flight_smoke.py --mode gate --iterations 3 --interval-seconds 0`：3/3 通过，9C/HU/QW 均已登记、启用且许可为 `APPROVED`。
+  - 项目 Provider 真实在线验收：海航 `BJS -> SHA`、2026-07-23 返回 6 个可售 offer，含 Y87596、HU7607、HU7605、HU7613、HU7601、HU7603，含税最低总价 CNY 550.00；青岛航空 `TAO -> TFU`、2026-07-20 返回 QW9771、CNY 699.00 和 34 个舱价选项。
+  - Python compileall、`git diff --check` 和 `.env` / `.env.example` 键集合检查通过。
+- 兼容性：未修改 API schema、既有数据库表或前端；本地航班快照 SQLite 继续按需建表，无需迁移。
