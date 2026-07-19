@@ -65,6 +65,12 @@ SOURCE_DEFINITIONS: dict[str, SourceDefinition] = {
         "A",
         "PUBLIC_AIRLINE_FRONTEND_QUERY",
     ),
+    "airline_mu_browser_query": SourceDefinition(
+        "China Eastern Official Browser Flight Query",
+        DataSourceType.FLIGHT,
+        "A",
+        "OFFICIAL_AIRLINE_BROWSER_QUERY",
+    ),
     "rail_12306_redirect": SourceDefinition("12306 Official Redirect", DataSourceType.RAIL, "S", "REDIRECT_ONLY"),
     "rail_12306_public_query": SourceDefinition("12306 Public Ticket Query", DataSourceType.RAIL, "S", "PUBLIC_ANONYMOUS_QUERY"),
     "real_llm": SourceDefinition("Real LLM Provider", DataSourceType.LLM, "A", "DISABLED_BY_DEFAULT"),
@@ -171,6 +177,35 @@ class FlightSourceSettings(HttpSourceSettings):
         return self
 
 
+class BrowserFlightSourceSettings(DataSourceSettings):
+    worker_url: str | None = None
+    worker_allowed_hosts: tuple[str, ...] = ()
+    timeout_seconds: float = Field(default=20.0, gt=0)
+    cache_ttl_seconds: int = Field(default=90, ge=60, le=180)
+
+    @model_validator(mode="after")
+    def validate_worker_fields(self) -> "BrowserFlightSourceSettings":
+        if self.enabled and self.qps_limit <= 0:
+            raise ValueError("QPS_LIMIT")
+        if self.enabled and (not self.worker_url or not self.worker_allowed_hosts):
+            raise ValueError("WORKER_URL/WORKER_ALLOWED_HOSTS")
+        if self.worker_url:
+            parsed = urlparse(self.worker_url)
+            hostname = (parsed.hostname or "").lower().strip(".")
+            if (
+                parsed.scheme != "http"
+                or hostname not in {"127.0.0.1", "localhost", "::1"}
+                or not _host_matches_allowed_hosts(hostname, self.worker_allowed_hosts)
+                or parsed.username
+                or parsed.password
+                or parsed.query
+                or parsed.fragment
+                or parsed.path.rstrip("/")
+            ):
+                raise ValueError("WORKER_URL/WORKER_ALLOWED_HOSTS")
+        return self
+
+
 class NominatimSourceSettings(HttpSourceSettings):
     user_agent: str | None = None
 
@@ -209,6 +244,7 @@ ADAPTER_SETTINGS_MODELS: dict[str, type[DataSourceSettings]] = {
     "spring_airlines_public_query": FlightSourceSettings,
     "hainan_airlines_public_query": FlightSourceSettings,
     "qingdao_airlines_public_query": FlightSourceSettings,
+    "browser_airline_flight": BrowserFlightSourceSettings,
     "rail_12306_redirect": RedirectSourceSettings,
     "rail_12306_public_query": RailSourceSettings,
     "real_llm": RealLlmSourceSettings,
@@ -224,6 +260,9 @@ RAIL_ENV_SUFFIXES = HTTP_ENV_SUFFIXES | frozenset(
     {"USER_AGENT", "CACHE_TTL_SECONDS", "MIN_INTERVAL_SECONDS"}
 )
 FLIGHT_ENV_SUFFIXES = HTTP_ENV_SUFFIXES | frozenset({"USER_AGENT", "CACHE_TTL_SECONDS"})
+BROWSER_FLIGHT_ENV_SUFFIXES = COMMON_ENV_SUFFIXES | frozenset(
+    {"QPS_LIMIT", "WORKER_URL", "WORKER_ALLOWED_HOSTS", "TIMEOUT_SECONDS", "CACHE_TTL_SECONDS"}
+)
 REAL_LLM_ENV_SUFFIXES = CREDENTIALED_HTTP_ENV_SUFFIXES | frozenset(
     {"MODEL", "MAX_TOKENS", "THINKING_DISABLED"}
 )
@@ -243,6 +282,7 @@ ADAPTER_ENV_SUFFIXES: dict[str, frozenset[str]] = {
     "spring_airlines_public_query": FLIGHT_ENV_SUFFIXES,
     "hainan_airlines_public_query": FLIGHT_ENV_SUFFIXES,
     "qingdao_airlines_public_query": FLIGHT_ENV_SUFFIXES,
+    "browser_airline_flight": BROWSER_FLIGHT_ENV_SUFFIXES,
     "rail_12306_redirect": COMMON_ENV_SUFFIXES,
     "rail_12306_public_query": RAIL_ENV_SUFFIXES,
     "real_llm": REAL_LLM_ENV_SUFFIXES,
@@ -467,6 +507,25 @@ def _parse_source_settings(
                 raw.get("CACHE_TTL_SECONDS", "60"),
                 minimum=0,
             )
+        if issubclass(model, BrowserFlightSourceSettings):
+            payload.update(
+                {
+                    "worker_url": raw.get("WORKER_URL"),
+                    "worker_allowed_hosts": _parse_csv(raw.get("WORKER_ALLOWED_HOSTS"), lower=True),
+                    "timeout_seconds": _parse_float(
+                        source_id,
+                        "TIMEOUT_SECONDS",
+                        raw.get("TIMEOUT_SECONDS", "20"),
+                        minimum=0.001,
+                    ),
+                    "cache_ttl_seconds": _parse_int(
+                        source_id,
+                        "CACHE_TTL_SECONDS",
+                        raw.get("CACHE_TTL_SECONDS", "90"),
+                        minimum=60,
+                    ),
+                }
+            )
         if issubclass(model, RailSourceSettings):
             payload["cache_ttl_seconds"] = _parse_int(
                 source_id,
@@ -551,6 +610,11 @@ def _validate_adapter_payload(
         missing.append("USER_AGENT")
     if issubclass(model, RealLlmSourceSettings) and not payload.get("model"):
         missing.append("MODEL")
+    if issubclass(model, BrowserFlightSourceSettings):
+        if not payload.get("worker_url"):
+            missing.append("WORKER_URL")
+        if not payload.get("worker_allowed_hosts"):
+            missing.append("WORKER_ALLOWED_HOSTS")
     if missing:
         raise DataSourceConfigurationError(
             f"{source_id}: missing keys {', '.join(_source_env_name(source_id, item) for item in missing)}"

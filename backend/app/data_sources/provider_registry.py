@@ -5,6 +5,7 @@ from typing import Callable, Iterable, TypeVar
 
 from app.data_sources.config_loader import (
     ADAPTER_SETTINGS_MODELS,
+    BrowserFlightSourceSettings,
     CredentialedHttpSourceSettings,
     DataSourceConfigurationError,
     DataSourceSettings,
@@ -195,6 +196,22 @@ def _qingdao_airlines_factory(settings: DataSourceSettings) -> object:
     )
 
 
+def _browser_airline_factory(settings: DataSourceSettings) -> object:
+    from app.data_sources.browser_flight_providers import BrowserAirlineFlightProvider
+    from app.data_sources.browser_worker_client import BrowserWorkerClient
+
+    typed = _require_type(settings, BrowserFlightSourceSettings)
+    return BrowserAirlineFlightProvider(
+        source_id=typed.source_id,
+        client=BrowserWorkerClient(
+            worker_url=typed.worker_url or "",
+            allowed_hosts=typed.worker_allowed_hosts,
+            timeout_seconds=typed.timeout_seconds,
+        ),
+        cache_ttl_seconds=typed.cache_ttl_seconds,
+    )
+
+
 def _weather_factory(settings: DataSourceSettings) -> object:
     from app.data_sources.weather_providers import OpenMeteoForecastProvider
 
@@ -261,6 +278,9 @@ ADAPTER_REGISTRY: dict[str, AdapterRegistration] = {
     ),
     "qingdao_airlines_public_query": AdapterRegistration(
         ADAPTER_SETTINGS_MODELS["qingdao_airlines_public_query"], _qingdao_airlines_factory
+    ),
+    "browser_airline_flight": AdapterRegistration(
+        ADAPTER_SETTINGS_MODELS["browser_airline_flight"], _browser_airline_factory
     ),
     "rail_12306_redirect": AdapterRegistration(ADAPTER_SETTINGS_MODELS["rail_12306_redirect"], _redirect_factory),
     "rail_12306_public_query": AdapterRegistration(

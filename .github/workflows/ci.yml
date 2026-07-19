@@ -56,3 +56,26 @@ jobs:
         env:
           EXPO_PUBLIC_API_BASE_URL: https://staging-api.example.invalid
         run: npm run build
+
+  browser-worker-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: browser_worker/package-lock.json
+
+      - name: Install browser worker dependencies
+        working-directory: browser_worker
+        run: npm ci
+
+      - name: Typecheck browser worker
+        working-directory: browser_worker
+        run: npm run typecheck
+
+      - name: Test browser worker
+        working-directory: browser_worker
+        run: npm test

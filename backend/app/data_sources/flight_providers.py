@@ -737,6 +737,7 @@ def build_enabled_flight_providers(environment: str | None = None) -> list[Fligh
                 "spring_airlines_public_query",
                 "hainan_airlines_public_query",
                 "qingdao_airlines_public_query",
+                "browser_airline_flight",
             },
             environment,
         )

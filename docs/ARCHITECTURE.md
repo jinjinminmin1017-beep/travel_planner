@@ -1,6 +1,6 @@
 # Architecture
 
-更新日期：2026-07-14
+更新日期：2026-07-19
 
 本文记录当前代码中已确认的架构；尚未落地的内容会明确标注为“目标设计，待实现”。
 
@@ -38,12 +38,24 @@
   - 地图路线：`map_providers.py`。
   - 地理编码：`geocoding_providers.py`。
   - 铁路：`rail_providers.py`。
-  - 航班：`flight_providers.py`；MU/CZ/SC 的执行前置契约在 `flight_provider_contracts.py`，禁止以共享猜测路径或浏览器可访问性代替独立接口与条款审批。
+  - 航班：`flight_providers.py`；春秋、海航和青岛航空使用已验证的普通 HTTP 匿名查询。东航 Phase 1 使用独立 `browser_worker` 进程和 `browser_flight_providers.py`，禁止在 FastAPI 进程共享 Playwright 对象。
   - 天气：`weather_providers.py`。
   - LLM：`llm_providers.py`。
   - 跳转：`redirect_providers.py`。
   - 交通目录导入解析：`transport_catalog_providers.py`。
 - `backend/app/core/` 提供请求上下文、安全校验和日志配置。
+
+## 常驻浏览器航班查询架构（东航 Phase 1，开发中）
+
+- `browser_worker/` 是独立 Node.js/Playwright 进程；Chromium 在进程启动时创建，航司使用独立 context/page。FastAPI 不创建、持有或跨线程共享 Playwright 对象。
+- worker 只允许绑定 loopback，内部接口为 `POST /v1/flight-search` 和 `GET /health`。后端 `BrowserWorkerClient` 再次校验 `http`、loopback host 和显式 allowlist，外部 `/api/travel/*` 契约不变。
+- 第一阶段只注册 `airline_mu_browser_query`。东航 handler 在页面导航前注册 `/portal/v3/shopping/briefInfo` 响应监听，并联合校验官方 host、path、POST、XHR/fetch、Content-Type、HTTP 状态以及起点、终点、日期、人数。
+- 东航结果页 URL 模板属于经目标环境确认后注入的部署配置。仓库不猜测默认 URL；未配置 `MU_RESULT_URL_TEMPLATE` 时查询 fail-closed。
+- worker 以航司为粒度串行执行；相同查询在途合并，成功结果缓存 60-180 秒，连续失败触发短期熔断。页面或 context 失效时只重建该航司会话；Chromium 断开后下一次查询重建浏览器与会话。
+- worker 只返回规范化的航班号、机场、带时区时刻、整数最小货币单位舱价、可售状态、阶段耗时和非敏感 evidence ID。验证码、WAF、限流、超时、密文和结构变化返回稳定错误，不得作为成功空结果。
+- Python `BrowserAirlineFlightProvider` 继续使用现有进程缓存、SQLite 脱敏快照、规范化 offer 持久化和 Planner 降级语义。worker 返回的路线、日期、金额、舱位和时区必须再次校验后才能成为 `FlightOffer`。
+- 日志和 `/health` 指标只包含 source_id、航线、日期、队列/导航/响应/解析耗时、结果数量、缓存/合并/挑战/超时计数；不记录原始响应、Cookie、Token、设备指纹、完整 POST body 或请求头。
+- 当前状态：代码、类型检查和离线单元测试已完成；许可仍为 `PENDING_REVIEW`，结果页模板、目标环境 Chromium、50 次低频真实查询、成功率和 P50/P95 benchmark 尚未验收，因此 `.env.example` 中保持 `ENABLED=false`，不得标记 Phase 1 完成。
 
 ## LLM Prompt 架构边界
 

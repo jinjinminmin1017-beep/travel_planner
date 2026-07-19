@@ -1,6 +1,6 @@
 # Project Index
 
-更新日期：2026-07-18
+更新日期：2026-07-19
 
 ## 技术栈
 
@@ -20,6 +20,7 @@
 - `frontend/src/pages/`：目录存在，当前未发现页面文件或路由文件。
 - `frontend/assets/`：地图与目的地静态视觉资源。
 - `backend/`：FastAPI 后端工程。
+- `browser_worker/`：独立 Node.js/Playwright 常驻浏览器进程；第一阶段只实现东航/上航 handler，通过 loopback 内部接口向后端返回脱敏统一航班结构。
 - `backend/app/main.py`：后端应用、middleware、异常处理与全部路由注册入口。
 - `backend/app/models/`：Pydantic schema/model。
 - `backend/app/services/`：规划、解析、推荐、重算、结果集偏好传播、存储、可观测性等业务服务层；结果集席别传播位于 `result_set_preferences.py`。
@@ -30,6 +31,7 @@
   - `provider_registry.py`：统一的 adapter settings model 与 Provider factory 注册表；启用源在启动期完成构造校验。
   - `rate_limiter.py`：按 source_id 共享的线程安全 HTTP 请求门控，使外部 Provider 的 `QPS_LIMIT` 在真实请求边界生效。
   - `flight_providers.py`：航班请求构造、响应解析和快照脱敏；已实现春秋航空 `airline_9c_public_query`、海航 `airline_hu_public_query` 与青岛航空 `airline_qw_public_query` 匿名公开票价查询，其他航司仍需独立实现与验证，环境变量不能声明技术就绪。
+  - `browser_worker_client.py`、`browser_flight_providers.py`：loopback worker 客户端和浏览器航班 Provider；东航源保持禁用，需完成 URL 模板确认、许可与真实 benchmark 才能启用。
 - `backend/app/core/`：请求上下文、安全策略、日志配置。
 - `backend/app/data/`：本地数据目录，如交通节点和目的地资产。
 - `backend/app/llm/`：Prompt、LLM 调用日志和版本相关文件。
@@ -45,6 +47,7 @@
 - 前端入口：`frontend/index.ts`，注册 `frontend/src/App.tsx`。
 - 后端入口：`backend/app/main.py`，FastAPI app 对象为 `app`。
 - 后端启动命令：`python -m uvicorn app.main:app --reload --app-dir backend`。
+- 浏览器 worker 启动命令：`cd browser_worker; npm install; npx playwright install chromium; npm run build; npm run start`。
 
 ## API Client
 
@@ -88,6 +91,7 @@
 - 启动后端：`.\.venv\Scripts\python -m uvicorn app.main:app --reload --app-dir backend`
 - 启动前端：`cd frontend; npm run start`
 - 启动脚本：`.\scripts\dev.ps1 -Target backend` / `frontend` / `test`
+- 浏览器 worker：`.\scripts\dev.ps1 -Target browser-worker`
 - 真机调试：`.\scripts\device-debug.ps1 -OpenQr`
 - 后端测试：`.\.venv\Scripts\python -m pytest backend\app\tests`
 - 前端 typecheck：`cd frontend; npm run typecheck`

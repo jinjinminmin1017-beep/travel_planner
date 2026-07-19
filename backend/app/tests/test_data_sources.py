@@ -21,6 +21,7 @@ PLANNED_REAL_SOURCE_IDS = {
     "amap_route",
     "baidu_map_route",
     "real_llm",
+    "airline_mu_browser_query",
 }
 DEFAULT_ENABLED_REAL_SOURCE_IDS = {
     "osrm_route",
@@ -221,12 +222,13 @@ def test_env_example_contains_only_behaviorally_effective_provider_keys():
     ]
 
     assert "_HTTP_METHOD=" not in env_example
-    assert "AIRLINE_MU_PUBLIC_QUERY" not in env_example
+    assert "TRAVEL_SOURCE_AIRLINE_MU_BROWSER_QUERY_ENABLED=false" in env_example
     assert "VARIFLIGHT_STATUS" not in env_example
     assert cache_ttl_keys == [
         "TRAVEL_SOURCE_AIRLINE_9C_PUBLIC_QUERY_CACHE_TTL_SECONDS",
         "TRAVEL_SOURCE_AIRLINE_HU_PUBLIC_QUERY_CACHE_TTL_SECONDS",
         "TRAVEL_SOURCE_AIRLINE_QW_PUBLIC_QUERY_CACHE_TTL_SECONDS",
+        "TRAVEL_SOURCE_AIRLINE_MU_BROWSER_QUERY_CACHE_TTL_SECONDS",
         "TRAVEL_SOURCE_RAIL_12306_PUBLIC_QUERY_CACHE_TTL_SECONDS",
     ]
 
