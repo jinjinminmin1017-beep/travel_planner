@@ -2,7 +2,7 @@
 
 来源：架构任务，2026-07-19。
 
-完成状态：开发中。Phase 1 离线实现基线已于 2026-07-19 提交 `c301d82`；真实验收尚未完成。
+完成状态：开发中。Phase 1 离线实现基线已于 2026-07-19 提交 `c301d82`；真实结果页模板与 DOM 已验证，目标 worker 运行和 50 次真实验收尚未完成。
 
 当前进度：
 
@@ -11,9 +11,9 @@
 - [x] 新增后端 `BrowserWorkerClient`、`BrowserAirlineFlightProvider`、类型化 ENV settings 与 adapter registry；外部 API、数据库和前端不变。
 - [x] 对 worker 统一结果进行路线、日期、时区、金额、舱位、可售状态二次校验，并沿用进程缓存和 SQLite 脱敏证据。
 - [x] 离线验证：后端 229 项、worker 8 项、前端 helper 11 项均通过；前端 typecheck 通过。
-- [ ] 在目标环境确认并配置 `MU_RESULT_URL_TEMPLATE`；当前仓库不猜测结果页 URL，缺失时 fail-closed。
-- [ ] 完成 Chromium 运行验收。本机 Playwright CDN 证书主机名不匹配，未关闭 TLS 校验绕过；需由网络/部署环境修复后安装浏览器。
-- [ ] 完成至少 50 次低频东航真实查询、价格/航班一致性、成功率、P50/P95、挑战检测和崩溃恢复验收。
+- [x] 真实浏览器确认单机场模板 `https://www.ceair.com/zh/cny/shopping/oneway/{origin_iata}-{destination_iata}/{departure_date}`，并验证结果 DOM、MU/FM 航班字段和含税/不含税价格口径。
+- [x] 使用本机 Microsoft Edge Chromium 与 `BROWSER_WORKER_EXECUTABLE_PATH` 完成独立 worker 预热、loopback API 和真实查询运行验收；未关闭 TLS 校验绕过 Playwright CDN 证书问题。
+- [ ] 完成至少 50 次低频东航真实查询、价格/航班一致性、成功率、P50/P95、挑战检测和崩溃恢复验收。首次批次前 5 次成功，随后 3 次超时并触发熔断，已停止访问；当前不满足 95% 门禁。
 - [ ] 获得许可审批并满足全部技术门禁后，才可将 `airline_mu_browser_query` 设为启用；当前保持 `PENDING_REVIEW + ENABLED=false`。
 
 ## 1. 背景与目标

@@ -1,3 +1,6 @@
+import { existsSync } from "node:fs";
+import { isAbsolute } from "node:path";
+
 import { chromium, type Browser, type BrowserContext, type Page, type Response } from "playwright";
 
 import type { BrowserFlightResult, ChallengeResult, FlightSearchInput } from "./contracts.js";
@@ -9,6 +12,12 @@ interface AirlineSession {
   page: Page;
 }
 
+export interface BrowserLifecycleMetrics {
+  browser_restarts: number;
+  context_rebuilds: number;
+  page_rebuilds: number;
+}
+
 export interface BrowserExecutionResult extends BrowserFlightResult {
   navigation_ms: number;
   response_ms: number;
@@ -18,6 +27,12 @@ export interface BrowserExecutionResult extends BrowserFlightResult {
 export class BrowserManager {
   private browser: Browser | null = null;
   private readonly sessions = new Map<string, AirlineSession>();
+  private launchedOnce = false;
+  readonly metrics: BrowserLifecycleMetrics = {
+    browser_restarts: 0,
+    context_rebuilds: 0,
+    page_rebuilds: 0,
+  };
 
   constructor(
     private readonly handlers: Map<string, AirlineBrowserHandler>,
@@ -39,7 +54,7 @@ export class BrowserManager {
     if (!handler) throw new WorkerSearchError("SOURCE_NOT_IMPLEMENTED", `${input.source_id} is not implemented`, false);
     let session = await this.getSession(input.source_id);
     if (session.page.isClosed()) {
-      await this.rebuildSession(input.source_id);
+      await this.rebuildPage(input.source_id);
       session = await this.getSession(input.source_id);
     }
     const navigationStarted = performance.now();
@@ -47,31 +62,41 @@ export class BrowserManager {
       (response) => handler.matchesResponse(response, input),
       { timeout: numberEnv("BROWSER_WORKER_RESPONSE_TIMEOUT_MS", 15_000, 1_000, 60_000) },
     );
-    let response: Response;
     let navigationFinished = navigationStarted;
     try {
       await handler.triggerSearch(session.page, input);
       navigationFinished = performance.now();
-      response = await targetResponse;
+      type Completion = { kind: "response"; response: Response } | { kind: "page" };
+      const completions: Array<Promise<Completion>> = [
+        targetResponse.then((response) => ({ kind: "response" as const, response })),
+      ];
+      if (handler.waitForPageResult && handler.parsePage) {
+        completions.push(handler.waitForPageResult(session.page, input).then(() => ({ kind: "page" as const })));
+      }
+      const completion = await Promise.race(completions);
+      const responseAt = performance.now();
+      const response = completion.kind === "response" ? completion.response : undefined;
+      if (!response) void targetResponse.catch(() => undefined);
+      const challenge = await handler.detectChallenge(session.page, response);
+      if (challenge) throw challengeError(challenge);
+      const parseStarted = performance.now();
+      const result = response
+        ? await handler.parseResponse(response, session.page, input)
+        : await handler.parsePage!(session.page, input);
+      const finished = performance.now();
+      return {
+        ...result,
+        navigation_ms: Math.max(0, Math.round(navigationFinished - navigationStarted)),
+        response_ms: Math.max(0, Math.round(responseAt - navigationFinished)),
+        parse_ms: Math.max(0, Math.round(finished - parseStarted)),
+      };
     } catch (error) {
       void targetResponse.catch(() => undefined);
       const challenge = await handler.detectChallenge(session.page).catch(() => null);
       if (challenge) throw challengeError(challenge);
-      if (session.page.isClosed()) await this.rebuildSession(input.source_id).catch(() => undefined);
+      if (session.page.isClosed()) await this.rebuildPage(input.source_id).catch(() => undefined);
       throw error;
     }
-    const responseAt = performance.now();
-    const challenge = await handler.detectChallenge(session.page, response);
-    if (challenge) throw challengeError(challenge);
-    const parseStarted = performance.now();
-    const result = await handler.parseResponse(response, session.page, input);
-    const finished = performance.now();
-    return {
-      ...result,
-      navigation_ms: Math.max(0, Math.round(navigationFinished - navigationStarted)),
-      response_ms: Math.max(0, Math.round(responseAt - navigationFinished)),
-      parse_ms: Math.max(0, Math.round(finished - parseStarted)),
-    };
   }
 
   async stop(): Promise<void> {
@@ -80,17 +105,20 @@ export class BrowserManager {
     this.browser = null;
   }
 
-  health(): { browser_connected: boolean; sessions: string[] } {
+  health(): { browser_connected: boolean; sessions: string[]; lifecycle_metrics: BrowserLifecycleMetrics } {
     return {
       browser_connected: this.browser?.isConnected() ?? false,
       sessions: [...this.sessions.keys()].sort(),
+      lifecycle_metrics: { ...this.metrics },
     };
   }
 
   private async ensureBrowser(): Promise<Browser> {
     if (this.browser?.isConnected()) return this.browser;
     this.sessions.clear();
-    this.browser = await chromium.launch({ headless: this.headless });
+    if (this.launchedOnce) this.metrics.browser_restarts += 1;
+    this.browser = await chromium.launch({ headless: this.headless, ...browserExecutableOptions() });
+    this.launchedOnce = true;
     this.browser.on("disconnected", () => {
       this.browser = null;
       this.sessions.clear();
@@ -121,7 +149,22 @@ export class BrowserManager {
     const previous = this.sessions.get(sourceId);
     this.sessions.delete(sourceId);
     await previous?.context.close().catch(() => undefined);
+    this.metrics.context_rebuilds += 1;
     await this.createSession(sourceId);
+  }
+
+  private async rebuildPage(sourceId: string): Promise<void> {
+    const session = this.sessions.get(sourceId);
+    if (!session) {
+      await this.createSession(sourceId);
+      return;
+    }
+    try {
+      session.page = await session.context.newPage();
+      this.metrics.page_rebuilds += 1;
+    } catch {
+      await this.rebuildSession(sourceId);
+    }
   }
 }
 
@@ -132,4 +175,17 @@ function challengeError(challenge: ChallengeResult): WorkerSearchError {
 function numberEnv(name: string, fallback: number, minimum: number, maximum: number): number {
   const value = Number.parseInt(process.env[name] ?? "", 10);
   return Number.isInteger(value) && value >= minimum && value <= maximum ? value : fallback;
+}
+
+export function browserExecutableOptions(): { executablePath?: string } {
+  const executablePath = process.env.BROWSER_WORKER_EXECUTABLE_PATH?.trim();
+  if (!executablePath) return {};
+  if (!isAbsolute(executablePath) || !existsSync(executablePath)) {
+    throw new WorkerSearchError(
+      "BROWSER_EXECUTABLE_INVALID",
+      "BROWSER_WORKER_EXECUTABLE_PATH must be an existing absolute file",
+      false,
+    );
+  }
+  return { executablePath };
 }

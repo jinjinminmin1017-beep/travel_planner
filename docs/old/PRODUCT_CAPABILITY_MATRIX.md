@@ -67,7 +67,7 @@
 | `baidu_map_route` | MAP | 阻塞于授权 | 禁用 | 拿到用户自有 key 和授权后作为地图路线 Provider。 | 未授权时启用、商业使用或静默 fallback。 |
 | `baidu_uri_redirect` | MAP | 阻塞于授权 | 禁用 | 授权确认后作为百度地图 URI 跳转备选。 | 未审核前在生产启用。 |
 | `airline_mu_public_query` | FLIGHT | 阻塞于授权 | 禁用 | 源站审核通过后低频采集东航官方公开前端报价，只返回有真实价格且有可售/余票信号的舱位。 | 登录、绕验证码、逆向强认证、下单、支付、抢票、缺价补价、无可售信号时生成航班方案或作为 fallback。 |
-| `airline_mu_browser_query` | FLIGHT | 进行中 / 阻塞于授权 | 禁用 | 独立 Playwright worker 复用东航匿名浏览器会话，只把匹配本次查询且通过严格校验的航班、时刻、舱价和可售信号转换为 `FlightOffer`。 | 未完成许可、结果页模板确认、目标环境 Chromium 验收和 50 次 benchmark 前启用；不得绕验证码、保存 Cookie/指纹/Token、把挑战或结构变化当作空航班。 |
+| `airline_mu_browser_query` | FLIGHT | 进行中 / 阻塞于授权 | 禁用 | 独立 Playwright worker 复用东航匿名浏览器会话；真实单机场结果页模板和含税 DOM 已确认，只把匹配本次查询且通过严格校验的航班、时刻、舱价和可售信号转换为 `FlightOffer`。 | 未完成许可、目标环境 Chromium 验收和 50 次 benchmark 前启用；不得绕验证码、保存 Cookie/指纹/Token、把挑战或结构变化当作空航班。 |
 | `airline_cz_public_query` | FLIGHT | 阻塞于授权 | 禁用 | 源站审核通过后低频采集南航官方公开前端报价，只返回有真实价格且有可售/余票信号的舱位。 | 登录、绕验证码、逆向强认证、下单、支付、抢票、缺价补价、无可售信号时生成航班方案或作为 fallback。 |
 | `airline_sc_public_query` | FLIGHT | 阻塞于授权 | 禁用 | 源站审核通过后低频采集山航官方公开前端报价，只返回有真实价格且有可售/余票信号的舱位。 | 登录、绕验证码、逆向强认证、下单、支付、抢票、缺价补价、无可售信号时生成航班方案或作为 fallback。 |
 | `airline_ca_public_query` | FLIGHT | 阻塞于授权 | 禁用 | 国航独立契约；许可审批后仍须通过匿名真实库存响应技术门禁。 | 不得把官网入口可达等同于可执行票价契约。 |

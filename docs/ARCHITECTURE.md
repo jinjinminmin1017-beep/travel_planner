@@ -50,12 +50,13 @@
 - `browser_worker/` 是独立 Node.js/Playwright 进程；Chromium 在进程启动时创建，航司使用独立 context/page。FastAPI 不创建、持有或跨线程共享 Playwright 对象。
 - worker 只允许绑定 loopback，内部接口为 `POST /v1/flight-search` 和 `GET /health`。后端 `BrowserWorkerClient` 再次校验 `http`、loopback host 和显式 allowlist，外部 `/api/travel/*` 契约不变。
 - 第一阶段只注册 `airline_mu_browser_query`。东航 handler 在页面导航前注册 `/portal/v3/shopping/briefInfo` 响应监听，并联合校验官方 host、path、POST、XHR/fetch、Content-Type、HTTP 状态以及起点、终点、日期、人数。
-- 东航结果页 URL 模板属于经目标环境确认后注入的部署配置。仓库不猜测默认 URL；未配置 `MU_RESULT_URL_TEMPLATE` 时查询 fail-closed。
-- worker 以航司为粒度串行执行；相同查询在途合并，成功结果缓存 60-180 秒，连续失败触发短期熔断。页面或 context 失效时只重建该航司会话；Chromium 断开后下一次查询重建浏览器与会话。
+- 东航单机场结果页已于 2026-07-19 在真实浏览器确认，默认模板为 `https://www.ceair.com/zh/cny/shopping/oneway/{origin_iata}-{destination_iata}/{departure_date}`；覆盖值仍受 HTTPS 与 `ceair.com` host allowlist 约束。
+- worker 以航司为粒度串行执行；相同查询在途合并，成功结果缓存 60-180 秒，连续失败触发短期熔断。页面失效只重建 page，context 异常只重建该航司会话；Chromium 断开后下一次查询重建浏览器与全部会话，并通过健康接口暴露分级重建计数。
+- 东航业务响应与页面结果卡并行作为完成信号；DOM 路径再次核对结果页路线和日期，强制确认“现金-含税”，只映射官网公开展示的 MU/FM 航班、时刻和可用舱价。响应/DOM 结构、税费口径、挑战页或路线不一致均 fail-closed。
 - worker 只返回规范化的航班号、机场、带时区时刻、整数最小货币单位舱价、可售状态、阶段耗时和非敏感 evidence ID。验证码、WAF、限流、超时、密文和结构变化返回稳定错误，不得作为成功空结果。
 - Python `BrowserAirlineFlightProvider` 继续使用现有进程缓存、SQLite 脱敏快照、规范化 offer 持久化和 Planner 降级语义。worker 返回的路线、日期、金额、舱位和时区必须再次校验后才能成为 `FlightOffer`。
 - 日志和 `/health` 指标只包含 source_id、航线、日期、队列/导航/响应/解析耗时、结果数量、缓存/合并/挑战/超时计数；不记录原始响应、Cookie、Token、设备指纹、完整 POST body 或请求头。
-- 当前状态：代码、类型检查和离线单元测试已完成；许可仍为 `PENDING_REVIEW`，结果页模板、目标环境 Chromium、50 次低频真实查询、成功率和 P50/P95 benchmark 尚未验收，因此 `.env.example` 中保持 `ENABLED=false`，不得标记 Phase 1 完成。
+- 当前状态：结果页模板、含税 DOM、独立 Edge Chromium 进程与 loopback API 已完成真实查询验证，代码、类型检查和离线单元测试已完成。首批低频 benchmark 为前 5 次成功、随后 3 次超时并触发熔断，尚未完成 50 次且未达到 95% 成功率；许可仍为 `PENDING_REVIEW`，因此 `.env.example` 中保持 `ENABLED=false`，不得标记 Phase 1 完成。
 
 ## LLM Prompt 架构边界
 

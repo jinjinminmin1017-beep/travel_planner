@@ -2,7 +2,13 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import type { FlightSearchInput } from "../src/contracts.js";
-import { parseMuPayload, requestMatchesInput } from "../src/airlines/mu.js";
+import {
+  assertResultPageMatchesInput,
+  buildMuResultUrl,
+  parseMuDomRows,
+  parseMuPayload,
+  requestMatchesInput,
+} from "../src/airlines/mu.js";
 
 const input: FlightSearchInput = {
   request_id: "req-mu",
@@ -77,6 +83,44 @@ test("MU payload maps only matching, priced and available MU/FM flights", () => 
 
 test("encrypted or structurally unrelated payloads do not create offers", () => {
   assert.deepEqual(parseMuPayload({ data: { enc: "opaque-ciphertext" } }, input), []);
+});
+
+test("verified MU result URL is built from the exact airport pair and date", () => {
+  assert.equal(
+    buildMuResultUrl(input),
+    "https://www.ceair.com/zh/cny/shopping/oneway/PVG-TAO/2026-07-23",
+  );
+  assert.doesNotThrow(() => assertResultPageMatchesInput(buildMuResultUrl(input), input));
+  assert.throws(
+    () => assertResultPageMatchesInput("https://www.ceair.com/zh/cny/shopping/oneway/SHA-PEK/2026-07-23", input),
+    /does not match/,
+  );
+});
+
+test("MU public DOM rows map tax-inclusive displayed fares without inventing unavailable cabins", () => {
+  const flights = parseMuDomRows(
+    [
+      {
+        flightNumber: "MU 5151",
+        departureTime: "23:40",
+        arrivalTime: "01:10",
+        fares: ["¥ 934", null, "¥ 3,870"],
+      },
+      {
+        flightNumber: "CA1234",
+        departureTime: "09:00",
+        arrivalTime: "11:00",
+        fares: ["¥ 900", null, null],
+      },
+    ],
+    input,
+  );
+
+  assert.equal(flights.length, 1);
+  assert.equal(flights[0]?.carrier_code, "MU");
+  assert.equal(flights[0]?.arrival_at, "2026-07-24T01:10:00+08:00");
+  assert.deepEqual(flights[0]?.fares.map((fare) => fare.cabin_type), ["ECONOMY", "BUSINESS"]);
+  assert.deepEqual(flights[0]?.fares.map((fare) => fare.price.amount_minor), [93400, 387000]);
 });
 
 test("overnight arrivals retain an explicit next-day Asia/Shanghai timestamp", () => {
