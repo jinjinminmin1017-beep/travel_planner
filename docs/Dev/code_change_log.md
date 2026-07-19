@@ -374,3 +374,22 @@
   - `\.venv\Scripts\python scripts\check_real_api_config.py --tier public`、Python compileall 和 `git diff --check` 通过。
   - Playwright Chromium 下载未通过：本机网络返回与 `cdn.playwright.dev` 主机名不匹配的证书；未关闭 TLS 校验。由于同时缺经确认的 `MU_RESULT_URL_TEMPLATE` 与许可，未启动真实 worker、未执行 50 次 benchmark，也未将 Phase 1 标记完成。
 - 兼容性：不需要数据库迁移，不需要前端同步，不改变 `/api/travel/*`；关闭或不注册 worker 源时既有 9C/HU/QW Provider 与 Planner 降级路径保持不变。
+
+## 2026-07-19 10:22:30 +08:00
+
+- 任务：继续 ARC-20260719-01，完成东航真实结果页、独立 Chromium worker 与低频验收工具。
+- 代码提交：`65e38ff`。
+- 修改内容：
+  - 真实浏览器确认东航单机场直达模板 `https://www.ceair.com/zh/cny/shopping/oneway/{origin_iata}-{destination_iata}/{departure_date}`，并将其作为受 HTTPS 与 `ceair.com` allowlist 保护的默认模板。
+  - 新增东航公开结果 DOM 解析：再次核对路线和日期，处理官网公告弹窗，切换并确认“现金-含税”，只映射 `.shopping-simple` 中可验证的 MU/FM 航班、时刻与三类公开舱价。
+  - 业务响应与结果卡并行作为查询完成信号；页面结构、税费口径、航班号、路线或日期异常继续 fail-closed，不把挑战或解析失败转换为空航班。
+  - 新增目标机 Chrome/Chromium 绝对路径配置，健康接口增加 browser/context/page 分级重建计数；页面关闭只重建 page，context 与 browser 异常按层级恢复。
+  - 新增 50 次低频 benchmark 工具，要求用例互不重复并拒绝缓存伪成功，计算成功率、P50/P95/P99、非空结果与挑战；连续 3 次失败或熔断时提前停止，默认额外间隔提高到 10 秒。
+  - 更新 `.env.example`、worker README、架构、项目索引、能力矩阵、开发任务与脱敏真实验证证据；外部 API、数据库和前端合同不变。
+- 验证：
+  - 使用本机 Microsoft Edge Chromium 启动独立 worker，loopback API 真实查询 `PVG -> PEK / 2026-07-23` 返回 MU5151、MU5155、MU5161、MU5163、MU5165；含税最低示例 CNY 550.00，总耗时 3454 ms。
+  - 50 次首批验收的前 5 次成功且无缓存命中，P50 4586 ms、P95 5128 ms；随后 3 次超时并触发熔断，已停止访问。真实外部尝试 8 次、成功率 62.5%，未达到 95% 门禁，源继续保持 `PENDING_REVIEW + ENABLED=false`。
+  - `\.venv\Scripts\python.exe -m pytest backend\app\tests -q`：229 passed；公开配置检查通过。
+  - `browser_worker`：typecheck 通过、11 tests passed、npm audit 0 vulnerabilities。
+  - `frontend`：typecheck 通过、helper 11 tests passed；`git diff --check` 通过。
+- 兼容性：不需要数据库迁移，不需要前端同步，不改变 `/api/travel/*`；未扩展 Phase 2 航司，既有 9C/HU/QW Provider 与 Planner 降级路径不变。
