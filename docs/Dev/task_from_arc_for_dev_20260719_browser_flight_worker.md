@@ -2,7 +2,19 @@
 
 来源：架构任务，2026-07-19。
 
-完成状态：待开发。
+完成状态：开发中。Phase 1 离线实现基线已于 2026-07-19 提交 `c301d82`；真实验收尚未完成。
+
+当前进度：
+
+- [x] 建立独立 `browser_worker`、内部契约、loopback HTTP 服务、Chromium/session 生命周期和东航 handler。
+- [x] 实现航司级串行队列、相同查询在途合并、60-180 秒缓存、短期熔断、稳定错误和非敏感指标。
+- [x] 新增后端 `BrowserWorkerClient`、`BrowserAirlineFlightProvider`、类型化 ENV settings 与 adapter registry；外部 API、数据库和前端不变。
+- [x] 对 worker 统一结果进行路线、日期、时区、金额、舱位、可售状态二次校验，并沿用进程缓存和 SQLite 脱敏证据。
+- [x] 离线验证：后端 229 项、worker 8 项、前端 helper 11 项均通过；前端 typecheck 通过。
+- [ ] 在目标环境确认并配置 `MU_RESULT_URL_TEMPLATE`；当前仓库不猜测结果页 URL，缺失时 fail-closed。
+- [ ] 完成 Chromium 运行验收。本机 Playwright CDN 证书主机名不匹配，未关闭 TLS 校验绕过；需由网络/部署环境修复后安装浏览器。
+- [ ] 完成至少 50 次低频东航真实查询、价格/航班一致性、成功率、P50/P95、挑战检测和崩溃恢复验收。
+- [ ] 获得许可审批并满足全部技术门禁后，才可将 `airline_mu_browser_query` 设为启用；当前保持 `PENDING_REVIEW + ENABLED=false`。
 
 ## 1. 背景与目标
 

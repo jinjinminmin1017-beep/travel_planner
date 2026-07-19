@@ -355,3 +355,22 @@
   - 项目 Provider 真实在线验收：海航 `BJS -> SHA`、2026-07-23 返回 6 个可售 offer，含 Y87596、HU7607、HU7605、HU7613、HU7601、HU7603，含税最低总价 CNY 550.00；青岛航空 `TAO -> TFU`、2026-07-20 返回 QW9771、CNY 699.00 和 34 个舱价选项。
   - Python compileall、`git diff --check` 和 `.env` / `.env.example` 键集合检查通过。
 - 兼容性：未修改 API schema、既有数据库表或前端；本地航班快照 SQLite 继续按需建表，无需迁移。
+
+## 2026-07-19 09:52:54 +08:00
+
+- 任务：启动 ARC-20260719-01，落地东航常驻浏览器航班查询 Phase 1 离线实现基线。
+- 代码提交：`c301d82`。
+- 修改内容：
+  - 新增独立 `browser_worker` Node.js/Playwright 工程、loopback `/v1/flight-search` 与 `/health`、每航司常驻 context/page、串行队列、在途合并、90 秒缓存、短期熔断和分阶段耗时指标。
+  - 新增东航/上航 handler；只匹配官方 host 的 `POST /portal/v3/shopping/briefInfo`，联合核对资源类型、JSON 响应、起终点、日期和人数，并严格解析带时区时刻、整数最小货币单位舱价与明确可售信号。
+  - 验证码、WAF、限流、超时、密文、过期响应和结构变化全部 fail-closed；只有明确空列表、空计数或空结果状态才返回成功空结果，不记录原始响应、Cookie、Token、设备指纹或完整请求体。
+  - 新增 `BrowserWorkerClient` 与 `BrowserAirlineFlightProvider`，后端只允许 loopback worker URL 和显式 host allowlist，并对路线、日期、时区、金额、舱位及可售状态二次校验后转换为现有 `FlightOffer`。
+  - 新增 `browser_airline_flight` 类型化 settings 和 `airline_mu_browser_query`；`.env.example` 保持 `PENDING_REVIEW + ENABLED=false`，未确认结果页模板、许可和真实 benchmark 不能通过 ENV 绕过。
+  - 更新启动脚本、CI worker 测试、项目索引、架构和产品能力矩阵；外部 API、schema version、数据库和前端合同不变。
+- 验证：
+  - `\.venv\Scripts\python -m pytest backend\app\tests -q`：229 passed。
+  - `browser_worker`：`npm run typecheck` 通过，`npm test` 8 passed，`npm audit` 0 vulnerabilities。
+  - `frontend`：`npm run typecheck` 通过，`npm run test:helpers` 11 passed。
+  - `\.venv\Scripts\python scripts\check_real_api_config.py --tier public`、Python compileall 和 `git diff --check` 通过。
+  - Playwright Chromium 下载未通过：本机网络返回与 `cdn.playwright.dev` 主机名不匹配的证书；未关闭 TLS 校验。由于同时缺经确认的 `MU_RESULT_URL_TEMPLATE` 与许可，未启动真实 worker、未执行 50 次 benchmark，也未将 Phase 1 标记完成。
+- 兼容性：不需要数据库迁移，不需要前端同步，不改变 `/api/travel/*`；关闭或不注册 worker 源时既有 9C/HU/QW Provider 与 Planner 降级路径保持不变。
