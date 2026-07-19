@@ -466,3 +466,139 @@ flowchart TD
 - 使用 `TRAVEL_RAIL_CONNECTION_MATCHER_V2` 功能开关控制新 matcher；紧急回滚时恢复旧匹配路径。
 - 新模块只改变候选生成，不迁移数据库、不改变已持久化响应结构，可独立回滚。
 - 回滚后必须保留新增诊断日志，禁止通过伪造车次、规则估算或放宽安全门槛掩盖无连接问题。
+
+## 后端数据源 ENV 单一配置源架构（待实现）
+
+设计日期：2026-07-16。
+
+### 当前问题
+
+- 后端数据源运行配置同时分布在项目根目录 `.env`、`backend/app/data_sources/data_sources.*.json`、`config_loader.py` 默认逻辑和 `flight_provider_contracts.py` 中。
+- `.env` 中的值虽然可以覆盖 JSON，但航班 Provider 仍会被 `flight_provider_contracts.py` 的 `technical_ready` 再次阻断，导致配置人员看到 `ENABLED/APPROVED` 后仍无法判断最终有效状态。
+- 航班的 host、base URL、search path 等信息在 `.env.example` 与 Python 合同对象中重复，新增 Provider 时容易漏改、产生漂移或出现互相覆盖。
+- `data_sources.dev.json`、`data_sources.test.json`、`data_sources.prod.json` 形成三套默认值，环境增加后维护成本继续增长，无法满足单一配置入口要求。
+- Amadeus 等历史环境变量仍存在，但运行时注册表没有对应 Provider；环境变量存在不代表代码实际消费，当前缺少启动期的未知配置检测。
+
+### 架构决策
+
+所有后端运行时配置统一来自进程环境变量；本地开发由项目根目录 `.env` 注入，变量清单、类型、说明和安全默认值只在 `.env.example` 维护。
+
+以下文件不再作为运行时配置源：
+
+- `backend/app/data_sources/data_sources.dev.json`
+- `backend/app/data_sources/data_sources.test.json`
+- `backend/app/data_sources/data_sources.prod.json`
+- `backend/app/data_sources/flight_provider_contracts.py`
+
+实现完成并通过回归后删除上述 JSON 配置和航班合同注册文件。迁移期间禁止长期保留“ENV 优先、JSON 兜底”的双读取路径；短期兼容代码只能存在于迁移提交内部，合并前必须移除。
+
+### 配置与程序逻辑边界
+
+必须进入环境变量的内容：
+
+- Provider 注册清单、启用状态、许可状态和商业使用状态。
+- Base URL、Search Path、HTTP Method、允许的 Host。
+- API key、token 等凭证。
+- QPS、超时、重试、缓存 TTL、快照后端和持久化路径。
+- 可由部署环境改变的功能开关、并发数和任务超时。
+
+不得伪装成环境配置的内容：
+
+- Provider 响应解析算法。
+- Pydantic/schema 校验逻辑。
+- 航班、铁路、地图事实的安全门禁。
+- 错误码映射和推荐资格规则。
+- 测试断言。
+
+上述内容属于程序实现，保留在 Provider adapter、schema 和测试中。删除 `flight_provider_contracts.py` 后，不新增 `TECHNICAL_READY=true` 之类可手工绕过实现完整性的变量；技术可用性由“适配器已注册 + 必填 ENV 校验通过 + Provider 健康检查/真实 smoke 通过”计算，并通过数据源状态接口返回明确原因。
+
+### ENV 命名与单一清单
+
+使用一个注册变量声明运行时需要装载的数据源：
+
+```env
+TRAVEL_DATA_SOURCE_IDS=rail_12306_public_query,amap_route,airline_ho_public_query
+```
+
+每个数据源使用统一前缀：
+
+```env
+TRAVEL_SOURCE_AIRLINE_HO_PUBLIC_QUERY_ADAPTER=official_airline_public_query
+TRAVEL_SOURCE_AIRLINE_HO_PUBLIC_QUERY_ENABLED=false
+TRAVEL_SOURCE_AIRLINE_HO_PUBLIC_QUERY_LICENSE_STATUS=PENDING_REVIEW
+TRAVEL_SOURCE_AIRLINE_HO_PUBLIC_QUERY_COMMERCIAL_ALLOWED=false
+TRAVEL_SOURCE_AIRLINE_HO_PUBLIC_QUERY_QPS_LIMIT=0
+TRAVEL_SOURCE_AIRLINE_HO_PUBLIC_QUERY_BASE_URL=https://www.juneyaoair.com
+TRAVEL_SOURCE_AIRLINE_HO_PUBLIC_QUERY_SEARCH_PATH=/server/api/flightFares/queryFlightSimple
+TRAVEL_SOURCE_AIRLINE_HO_PUBLIC_QUERY_HTTP_METHOD=POST
+TRAVEL_SOURCE_AIRLINE_HO_PUBLIC_QUERY_ALLOWED_HOSTS=juneyaoair.com
+TRAVEL_SOURCE_AIRLINE_HO_PUBLIC_QUERY_TIMEOUT_SECONDS=10
+TRAVEL_SOURCE_AIRLINE_HO_PUBLIC_QUERY_CACHE_TTL_SECONDS=60
+```
+
+规则：
+
+- `TRAVEL_DATA_SOURCE_IDS` 是数据源注册的唯一清单；未列入的 Provider 不参与运行。
+- `TRAVEL_SOURCE_<ID>_ADAPTER` 必须匹配代码内已注册的 adapter 名称，否则启动失败。
+- `ENABLED=true` 的数据源必须具有完整必填变量；缺失、类型错误、Host 不在 allowlist 或许可状态非法时启动失败，不得静默降级。
+- `ENABLED=false` 时允许缺少凭证，但仍校验已填写变量的类型和枚举值。
+- 未被 loader 消费的 `TRAVEL_SOURCE_*` 变量必须报告为未知配置；生产环境默认阻止启动，本地开发至少输出明确错误。
+- `.env.example` 必须包含所有非敏感变量及安全默认值；真实 `.env` 不进入版本控制，生产环境使用部署平台环境变量或 Secret Manager 注入。
+- 日志只能记录配置键、来源和校验结果，不得记录 secret、token、Cookie 或完整带密钥 URL。
+
+### 类型化加载与启动校验
+
+- `config_loader.py` 统一读取环境变量并构造类型化 `DataSourceSettings`；Provider 不再各自直接调用 `os.getenv()`。
+- 公共字段由基础模型校验，adapter 特有字段由对应 settings 子模型校验。
+- 配置只在进程启动时加载一次，生成不可变快照；运行中不隐式重读 `.env`。
+- `/api/data-sources/status` 继续返回每个 Provider 的 `enabled`、`health_status` 和 `degraded_reason`，其状态必须来自同一配置快照与实际健康检查。
+- 配置校验失败时，错误消息包含 source_id 和缺失/非法键名，但不包含值。
+
+### 数据流
+
+```mermaid
+flowchart TD
+    A["进程环境变量 / 本地 .env"] --> B["config_loader 类型化解析"]
+    B --> C{"注册清单与必填字段有效?"}
+    C -->|否| D["启动失败并报告键名"]
+    C -->|是| E["不可变 DataSourceSettings 快照"]
+    E --> F["按 ADAPTER 注册 Provider"]
+    F --> G["Provider 健康检查"]
+    G --> H["/api/data-sources/status"]
+    G --> I["规划任务查询可用 Provider"]
+    I --> J["候选、失败原因与覆盖状态"]
+```
+
+### 影响范围与文件修改范围
+
+- 配置加载：重构 `backend/app/data_sources/config_loader.py`，以 ENV-only 类型模型替代 JSON 加载与覆盖逻辑。
+- 数据源适配器：修改 `backend/app/data_sources/*_providers.py`，统一接收 settings，不再直接读取环境变量。
+- 航班：把仍有效的解析和请求实现保留在 `flight_providers.py` 或按航司拆分的 adapter 中；删除 `flight_provider_contracts.py` 的配置和运行门禁职责。
+- 默认配置：扩充 `.env.example` 为唯一变量清单，清理根目录 `.env` 中无实现消费的历史变量；不得提交真实凭证。
+- 删除配置源：删除 `backend/app/data_sources/data_sources.*.json`；更新 `PROJECT_INDEX.md`、启动脚本和配置检查脚本。
+- 测试：改为通过 monkeypatch/进程环境注入配置，禁止读取 test JSON；补充未知键、缺失必填项、类型错误、禁用源和启动失败测试。
+- API：第一阶段不改变 `/api/data-sources/status` 外部 schema，只修正状态来源与 `degraded_reason`；无需数据库迁移和前端同步修改。
+
+### 迁移顺序
+
+1. 定义类型化 settings、统一命名和 adapter 注册表。
+2. 将 `.env.example` 补齐为所有数据源的完整非敏感变量清单。
+3. 逐个 Provider 改为构造器注入 settings，移除内部 `os.getenv()`。
+4. 将测试与脚本改为 ENV 注入并验证未知键检测。
+5. 删除 `data_sources.*.json` 和 `flight_provider_contracts.py`，确认仓库不存在运行时读取引用。
+6. 重启后端，检查数据源状态并执行真实铁路、地图、航班 smoke；未完成适配器的航班源保持禁用，但必须明确显示缺失项。
+
+### 风险与控制
+
+- ENV 数量增长：使用统一前缀、注册清单、类型模型和 `.env.example` 分组注释管理；禁止用无结构 JSON blob 承载整套 Provider 配置。
+- 人工把未完成 Provider 设为启用：启动校验要求 adapter 存在且必填配置完整；真实事实仍必须通过 Provider 响应 schema 和安全门禁，不能由环境变量声明“技术就绪”。
+- 配置漂移：CI 校验 `.env.example` 与 settings 模型字段一致，并检查所有 adapter 都有示例配置。
+- 敏感信息泄露：错误和日志只输出键名；URL 日志必须移除 query secret；`.env` 保持忽略提交。
+- 测试污染本地环境：测试逐项 monkeypatch 并在用例结束恢复，不读取开发机 `.env`。
+- 一次性迁移影响所有 Provider：按 adapter 完成实现，但合并时保持单一读取路径；发布前执行全量 Provider 和规划回归。
+
+### 回滚方式
+
+- 通过回滚迁移提交恢复旧 loader 和 JSON 文件，不在新实现中长期保留双配置源功能开关。
+- 回滚只恢复配置加载方式，不回滚 Provider 事实校验、安全门禁、日志脱敏和“不生成模拟航班”的原则。
+- 如单个 Provider 配置有误，通过其 `TRAVEL_SOURCE_<ID>_ENABLED=false` 独立停用，不回滚整个配置体系。

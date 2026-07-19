@@ -274,7 +274,7 @@
 * 空状态
 * 错误状态
 
-将开发任务写入到`\travel_planner\docs\Design\task_from_designer.md`
+将开发任务写入到`\travel_planner\docs\Dev\task_from_designer.md`,文档中要包含已被approve的高保真图路径。
 ---
 
 ## 高保真设计图规范

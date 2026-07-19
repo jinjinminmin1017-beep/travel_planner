@@ -1,0 +1,21 @@
+# debug
+
+API 请求入口：http_request
+Planner 铁路流程开始：rail_planning_flow_start
+直达高铁站点候选：rail_direct_planner_start
+直达站点对生成：rail_direct_station_pairs
+每个站点对查询：rail_direct_provider_query
+Provider 配置启用：rail_provider_config_enabled
+Provider 查询开始：rail_provider_search_attempt
+站名转电报码：rail_12306_station_code_lookup
+TTL cache：rail_12306_cache_hit / rail_12306_cache_miss
+12306 init：rail_12306_session_init / rail_12306_session_ready
+12306 queryG：rail_12306_query_request / rail_12306_query_response
+返回结果行数：rail_12306_response_received
+车次 offer 解析：rail_12306_offer_parsed
+查询成功：rail_12306_search_success
+空结果/缺价/失败：rail_12306_search_empty、rail_12306_search_filtered_empty、rail_provider_search_failure
+方案生成：rail_direct_plan_created
+中转铁路：rail_transfer_*
+航铁混合：rail_mixed_*
+阻断原因：rail_planner_block

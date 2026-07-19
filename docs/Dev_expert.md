@@ -34,6 +34,7 @@
 2. `travel_planner\docs\PROJECT_INDEX.md`
 3. `travel_planner\docs\ARCHITECTURE.md`
 4. `travel_planner\docs\Dev\task_from_arc_for_dev.md`
+5. `travel_planner\docs\Dev\task_from_designer.md`，针对`travel_planner\docs\Dev\task_from_designer.md`中的高保真图路径可以参考其保真图实现的html代码，要求前端效果与高保真图完全一致。
 ---
 
 ## 2. 任务执行总原则
@@ -632,8 +633,10 @@ Bug 回归测试
 
 * 若开发任务来源于`travel_planner\docs\Dev\task_from_arc_for_dev.md`,在完成后需在`travel_planner\docs\Dev\task_from_arc_for_dev.md`中相应的task后备注已完成。
 * 若开发任务若来源于`travel_planner\docs\Dev\task_from_user_for_dev.md`,在完成后需在`travel_planner\docs\Dev\task_from_user_for_dev.md`中相应的task后备注已完成
+* 若开发任务若来源于`travel_planner\docs\Dev\task_from_designer.md`,在完成后需在`travel_planner\docs\Dev\task_from_designer.md`中相应的task后备注已完成
 * 修复重要 Bug，更新到`travel_planner\docs\Dev\bug_from_user.md`,需清晰地记录好用户提问题时间，问题描述，问题根因，问题解决方式，问题修改的commit。
-* 如果在`travel_planner\docs\Dev\`下有多个task文档，先检查一下old time文档内的task是否已完成，如果old time中的文档行数超过300行且都已完成，就更改文档后缀名+`done`.
+* 如果在`travel_planner\docs\Dev\`下有同一来源的多个task文档，先检查一下old time文档内的task是否已完成，如果old time中的文档行数超过300行且都已完成，就更改文档后缀名+`done`。
+* 如果发现文档后缀有done的文档，可以直接跳过不扫描。
 
 
 ---
