@@ -393,3 +393,19 @@
   - `browser_worker`：typecheck 通过、11 tests passed、npm audit 0 vulnerabilities。
   - `frontend`：typecheck 通过、helper 11 tests passed；`git diff --check` 通过。
 - 兼容性：不需要数据库迁移，不需要前端同步，不改变 `/api/travel/*`；未扩展 Phase 2 航司，既有 9C/HU/QW Provider 与 Planner 降级路径不变。
+
+## 2026-07-19 10:45:19 +08:00
+
+- 任务：继续完成 ARC-20260719-01 的 worker 取消、恢复、风险识别和可观测性任务，并重新执行东航门禁。
+- 代码提交：`c378de5`。
+- 修改内容：
+  - 单次总超时通过 `AbortSignal` 中止后续业务响应等待与 DOM 解析，不再让已超时操作继续进入结果转换。
+  - 增加官方 host 的 403/418/429/503 文档、XHR 和 fetch 风险响应监听，供 handler 返回稳定 WAF、限流或挑战错误。
+  - BrowserManager 支持注入浏览器启动器，并补齐 page 关闭、context 失效、browser 重启和查询取消的隔离测试。
+  - `/health` 新增按 source 的搜索、成功、空结果、挑战、缓存、去重、超时、解析和熔断计数及比率，并输出最多 200 个 cold/warm 样本的 P50/P95/P99。
+  - 更新架构、worker README、架构任务、用户任务和脱敏证据；记录第二批 10 秒间隔仍连续超时，以及官方条款未授予自动化和数据复用许可。
+- 验证：
+  - `browser_worker`：typecheck 通过、16 tests passed、npm audit 0 vulnerabilities。
+  - `\.venv\Scripts\python.exe -m pytest backend\app\tests -q`：229 passed；公开配置检查通过。
+  - 第二批真实 benchmark 连续 3 次约 15 秒超时后自动停止；可见 Chrome 中同一结果页导航和 DOM 读取也在 30 秒内超时。未继续访问或绕过风险控制。
+- 门禁结论：东航尚未完成 50 次且成功率未达到 95%；官方历史声明要求未经同意不得复制或使用网站信息。`airline_mu_browser_query` 继续 `PENDING_REVIEW + ENABLED=false`，Phase 2 按架构约束不能越过东航门禁启动。
