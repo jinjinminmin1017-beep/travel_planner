@@ -53,10 +53,12 @@
 - 东航单机场结果页已于 2026-07-19 在真实浏览器确认，默认模板为 `https://www.ceair.com/zh/cny/shopping/oneway/{origin_iata}-{destination_iata}/{departure_date}`；覆盖值仍受 HTTPS 与 `ceair.com` host allowlist 约束。
 - worker 以航司为粒度串行执行；相同查询在途合并，成功结果缓存 60-180 秒，连续失败触发短期熔断。页面失效只重建 page，context 异常只重建该航司会话；Chromium 断开后下一次查询重建浏览器与全部会话，并通过健康接口暴露分级重建计数。
 - 东航业务响应与页面结果卡并行作为完成信号；DOM 路径再次核对结果页路线和日期，强制确认“现金-含税”，只映射官网公开展示的 MU/FM 航班、时刻和可用舱价。响应/DOM 结构、税费口径、挑战页或路线不一致均 fail-closed。
+- worker 总超时会中止后续业务响应等待与 DOM 解析；已被底层浏览器接收的导航可能自然结束，但不再进入结果转换。官方 host 的 403/418/429/503 文档、XHR 或 fetch 响应会被保留为非持久化的当前请求风险信号，用于返回稳定挑战错误。
+- `/health` 保留全局计数，同时按 `source_id` 输出搜索/成功/空结果/挑战/缓存/去重/超时/解析/熔断计数、对应比率和最多 200 个样本的 cold/warm P50/P95/P99；不包含 URL、响应正文、Cookie、Token 或设备材料。
 - worker 只返回规范化的航班号、机场、带时区时刻、整数最小货币单位舱价、可售状态、阶段耗时和非敏感 evidence ID。验证码、WAF、限流、超时、密文和结构变化返回稳定错误，不得作为成功空结果。
 - Python `BrowserAirlineFlightProvider` 继续使用现有进程缓存、SQLite 脱敏快照、规范化 offer 持久化和 Planner 降级语义。worker 返回的路线、日期、金额、舱位和时区必须再次校验后才能成为 `FlightOffer`。
 - 日志和 `/health` 指标只包含 source_id、航线、日期、队列/导航/响应/解析耗时、结果数量、缓存/合并/挑战/超时计数；不记录原始响应、Cookie、Token、设备指纹、完整 POST body 或请求头。
-- 当前状态：结果页模板、含税 DOM、独立 Edge Chromium 进程与 loopback API 已完成真实查询验证，代码、类型检查和离线单元测试已完成。首批低频 benchmark 为前 5 次成功、随后 3 次超时并触发熔断，尚未完成 50 次且未达到 95% 成功率；许可仍为 `PENDING_REVIEW`，因此 `.env.example` 中保持 `ENABLED=false`，不得标记 Phase 1 完成。
+- 当前状态：结果页模板、含税 DOM、独立 Edge Chromium 进程与 loopback API 已完成真实查询验证；取消、分级恢复和指标测试已完成。首批低频 benchmark 为前 5 次成功、随后 3 次超时并触发熔断；第二批按 10 秒额外间隔仍连续 3 次超时并自动停止，可见浏览器的同一页面也无法在 30 秒内完成。尚未完成 50 次且未达到 95% 成功率；官方条款未提供自动化与数据复用授权，因此保持 `PENDING_REVIEW + ENABLED=false`，Phase 2 不得越过门禁启动。
 
 ## LLM Prompt 架构边界
 

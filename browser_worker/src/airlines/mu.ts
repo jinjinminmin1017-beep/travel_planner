@@ -64,6 +64,15 @@ export class MuAirlineHandler implements AirlineBrowserHandler {
     return requestMatchesInput(postData, input);
   }
 
+  matchesChallengeResponse(response: Response): boolean {
+    const url = new URL(response.url());
+    return (
+      hostAllowed(url.hostname) &&
+      [403, 418, 429, 503].includes(response.status()) &&
+      ["document", "xhr", "fetch"].includes(response.request().resourceType())
+    );
+  }
+
   async parseResponse(response: Response, page: Page, input: FlightSearchInput): Promise<BrowserFlightResult> {
     let payload: unknown;
     try {

@@ -43,6 +43,12 @@ test("identical in-flight searches are merged and successful results are cached"
   assert.equal(thirdResult.success && thirdResult.cache_hit, true);
   assert.equal(pool.metrics.inflight_dedup_hits, 1);
   assert.equal(pool.metrics.cache_hits, 1);
+  const source = pool.health().source_metrics.airline_mu_browser_query;
+  assert.equal(source?.success_rate, 1);
+  assert.equal(source?.cache_hits, 1);
+  assert.equal(source?.inflight_dedup_hits, 1);
+  assert.equal(source?.latency.cold.samples, 1);
+  assert.equal(source?.latency.warm.samples, 0);
 });
 
 test("different searches for the same airline execute serially", async () => {
@@ -65,6 +71,40 @@ test("different searches for the same airline execute serially", async () => {
   ]);
 
   assert.equal(maximumActive, 1);
+  const latency = pool.health().source_metrics.airline_mu_browser_query?.latency;
+  assert.equal(latency?.cold.samples, 1);
+  assert.equal(latency?.warm.samples, 1);
+});
+
+test("total timeout aborts the active browser operation without reporting an empty success", async () => {
+  let aborted = false;
+  const manager = {
+    async execute(_input: FlightSearchInput, signal?: AbortSignal): Promise<BrowserExecutionResult> {
+      await new Promise<void>((resolve) => {
+        signal?.addEventListener(
+          "abort",
+          () => {
+            aborted = true;
+            resolve();
+          },
+          { once: true },
+        );
+      });
+      throw new Error("operation should be ignored after timeout");
+    },
+  };
+  const pool = new SessionPool(manager, 60_000, 10);
+
+  const response = await pool.search(baseInput);
+
+  assert.equal(aborted, true);
+  assert.equal(response.success, false);
+  assert.equal(response.success ? "" : response.error_code, "WORKER_TIMEOUT");
+  assert.equal(response.flights.length, 0);
+  const source = pool.health().source_metrics.airline_mu_browser_query;
+  assert.equal(source?.timeouts, 1);
+  assert.equal(source?.success_rate, 0);
+  assert.equal(source?.latency.cold.samples, 1);
 });
 
 function result(): BrowserExecutionResult {

@@ -10,11 +10,13 @@
 - [x] 实现航司级串行队列、相同查询在途合并、60-180 秒缓存、短期熔断、稳定错误和非敏感指标。
 - [x] 新增后端 `BrowserWorkerClient`、`BrowserAirlineFlightProvider`、类型化 ENV settings 与 adapter registry；外部 API、数据库和前端不变。
 - [x] 对 worker 统一结果进行路线、日期、时区、金额、舱位、可售状态二次校验，并沿用进程缓存和 SQLite 脱敏证据。
-- [x] 离线验证：后端 229 项、worker 11 项、前端 helper 11 项均通过；worker 与前端 typecheck 通过，worker npm audit 为 0 vulnerabilities。
+- [x] 离线验证：后端 229 项、worker 16 项、前端 helper 11 项均通过；worker 与前端 typecheck 通过，worker npm audit 为 0 vulnerabilities。
 - [x] 真实浏览器确认单机场模板 `https://www.ceair.com/zh/cny/shopping/oneway/{origin_iata}-{destination_iata}/{departure_date}`，并验证结果 DOM、MU/FM 航班字段和含税/不含税价格口径。
 - [x] 使用本机 Microsoft Edge Chromium 与 `BROWSER_WORKER_EXECUTABLE_PATH` 完成独立 worker 预热、loopback API 和真实查询运行验收；未关闭 TLS 校验绕过 Playwright CDN 证书问题。
-- [ ] 完成至少 50 次低频东航真实查询、价格/航班一致性、成功率、P50/P95、挑战检测和崩溃恢复验收。首次批次前 5 次成功，随后 3 次超时并触发熔断，已停止访问；当前不满足 95% 门禁。
+- [x] 补齐总超时取消、官方 403/418/429/503 风险响应识别、page/context/browser 分级恢复测试，以及按航司成功/空结果/挑战率和 cold/warm P50/P95/P99 指标。
+- [ ] 完成至少 50 次低频东航真实查询、价格/航班一致性、成功率和 P50/P95 验收。首次批次前 5 次成功，随后 3 次超时并触发熔断；第二批按 10 秒额外间隔仍连续 3 次超时并自动停止，可见浏览器同样超时。当前不满足 95% 门禁。
 - [ ] 获得许可审批并满足全部技术门禁后，才可将 `airline_mu_browser_query` 设为启用；当前保持 `PENDING_REVIEW + ENABLED=false`。
+- [ ] Phase 2 国航、南航、深航、吉祥和山航处理器。根据本任务第 10 节，必须在东航 50 次验收通过后按顺序启动；当前不得越过门禁批量实现或启用。
 
 ## 1. 背景与目标
 

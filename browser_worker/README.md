@@ -46,7 +46,9 @@ npm run benchmark
 
 ## 内部接口
 
-- `GET /health`：浏览器连接、会话、队列深度和非敏感聚合指标。
+- `GET /health`：浏览器连接、会话、队列深度、browser/context/page 分级重建次数，以及每个航司的成功率、空结果率、挑战率和 cold/warm P50/P95/P99。
 - `POST /v1/flight-search`：严格校验 source、IATA、日期、人数、币种和结果上限；只返回规范化航班、舱价、阶段耗时与非敏感 evidence ID。
 
 worker 不返回原始响应、Cookie、Token、完整请求头或设备材料。验证码、WAF、限流、超时和响应结构变化均返回稳定错误，不能转换为“无航班”。
+
+单次总超时会通过 `AbortSignal` 终止后续响应等待和解析，不会把超时操作转换为空成功。handler 可登记官方 host 的 403/418/429/503 文档或业务响应，worker 会优先返回稳定挑战错误并进入既有熔断流程。

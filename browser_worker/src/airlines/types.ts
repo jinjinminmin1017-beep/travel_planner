@@ -10,5 +10,6 @@ export interface AirlineBrowserHandler {
   parseResponse(response: Response, page: Page, input: FlightSearchInput): Promise<BrowserFlightResult>;
   waitForPageResult?(page: Page, input: FlightSearchInput): Promise<void>;
   parsePage?(page: Page, input: FlightSearchInput): Promise<BrowserFlightResult>;
+  matchesChallengeResponse?(response: Response): boolean;
   detectChallenge(page: Page, response?: Response): Promise<ChallengeResult | null>;
 }

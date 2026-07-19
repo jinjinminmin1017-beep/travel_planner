@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { isAbsolute } from "node:path";
 
-import { chromium, type Browser, type BrowserContext, type Page, type Response } from "playwright";
+import { chromium, type Browser, type BrowserContext, type LaunchOptions, type Page, type Response } from "playwright";
 
 import type { BrowserFlightResult, ChallengeResult, FlightSearchInput } from "./contracts.js";
 import { WorkerSearchError } from "./errors.js";
@@ -37,6 +37,7 @@ export class BrowserManager {
   constructor(
     private readonly handlers: Map<string, AirlineBrowserHandler>,
     private readonly headless = process.env.BROWSER_WORKER_HEADLESS?.toLowerCase() !== "false",
+    private readonly launchBrowser: (options: LaunchOptions) => Promise<Browser> = (options) => chromium.launch(options),
   ) {}
 
   async start(enabledSourceIds: string[]): Promise<void> {
@@ -49,7 +50,8 @@ export class BrowserManager {
     }
   }
 
-  async execute(input: FlightSearchInput): Promise<BrowserExecutionResult> {
+  async execute(input: FlightSearchInput, signal?: AbortSignal): Promise<BrowserExecutionResult> {
+    throwIfAborted(signal);
     const handler = this.handlers.get(input.source_id);
     if (!handler) throw new WorkerSearchError("SOURCE_NOT_IMPLEMENTED", `${input.source_id} is not implemented`, false);
     let session = await this.getSession(input.source_id);
@@ -62,9 +64,18 @@ export class BrowserManager {
       (response) => handler.matchesResponse(response, input),
       { timeout: numberEnv("BROWSER_WORKER_RESPONSE_TIMEOUT_MS", 15_000, 1_000, 60_000) },
     );
+    let observedChallengeResponse: Response | undefined;
+    const observeResponse = (response: Response): void => {
+      if (handler.matchesChallengeResponse?.(response)) observedChallengeResponse = response;
+    };
+    const observingResponses = handler.matchesChallengeResponse !== undefined;
+    if (observingResponses) session.page.on("response", observeResponse);
+    const detachObserver = (): void => {
+      if (observingResponses) session.page.off("response", observeResponse);
+    };
     let navigationFinished = navigationStarted;
     try {
-      await handler.triggerSearch(session.page, input);
+      await raceWithAbort(handler.triggerSearch(session.page, input), signal);
       navigationFinished = performance.now();
       type Completion = { kind: "response"; response: Response } | { kind: "page" };
       const completions: Array<Promise<Completion>> = [
@@ -73,17 +84,22 @@ export class BrowserManager {
       if (handler.waitForPageResult && handler.parsePage) {
         completions.push(handler.waitForPageResult(session.page, input).then(() => ({ kind: "page" as const })));
       }
-      const completion = await Promise.race(completions);
+      const completion = await raceWithAbort(Promise.race(completions), signal);
       const responseAt = performance.now();
       const response = completion.kind === "response" ? completion.response : undefined;
       if (!response) void targetResponse.catch(() => undefined);
+      throwIfAborted(signal);
       const challenge = await handler.detectChallenge(session.page, response);
       if (challenge) throw challengeError(challenge);
       const parseStarted = performance.now();
-      const result = response
-        ? await handler.parseResponse(response, session.page, input)
-        : await handler.parsePage!(session.page, input);
+      const result = await raceWithAbort(
+        response
+          ? handler.parseResponse(response, session.page, input)
+          : handler.parsePage!(session.page, input),
+        signal,
+      );
       const finished = performance.now();
+      detachObserver();
       return {
         ...result,
         navigation_ms: Math.max(0, Math.round(navigationFinished - navigationStarted)),
@@ -92,7 +108,9 @@ export class BrowserManager {
       };
     } catch (error) {
       void targetResponse.catch(() => undefined);
-      const challenge = await handler.detectChallenge(session.page).catch(() => null);
+      detachObserver();
+      if (isAbortError(error)) throw error;
+      const challenge = await handler.detectChallenge(session.page, observedChallengeResponse).catch(() => null);
       if (challenge) throw challengeError(challenge);
       if (session.page.isClosed()) await this.rebuildPage(input.source_id).catch(() => undefined);
       throw error;
@@ -117,7 +135,7 @@ export class BrowserManager {
     if (this.browser?.isConnected()) return this.browser;
     this.sessions.clear();
     if (this.launchedOnce) this.metrics.browser_restarts += 1;
-    this.browser = await chromium.launch({ headless: this.headless, ...browserExecutableOptions() });
+    this.browser = await this.launchBrowser({ headless: this.headless, ...browserExecutableOptions() });
     this.launchedOnce = true;
     this.browser.on("disconnected", () => {
       this.browser = null;
@@ -188,4 +206,22 @@ export function browserExecutableOptions(): { executablePath?: string } {
     );
   }
   return { executablePath };
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) throw new WorkerSearchError("WORKER_ABORTED", "browser search was cancelled", true);
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof WorkerSearchError && error.code === "WORKER_ABORTED";
+}
+
+function raceWithAbort<T>(operation: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return operation;
+  throwIfAborted(signal);
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = (): void => reject(new WorkerSearchError("WORKER_ABORTED", "browser search was cancelled", true));
+    signal.addEventListener("abort", onAbort, { once: true });
+    void operation.then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort));
+  });
 }
