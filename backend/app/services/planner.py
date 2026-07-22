@@ -8,7 +8,14 @@ from datetime import datetime, time, timedelta, timezone
 from uuid import uuid4
 
 from app.core.context import RequestContext
-from app.data_sources.flight_providers import FlightOffer, FlightSearchRequest, search_flight_offers_with_enabled_provider_result
+from app.data_sources.flight_providers import (
+    FlightOffer,
+    FlightProviderOutcome,
+    FlightProviderOutcomeStatus,
+    FlightProviderSearchResult,
+    FlightSearchRequest,
+    search_flight_offers_with_enabled_provider_result,
+)
 from app.data_sources.map_providers import estimate_route_with_enabled_provider_result
 from app.data_sources.rail_providers import RailOffer, RailSearchRequest, search_rail_offers_with_enabled_provider_result
 from app.models.schemas import (
@@ -36,6 +43,7 @@ from app.models.schemas import (
     StationCandidate,
     TicketEnhancement,
     TimePoint,
+    TransportMode,
     TravelPlan,
     TravelPlanResponse,
     TravelRequest,
@@ -712,12 +720,16 @@ def _flight_provider_error_code(message: str | None) -> str:
         return "FLIGHT_PROVIDER_DISABLED"
     if any(marker in lowered for marker in ("unauthorized", "credential", "key", "forbidden", "401", "403")):
         return "FLIGHT_PROVIDER_UNAUTHORIZED"
+    if "rate limit" in lowered or "http 429" in lowered:
+        return "FLIGHT_PROVIDER_RATE_LIMITED"
+    if any(marker in lowered for marker in ("challenge", "captcha", "anti-bot", "waf")):
+        return "FLIGHT_PROVIDER_CHALLENGE"
     if any(marker in lowered for marker in ("timeout", "timed out")):
         return "FLIGHT_PROVIDER_TIMEOUT"
     if "empty response" in lowered or "no offers" in lowered:
         return "FLIGHT_PROVIDER_EMPTY"
     if value:
-        return "FLIGHT_PROVIDER_ERROR"
+        return "FLIGHT_PROVIDER_INVALID_RESPONSE"
     return "FLIGHT_PROVIDER_EMPTY"
 
 
@@ -727,10 +739,125 @@ def _flight_provider_user_message(error_code: str) -> str:
     if error_code == "FLIGHT_PROVIDER_UNAUTHORIZED":
         return "Flight provider credentials or authorization are unavailable; flight plans are blocked."
     if error_code == "FLIGHT_PROVIDER_TIMEOUT":
-        return "Flight provider timed out; flight plans are blocked for this run."
-    if error_code == "FLIGHT_PROVIDER_ERROR":
-        return "Flight provider search failed; flight plans are blocked for this run."
-    return "Flight provider returned no verifiable offers for the searched airport pairs."
+        return "航班数据源查询超时，本次暂时无法确认航班方案。"
+    if error_code == "FLIGHT_PROVIDER_RATE_LIMITED":
+        return "航班数据源触发访问频率限制，本次暂时无法确认航班方案。"
+    if error_code == "FLIGHT_PROVIDER_CHALLENGE":
+        return "航班数据源触发安全验证，本次暂时无法确认航班方案。"
+    if error_code in {"FLIGHT_PROVIDER_INVALID_RESPONSE", "FLIGHT_PROVIDER_FAILED"}:
+        return "航班数据源返回异常，本次暂时无法确认航班方案。"
+    return "航班数据源已完成查询，但未找到可验证的航班方案。"
+
+
+def _legacy_flight_outcomes(result: FlightProviderSearchResult) -> list[FlightProviderOutcome]:
+    if result.outcomes:
+        return result.outcomes
+    if result.offers:
+        return [
+            FlightProviderOutcome(
+                source_id=source_id,
+                status="VERIFIED",
+                error_code=None,
+                retryable=False,
+                offer_count=len(result.offers),
+                message=f"verified {len(result.offers)} flight offers",
+            )
+            for source_id in (result.attempted_source_ids or [result.offers[0].data_source.source_id])
+        ]
+    error_code = _flight_provider_error_code(result.failure_message)
+    status_by_error: dict[str, FlightProviderOutcomeStatus] = {
+        "FLIGHT_PROVIDER_DISABLED": "DISABLED",
+        "FLIGHT_PROVIDER_EMPTY": "EMPTY",
+        "FLIGHT_PROVIDER_RATE_LIMITED": "RATE_LIMITED",
+        "FLIGHT_PROVIDER_TIMEOUT": "TIMEOUT",
+    }
+    status = status_by_error.get(error_code, "FAILED")
+    return [
+        FlightProviderOutcome(
+            source_id=source_id,
+            status=status,
+            error_code=error_code,
+            retryable=status in {"RATE_LIMITED", "TIMEOUT", "FAILED"},
+            offer_count=0,
+            message=result.failure_message or "no flight offers returned",
+        )
+        for source_id in (result.attempted_source_ids or ["airline_public_query"])
+    ]
+
+
+def _record_flight_provider_outcomes(
+    collector: PlanningIssueCollector,
+    outcomes: list[FlightProviderOutcome],
+    *,
+    route_label: str,
+) -> None:
+    for outcome in outcomes:
+        if outcome.status == "VERIFIED":
+            continue
+        error_code = outcome.error_code or "FLIGHT_PROVIDER_INVALID_RESPONSE"
+        user_visible_message = _flight_provider_user_message(error_code)
+        collector.add_warning(user_visible_message)
+        collector.add_source_failure(
+            source_id=outcome.source_id,
+            adapter_name="FlightPlanningProvider",
+            failure_class=SourceFailureClass.CORE_FACT_FAILURE,
+            handling_strategy=(
+                SourceFailureHandlingStrategy.RETRY
+                if outcome.retryable
+                else SourceFailureHandlingStrategy.BLOCK_PLAN
+            ),
+            error_code=error_code,
+            message=f"{route_label}: {outcome.message}",
+            user_visible_message=user_visible_message,
+            impacted_plan_types=[PlanType.DIRECT_FLIGHT, PlanType.TRANSFER_FLIGHT],
+            source_used_id=None,
+            fallback_source_id=None,
+            fallback_reason=None,
+            fallback_used=False,
+        )
+
+
+def _intercity_modes_in_scope(travel_request: TravelRequest, *, missing_components: list[str] | None = None) -> set[TransportMode]:
+    allowed = set(travel_request.hard_constraints.allowed_transport_modes)
+    excluded = set(travel_request.hard_constraints.excluded_transport_modes)
+    if allowed:
+        modes = {mode for mode in (TransportMode.RAIL, TransportMode.FLIGHT) if mode in allowed or TransportMode.MIXED in allowed}
+    else:
+        modes = {TransportMode.RAIL, TransportMode.FLIGHT}
+    modes.difference_update(excluded)
+    missing = set(missing_components or [])
+    if "rail_station_candidates" in missing:
+        modes.discard(TransportMode.RAIL)
+    if "flight_airport_candidates" in missing:
+        modes.discard(TransportMode.FLIGHT)
+    return modes
+
+
+def _has_plan_for_mode(plans: list[TravelPlan], mode: TransportMode) -> bool:
+    return any(any(segment.segment_type == mode for segment in plan.segments) for plan in plans)
+
+
+def _has_unconfirmed_in_scope_transport(
+    travel_request: TravelRequest,
+    plans: list[TravelPlan],
+    failures: list[SourceFailure],
+    missing_components: list[str],
+) -> bool:
+    mode_plan_types = {
+        TransportMode.RAIL: {PlanType.DIRECT_RAIL, PlanType.TRANSFER_RAIL, PlanType.MULTI_TRANSFER_RAIL, PlanType.RAIL_TICKET_ENHANCEMENT},
+        TransportMode.FLIGHT: {PlanType.DIRECT_FLIGHT, PlanType.TRANSFER_FLIGHT, PlanType.MULTI_AIRPORT_FLIGHT, PlanType.FLIGHT_RAIL_MIXED},
+    }
+    for mode in _intercity_modes_in_scope(travel_request, missing_components=missing_components):
+        if _has_plan_for_mode(plans, mode):
+            continue
+        relevant_failures = [
+            failure
+            for failure in failures
+            if set(failure.impacted_plan_types).intersection(mode_plan_types[mode])
+        ]
+        if any(failure.error_code and not failure.error_code.endswith("_EMPTY") for failure in relevant_failures):
+            return True
+    return False
 
 
 def _rail_provider_error_code(message: str) -> str:
@@ -870,7 +997,6 @@ def _build_dynamic_direct_rail_plans(
 
     plans: list[TravelPlan] = []
     failure_messages: list[str] = []
-    failure_source_ids: list[str] = []
     station_pairs = [(origin_station, destination_station) for origin_station in origin_stations for destination_station in destination_stations][:max_station_pairs]
     logger.info("rail_direct_station_pairs request_id=%s pair_count=%s station_pairs=%s", travel_request.request_id, len(station_pairs), station_pairs)
     for pair_index, (origin_station, destination_station) in enumerate(station_pairs, start=1):
@@ -981,8 +1107,7 @@ def _build_dynamic_flight_plans(
         return []
 
     plans: list[TravelPlan] = []
-    failure_messages: list[str] = []
-    failure_source_ids: list[str] = []
+    provider_outcomes: list[FlightProviderOutcome] = []
     airport_pairs = [(origin_airport, destination_airport) for origin_airport in origin_airports for destination_airport in destination_airports][:max_airport_pairs]
     for pair_index, (origin_airport, destination_airport) in enumerate(airport_pairs, start=1):
         origin_iata = airport_iata_for_candidate(origin_airport)
@@ -1002,9 +1127,14 @@ def _build_dynamic_flight_plans(
                 non_stop=None,
             )
         )
+        result_outcomes = _legacy_flight_outcomes(result)
+        provider_outcomes.extend(result_outcomes)
+        _record_flight_provider_outcomes(
+            collector,
+            result_outcomes,
+            route_label=f"{origin_iata}->{destination_iata}",
+        )
         if not result.offers:
-            failure_messages.append(f"{origin_iata}->{destination_iata}: {result.failure_message or 'no flight offers returned'}")
-            failure_source_ids.extend(result.attempted_source_ids)
             continue
         for offer_index, offer in enumerate(result.offers[: max(1, max_plans - len(plans))], start=1):
             flight_segments = _flight_segments_from_offer(
@@ -1041,26 +1171,8 @@ def _build_dynamic_flight_plans(
             if len(plans) >= max_plans:
                 return plans
 
-    if not plans and failure_messages:
-        failure_message = "; ".join(failure_messages)
-        error_code = _flight_provider_error_code(failure_message)
-        user_visible_message = _flight_provider_user_message(error_code)
+    if not plans and any(outcome.status != "VERIFIED" for outcome in provider_outcomes):
         collector.add_missing("flight_core_fact")
-        collector.add_warning(user_visible_message)
-        collector.add_source_failure(
-            source_id=failure_source_ids[-1] if failure_source_ids else "airline_public_query",
-            adapter_name="FlightPlanningProvider",
-            failure_class=SourceFailureClass.CORE_FACT_FAILURE,
-            handling_strategy=SourceFailureHandlingStrategy.BLOCK_PLAN,
-            error_code=error_code,
-            message=failure_message,
-            user_visible_message=user_visible_message,
-            impacted_plan_types=[PlanType.DIRECT_FLIGHT, PlanType.TRANSFER_FLIGHT],
-            source_used_id=None,
-            fallback_source_id=None,
-            fallback_reason=None,
-            fallback_used=False,
-        )
     return plans
 
 
@@ -1399,6 +1511,11 @@ def _build_dynamic_flight_rail_mixed_plans(
                             non_stop=None,
                         )
                     )
+                    _record_flight_provider_outcomes(
+                        collector,
+                        _legacy_flight_outcomes(flight_result),
+                        route_label=f"{origin_iata}->{hub_iata}",
+                    )
                     rail_result = search_rail_offers_with_enabled_provider_result(
                         RailSearchRequest(train_number="", origin_station=transfer_station.station_name, destination_station=destination_station, departure_date=day)
                     )
@@ -1486,6 +1603,11 @@ def _build_dynamic_flight_rail_mixed_plans(
                             max_results=2,
                             non_stop=None,
                         )
+                    )
+                    _record_flight_provider_outcomes(
+                        collector,
+                        _legacy_flight_outcomes(flight_result),
+                        route_label=f"{hub_iata}->{destination_iata}",
                     )
                     if not rail_result.offers or not flight_result.offers:
                         failure_messages.append(f"rail-flight via {transfer_station.station_name}: rail={rail_result.failure_message or len(rail_result.offers)} flight={flight_result.failure_message or len(flight_result.offers)}")
@@ -1719,6 +1841,13 @@ def build_plans(travel_request: TravelRequest) -> tuple[list[TravelPlan], list[S
     route_nodes = planning_nodes_for_request(origin, destination)
     origin_city = resolve_location_city(origin) or ""
     destination_city = resolve_location_city(destination) or ""
+    in_scope_modes = _intercity_modes_in_scope(travel_request)
+    generation_modes = set(in_scope_modes)
+    if not generation_modes and travel_request.hard_constraints.allowed_transport_modes:
+        # Keep verified candidates available for the existing constraint-relaxation flow
+        # when the user allows only a non-intercity mode such as BUS.
+        generation_modes = {TransportMode.RAIL, TransportMode.FLIGHT}
+        generation_modes.difference_update(travel_request.hard_constraints.excluded_transport_modes)
     logger.info(
         "rail_planning_flow_start request_id=%s origin=%s destination=%s origin_city=%s destination_city=%s travel_date=%s",
         travel_request.request_id,
@@ -1729,30 +1858,38 @@ def build_plans(travel_request: TravelRequest) -> tuple[list[TravelPlan], list[S
         day.isoformat(),
     )
 
-    dynamic_rail_plans = _build_dynamic_direct_rail_plans(
-        travel_request=travel_request,
-        route_nodes=route_nodes,
-        day=day,
-        origin_text=origin,
-        destination_text=destination,
-        origin_city=origin_city,
-        destination_city=destination_city,
-        taxi=taxi,
-        collector=collector,
+    dynamic_rail_plans = (
+        _build_dynamic_direct_rail_plans(
+            travel_request=travel_request,
+            route_nodes=route_nodes,
+            day=day,
+            origin_text=origin,
+            destination_text=destination,
+            origin_city=origin_city,
+            destination_city=destination_city,
+            taxi=taxi,
+            collector=collector,
+        )
+        if TransportMode.RAIL in generation_modes
+        else []
     )
-    dynamic_flight_plans = _build_dynamic_flight_plans(
-        travel_request=travel_request,
-        route_nodes=route_nodes,
-        day=day,
-        origin_text=origin,
-        destination_text=destination,
-        origin_city=origin_city,
-        destination_city=destination_city,
-        taxi=taxi,
-        collector=collector,
+    dynamic_flight_plans = (
+        _build_dynamic_flight_plans(
+            travel_request=travel_request,
+            route_nodes=route_nodes,
+            day=day,
+            origin_text=origin,
+            destination_text=destination,
+            origin_city=origin_city,
+            destination_city=destination_city,
+            taxi=taxi,
+            collector=collector,
+        )
+        if TransportMode.FLIGHT in generation_modes
+        else []
     )
     dynamic_transfer_rail_plans = []
-    if not dynamic_rail_plans and not collector.has_rail_rate_limit():
+    if TransportMode.RAIL in generation_modes and not dynamic_rail_plans and not collector.has_rail_rate_limit():
         dynamic_transfer_rail_plans = _build_dynamic_transfer_rail_plans(
             travel_request=travel_request,
             route_nodes=route_nodes,
@@ -1766,7 +1903,12 @@ def build_plans(travel_request: TravelRequest) -> tuple[list[TravelPlan], list[S
             max_hubs=3,
         )
     dynamic_mixed_plans = []
-    if not dynamic_rail_plans and not dynamic_flight_plans and not collector.has_rail_rate_limit():
+    if (
+        {TransportMode.RAIL, TransportMode.FLIGHT}.issubset(generation_modes)
+        and not dynamic_rail_plans
+        and not dynamic_flight_plans
+        and not collector.has_rail_rate_limit()
+    ):
         dynamic_mixed_plans = _build_dynamic_flight_rail_mixed_plans(
             travel_request=travel_request,
             route_nodes=route_nodes,
@@ -1794,30 +1936,43 @@ def build_plans(travel_request: TravelRequest) -> tuple[list[TravelPlan], list[S
     if not plans and not collector.missing_components:
         return _unsupported_route_result(travel_request, route_nodes, collector)
 
+    result_scope_modes = _intercity_modes_in_scope(
+        travel_request,
+        missing_components=collector.missing_components,
+    )
     generated_types = {plan.plan_type for plan in plans}
-    blocked_types = [PlanType.MULTI_TRANSFER_RAIL, PlanType.RAIL_TICKET_ENHANCEMENT, PlanType.MULTI_AIRPORT_FLIGHT]
-    for plan_type in (PlanType.DIRECT_RAIL, PlanType.TRANSFER_RAIL, PlanType.DIRECT_FLIGHT, PlanType.TRANSFER_FLIGHT, PlanType.FLIGHT_RAIL_MIXED):
+    blocked_types: list[PlanType] = []
+    relevant_plan_types: list[PlanType] = []
+    if TransportMode.RAIL in result_scope_modes:
+        blocked_types.extend([PlanType.MULTI_TRANSFER_RAIL, PlanType.RAIL_TICKET_ENHANCEMENT])
+        relevant_plan_types.extend([PlanType.DIRECT_RAIL, PlanType.TRANSFER_RAIL])
+    if TransportMode.FLIGHT in result_scope_modes:
+        blocked_types.append(PlanType.MULTI_AIRPORT_FLIGHT)
+        relevant_plan_types.extend([PlanType.DIRECT_FLIGHT, PlanType.TRANSFER_FLIGHT])
+    if {TransportMode.RAIL, TransportMode.FLIGHT}.issubset(result_scope_modes):
+        relevant_plan_types.append(PlanType.FLIGHT_RAIL_MIXED)
+    for plan_type in relevant_plan_types:
         if plan_type not in generated_types:
             blocked_types.append(plan_type)
 
     explanations: list[MissingPlanExplanation] = []
-    if PlanType.DIRECT_RAIL not in generated_types:
+    if TransportMode.RAIL in result_scope_modes and PlanType.DIRECT_RAIL not in generated_types:
         explanations.append(MissingPlanExplanation(plan_type=PlanType.DIRECT_RAIL, reason_code="CORE_FACT_UNAVAILABLE", user_visible_message=_direct_rail_block_message(collector)))
-    if PlanType.TRANSFER_RAIL not in generated_types:
+    if TransportMode.RAIL in result_scope_modes and PlanType.TRANSFER_RAIL not in generated_types:
         transfer_reason_code, transfer_message = _transfer_rail_block_explanation(collector)
         explanations.append(MissingPlanExplanation(plan_type=PlanType.TRANSFER_RAIL, reason_code=transfer_reason_code, user_visible_message=transfer_message))
-    explanations.extend(
-        [
+    if TransportMode.RAIL in result_scope_modes:
+        explanations.extend([
             MissingPlanExplanation(plan_type=PlanType.MULTI_TRANSFER_RAIL, reason_code="DYNAMIC_PLANNER_CAPABILITY_GAP", user_visible_message="Multi-transfer rail still needs stricter station-order and ticket-risk validation before it can be recommended."),
             MissingPlanExplanation(plan_type=PlanType.RAIL_TICKET_ENHANCEMENT, reason_code="DYNAMIC_PLANNER_CAPABILITY_GAP", user_visible_message="Ticket enhancement still requires verified stop sequence, fare and availability rules before it can be recommended."),
-        ]
-    )
-    if PlanType.DIRECT_FLIGHT not in generated_types:
+        ])
+    if TransportMode.FLIGHT in result_scope_modes and PlanType.DIRECT_FLIGHT not in generated_types:
         explanations.append(MissingPlanExplanation(plan_type=PlanType.DIRECT_FLIGHT, reason_code="CORE_FACT_UNAVAILABLE", user_visible_message="Dynamic flight planner attempted provider offers but found no direct flight plan in this run."))
-    if PlanType.TRANSFER_FLIGHT not in generated_types:
+    if TransportMode.FLIGHT in result_scope_modes and PlanType.TRANSFER_FLIGHT not in generated_types:
         explanations.append(MissingPlanExplanation(plan_type=PlanType.TRANSFER_FLIGHT, reason_code="CORE_FACT_UNAVAILABLE", user_visible_message="Dynamic flight planner accepts connecting flight offers, but no connecting offer was returned in this run."))
-    explanations.append(MissingPlanExplanation(plan_type=PlanType.MULTI_AIRPORT_FLIGHT, reason_code="DYNAMIC_PLANNER_CAPABILITY_GAP", user_visible_message="Multi-airport flight combinations still need airport-transfer validation before they can be recommended."))
-    if PlanType.FLIGHT_RAIL_MIXED not in generated_types:
+    if TransportMode.FLIGHT in result_scope_modes:
+        explanations.append(MissingPlanExplanation(plan_type=PlanType.MULTI_AIRPORT_FLIGHT, reason_code="DYNAMIC_PLANNER_CAPABILITY_GAP", user_visible_message="Multi-airport flight combinations still need airport-transfer validation before they can be recommended."))
+    if {TransportMode.RAIL, TransportMode.FLIGHT}.issubset(result_scope_modes) and PlanType.FLIGHT_RAIL_MIXED not in generated_types:
         explanations.append(MissingPlanExplanation(plan_type=PlanType.FLIGHT_RAIL_MIXED, reason_code="CORE_FACT_UNAVAILABLE", user_visible_message="Dynamic flight-rail planner attempted provider-verified mixed legs but found no connectable plan in this run."))
 
     warnings = [
@@ -1958,6 +2113,8 @@ def plan_trip(raw_or_request: str | TravelRequest, ctx: RequestContext) -> Trave
             ),
         ]
     elif "map_route" in missing:
+        planning_status = PlanningStatus.PARTIAL
+    elif _has_unconfirmed_in_scope_transport(travel_request, candidate_plans, failures, missing):
         planning_status = PlanningStatus.PARTIAL
     return TravelPlanResponse(
         request_id=ctx.request_id,

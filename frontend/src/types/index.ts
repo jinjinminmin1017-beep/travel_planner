@@ -34,6 +34,7 @@ export type RecalculateChangeType = "SEAT_TYPE" | "CABIN_TYPE" | "LOCAL_TRANSFER
 export type SelectedOptionType = "SEAT" | "CABIN" | "TRANSFER_MODE";
 export type RecalculateScope = "PLAN_ONLY" | "PLAN_AND_RECOMMENDATION" | "FULL_REEVALUATION";
 export type DataSourceHealthStatus = "OK" | "DEGRADED" | "DOWN" | "DISABLED";
+export type IntercityTransportMode = "RAIL" | "FLIGHT";
 export type PlanningStatus = "PENDING" | "RUNNING" | "PARTIAL" | "COMPLETE" | "NO_MATCH" | "FAILED";
 export type AsyncJobStatus = "QUEUED" | "RUNNING" | "WAITING_SOURCE" | "PARTIAL_READY" | "COMPLETE" | "FAILED" | "CANCELLED";
 export type FeedbackCategory = "ROUTE_INACCURATE" | "PRICE_INACCURATE" | "REDIRECT_FAILED" | "HARD_TO_UNDERSTAND" | "OTHER";
@@ -291,6 +292,10 @@ export type SourceFailure = {
   trace_id: string;
   correlation_id: string;
   source_id: string;
+  adapter_name: string;
+  handling_strategy: string;
+  error_code: string | null;
+  retry_count: number;
   source_used_id: string | null;
   fallback_reason: string | null;
   fallback_used: boolean;
@@ -298,6 +303,13 @@ export type SourceFailure = {
   message: string;
   final_handling_strategy: string;
   impacted_plan_types: string[];
+  user_visible_message: string;
+  occurred_at: TimePoint;
+};
+
+export type MissingPlanExplanation = {
+  plan_type: string;
+  reason_code: string;
   user_visible_message: string;
 };
 
@@ -370,6 +382,7 @@ export type TravelPlanResponse = {
   source_failures: SourceFailure[];
   missing_components: string[];
   blocked_plan_types: string[];
+  missing_plan_explanations: MissingPlanExplanation[];
   user_visible_warnings: string[];
   async_job?: AsyncJob | null;
   generated_at: TimePoint;

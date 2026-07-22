@@ -8,7 +8,7 @@ import re
 import sqlite3
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
@@ -112,11 +112,25 @@ class FlightOffer:
     evidence_id: str
 
 
+FlightProviderOutcomeStatus = Literal["VERIFIED", "EMPTY", "RATE_LIMITED", "TIMEOUT", "FAILED", "DISABLED"]
+
+
+@dataclass(frozen=True)
+class FlightProviderOutcome:
+    source_id: str
+    status: FlightProviderOutcomeStatus
+    error_code: str | None
+    retryable: bool
+    offer_count: int
+    message: str
+
+
 @dataclass(frozen=True)
 class FlightProviderSearchResult:
     offers: list[FlightOffer]
     attempted_source_ids: list[str]
     failure_message: str | None = None
+    outcomes: list[FlightProviderOutcome] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -613,9 +627,8 @@ class QingdaoAirlinesPublicQueryProvider:
         _raise_for_airline_risk_response(response, source_id=self.source_id)
         response.raise_for_status()
         payload = response.json()
-        if not isinstance(payload, dict) or str(payload.get("code")) != "1":
-            code = payload.get("code") if isinstance(payload, dict) else "invalid"
-            raise FlightProviderError(f"{self.source_id} returned business code {code}")
+        if not isinstance(payload, dict):
+            raise FlightProviderError(f"{self.source_id} returned an invalid response payload")
         snapshot_id = save_flight_raw_snapshot(
             source_id=self.source_id,
             request_key=cache_key,
@@ -624,6 +637,16 @@ class QingdaoAirlinesPublicQueryProvider:
             snapshot_backend=self.snapshot_backend,
             snapshot_path=self.snapshot_sqlite_path,
         )
+        if str(payload.get("code")) != "1":
+            code = str(payload.get("code"))
+            business_message = str(payload.get("message") or payload.get("msg") or "").strip()
+            if code == "0" and re.search(r"未查询到航班|没有航班|无航班|no flights?", business_message, flags=re.IGNORECASE):
+                logger.info("flight_public_search_empty source_id=%s business_code=%s", self.source_id, code)
+                return []
+            raise FlightProviderError(
+                f"{self.source_id} returned business code {code}"
+                + (f" ({business_message})" if business_message else "")
+            )
         offers = _parse_qingdao_airlines_payload(
             payload,
             request=request,
@@ -759,25 +782,106 @@ def search_flight_offers_with_enabled_provider(request: FlightSearchRequest, env
 
 def search_flight_offers_with_enabled_provider_result(request: FlightSearchRequest, environment: str | None = None) -> FlightProviderSearchResult:
     attempted_source_ids: list[str] = []
-    failure_messages: list[str] = []
+    offers: list[FlightOffer] = []
+    outcomes: list[FlightProviderOutcome] = []
     providers = build_enabled_flight_providers(environment)
     if not providers:
         return FlightProviderSearchResult(
             offers=[],
             attempted_source_ids=[],
             failure_message="no enabled approved official-airline flight provider",
+            outcomes=[
+                FlightProviderOutcome(
+                    source_id="airline_public_query",
+                    status="DISABLED",
+                    error_code="FLIGHT_PROVIDER_DISABLED",
+                    retryable=False,
+                    offer_count=0,
+                    message="no enabled approved official-airline flight provider",
+                )
+            ],
         )
     for provider in providers:
         attempted_source_ids.append(provider.source_id)
         try:
-            offers = provider.search_offers(request)
-            if offers:
-                return FlightProviderSearchResult(offers=offers, attempted_source_ids=attempted_source_ids)
-            failure_messages.append(f"{provider.source_id}: empty response")
+            provider_offers = provider.search_offers(request)
+            offers.extend(provider_offers)
+            if provider_offers:
+                outcomes.append(
+                    FlightProviderOutcome(
+                        source_id=provider.source_id,
+                        status="VERIFIED",
+                        error_code=None,
+                        retryable=False,
+                        offer_count=len(provider_offers),
+                        message=f"verified {len(provider_offers)} flight offers",
+                    )
+                )
+            else:
+                outcomes.append(
+                    FlightProviderOutcome(
+                        source_id=provider.source_id,
+                        status="EMPTY",
+                        error_code="FLIGHT_PROVIDER_EMPTY",
+                        retryable=False,
+                        offer_count=0,
+                        message="provider query completed with no verifiable flight offers",
+                    )
+                )
         except (httpx.HTTPError, FlightProviderError, ValueError, KeyError) as exc:
-            failure_messages.append(f"{provider.source_id}: {exc}")
+            outcomes.append(_flight_provider_failure_outcome(provider.source_id, exc))
             logger.warning("flight_provider_search_failure source_id=%s error=%s", provider.source_id, exc)
-    return FlightProviderSearchResult(offers=[], attempted_source_ids=attempted_source_ids, failure_message="; ".join(failure_messages) or None)
+    offers.sort(
+        key=lambda offer: (
+            offer.total_price.amount_minor,
+            offer.segments[0].departure_at if offer.segments and offer.segments[0].departure_at else datetime.max.replace(tzinfo=SHANGHAI_TZ),
+            offer.offer_id,
+        )
+    )
+    failure_messages = [f"{outcome.source_id}: {outcome.message}" for outcome in outcomes if outcome.status != "VERIFIED"]
+    return FlightProviderSearchResult(
+        offers=offers[: max(1, request.max_results)],
+        attempted_source_ids=attempted_source_ids,
+        failure_message="; ".join(failure_messages) or None,
+        outcomes=outcomes,
+    )
+
+
+def _flight_provider_failure_outcome(source_id: str, exc: Exception) -> FlightProviderOutcome:
+    message = str(exc).strip() or exc.__class__.__name__
+    lowered = message.lower()
+    if isinstance(exc, httpx.TimeoutException) or any(marker in lowered for marker in ("timeout", "timed out")):
+        status: FlightProviderOutcomeStatus = "TIMEOUT"
+        error_code = "FLIGHT_PROVIDER_TIMEOUT"
+        retryable = True
+    elif "rate limit" in lowered or "http 429" in lowered:
+        status = "RATE_LIMITED"
+        error_code = "FLIGHT_PROVIDER_RATE_LIMITED"
+        retryable = True
+    elif any(marker in lowered for marker in ("challenge", "captcha", "anti-bot", "waf")):
+        status = "FAILED"
+        error_code = "FLIGHT_PROVIDER_CHALLENGE"
+        retryable = True
+    elif any(marker in lowered for marker in ("not enabled", "not configured", "not implemented", "disabled")):
+        status = "DISABLED"
+        error_code = "FLIGHT_PROVIDER_DISABLED"
+        retryable = False
+    elif isinstance(exc, httpx.TransportError):
+        status = "FAILED"
+        error_code = "FLIGHT_PROVIDER_FAILED"
+        retryable = True
+    else:
+        status = "FAILED"
+        error_code = "FLIGHT_PROVIDER_INVALID_RESPONSE"
+        retryable = False
+    return FlightProviderOutcome(
+        source_id=source_id,
+        status=status,
+        error_code=error_code,
+        retryable=retryable,
+        offer_count=0,
+        message=message,
+    )
 
 
 def price_flight_offer_with_enabled_provider_result(offer: FlightOffer, environment: str | None = None) -> FlightPriceResult:

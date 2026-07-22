@@ -12,6 +12,18 @@ test("results flow keeps overview, details and sources panes", async () => {
   assert.match(app, /<ResultsBottomAction/);
 });
 
+test("results keep transport modes separate from recommendation targets", async () => {
+  const app = await read("../src/App.tsx");
+  const overview = await read("../src/components/results/ResultsOverview.tsx");
+  const transportModes = await read("../src/components/results/TransportModeSelector.tsx");
+  assert.match(overview, /<TransportModeSelector/);
+  assert.match(overview, />推荐目标</);
+  assert.match(transportModes, /const MODES: IntercityTransportMode\[\] = \["RAIL", "FLIGHT"\]/);
+  assert.match(transportModes, /不会生成占位航班、价格或预订入口/);
+  assert.match(app, /EXPO_PUBLIC_TRANSPORT_MODE_SELECTOR_ENABLED/);
+  assert.doesNotMatch(transportModes, /plan_id|flight_number|amount_minor/);
+});
+
 test("route UI does not contain design-only example values", async () => {
   const sources = await Promise.all([
     read("../src/components/results/RouteSummaryHero.tsx"),

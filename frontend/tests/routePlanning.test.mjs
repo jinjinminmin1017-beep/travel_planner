@@ -7,6 +7,7 @@ import {
   applyRelaxationToRequest,
   calculatePlanDifference,
   countTransfers,
+  deriveTransportModeAvailability,
   findRecommendationReason,
   moneyDelta
 } from "../src/utils/routePlanning.ts";
@@ -110,4 +111,81 @@ test("confirmed relaxation updates the structured request before replanning", ()
   const relaxed = applyRelaxationToRequest(request, alternative);
   assert.equal(relaxed.hard_constraints.latest_arrival_time.datetime, actual.datetime);
   assert.equal(relaxed.schema_version, "1.17");
+});
+
+function response(overrides = {}) {
+  return {
+    schema_version: "1.17",
+    request_id: "req-modes",
+    trace_id: "trace-modes",
+    correlation_id: "corr-modes",
+    idempotency_key: "idem-modes",
+    planning_status: "PARTIAL",
+    progress: 100,
+    travel_request: {
+      schema_version: "1.17",
+      request_id: "req-modes",
+      raw_user_input: "上海到温州",
+      origin_text: "上海",
+      destination_text: "温州",
+      travel_date: "2026-07-22",
+      preferences: ["BALANCED"],
+      preference_source: "USER_EXPLICIT",
+      hard_constraints: { allowed_transport_modes: [], excluded_transport_modes: [] },
+      soft_preferences: {}
+    },
+    plans: [plan({ segments: [segment({ segment_id: "rail", segment_type: "RAIL", origin_station: "上海虹桥", destination_station: "温州南" })] })],
+    recommendation_result: null,
+    source_failures: [],
+    missing_components: [],
+    blocked_plan_types: [],
+    missing_plan_explanations: [],
+    user_visible_warnings: [],
+    generated_at: source.fetched_at,
+    ...overrides
+  };
+}
+
+test("transport mode availability keeps verified plans separate from failed flight coverage", () => {
+  const result = response({
+    source_failures: [{
+      source_id: "airline_9c_public_query",
+      error_code: "FLIGHT_PROVIDER_RATE_LIMITED",
+      impacted_plan_types: ["DIRECT_FLIGHT", "TRANSFER_FLIGHT"],
+      user_visible_message: "航班数据源触发访问频率限制。"
+    }]
+  });
+
+  assert.deepEqual(deriveTransportModeAvailability(result, "RAIL"), {
+    mode: "RAIL",
+    label: "铁路",
+    status: "AVAILABLE",
+    statusLabel: "1 个方案",
+    reason: "本次有 1 个经过验证的铁路方案。",
+    availablePlanCount: 1,
+    retryable: false
+  });
+  const flight = deriveTransportModeAvailability(result, "FLIGHT");
+  assert.equal(flight.status, "UNAVAILABLE");
+  assert.equal(flight.retryable, true);
+  assert.match(flight.reason, /频率限制/);
+});
+
+test("transport mode availability distinguishes verified empty from excluded flight", () => {
+  const emptyFlight = deriveTransportModeAvailability(response({
+    source_failures: [{
+      source_id: "airline_hu_public_query",
+      error_code: "FLIGHT_PROVIDER_EMPTY",
+      impacted_plan_types: ["DIRECT_FLIGHT"],
+      user_visible_message: "未找到航班"
+    }]
+  }), "FLIGHT");
+  assert.equal(emptyFlight.status, "EMPTY");
+  assert.equal(emptyFlight.retryable, false);
+
+  const excluded = response();
+  excluded.travel_request.hard_constraints.excluded_transport_modes = ["FLIGHT"];
+  const excludedFlight = deriveTransportModeAvailability(excluded, "FLIGHT");
+  assert.equal(excludedFlight.status, "EXCLUDED");
+  assert.match(excludedFlight.reason, /排除/);
 });

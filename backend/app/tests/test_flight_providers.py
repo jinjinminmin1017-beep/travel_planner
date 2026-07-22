@@ -3,14 +3,17 @@ import sqlite3
 from datetime import date, datetime
 
 import pytest
+import httpx
 
 from app.data_sources.config_loader import DataSourceConfigurationError, load_data_source_settings, reset_data_source_settings_cache
+from app.core.context import RequestContext
 from app.data_sources.flight_providers import (
     OFFICIAL_AIRLINE_REQUEST_SCHEMAS,
     FlightOffer,
     FlightOfferCabinOption,
     FlightOfferSegment,
     FlightProviderError,
+    FlightProviderOutcome,
     FlightProviderSearchResult,
     FlightSearchRequest,
     FlightStateRequest,
@@ -27,8 +30,20 @@ from app.data_sources.flight_providers import (
     save_flight_raw_snapshot,
     search_flight_offers_with_enabled_provider_result,
 )
-from app.models.schemas import PlanType, RecommendationType, TravelHardConstraints, TravelRequest, TravelSoftPreferences, money
-from app.services.planner import build_plans
+from app.models.schemas import (
+    LLMValidationResult,
+    PlanType,
+    RecommendationResult,
+    RecommendationSlot,
+    RecommendationSlotStatus,
+    RecommendationSource,
+    RecommendationType,
+    TravelHardConstraints,
+    TravelRequest,
+    TravelSoftPreferences,
+    money,
+)
+from app.services.planner import build_plans, plan_trip
 
 
 class _FakeResponse:
@@ -332,6 +347,28 @@ def test_qingdao_airlines_provider_derives_anonymous_tokens_and_maps_fares():
     assert offer.cabin_options[0].availability == "AVAILABLE"
 
 
+def test_qingdao_airlines_business_no_flight_message_is_verified_empty():
+    client = _FakeClient(
+        [
+            _FakeResponse({"a": 11, "b": 7, "c": 3, "d": 5, "e": 13, "f": 17, "g": 19}),
+            _FakeResponse({"code": 0, "message": "未查询到航班！", "data": None}),
+        ]
+    )
+    provider = QingdaoAirlinesPublicQueryProvider(client=client, cache_ttl_seconds=0, snapshot_backend="disabled")
+
+    offers = provider.search_offers(
+        FlightSearchRequest(
+            origin_iata="SHA",
+            destination_iata="WNZ",
+            departure_date=date(2026, 7, 22),
+            origin_city_name="上海",
+            destination_city_name="温州",
+        )
+    )
+
+    assert offers == []
+
+
 def test_unimplemented_public_airline_cannot_be_enabled_through_env(monkeypatch):
     assert [provider.source_id for provider in build_enabled_flight_providers("DEV")] == [
         "airline_9c_public_query",
@@ -438,6 +475,167 @@ def test_flight_search_result_reports_disabled_provider_when_not_configured(monk
     assert result.offers == []
     assert result.attempted_source_ids == []
     assert result.failure_message == "no enabled approved official-airline flight provider"
+    assert result.outcomes[0].status == "DISABLED"
+    assert result.outcomes[0].error_code == "FLIGHT_PROVIDER_DISABLED"
+
+
+def test_flight_search_result_keeps_each_provider_outcome_and_real_offers(monkeypatch):
+    class _Provider:
+        def __init__(self, source_id, result):
+            self.source_id = source_id
+            self.result = result
+
+        def search_offers(self, request):
+            if isinstance(self.result, Exception):
+                raise self.result
+            return self.result
+
+    day = date(2026, 7, 22)
+    offer = _flight_offer("SHA", "WNZ", day, 10, 12)
+    providers = [
+        _Provider("airline_9c_public_query", FlightProviderError("rate limited (HTTP 429)")),
+        _Provider("airline_hu_public_query", []),
+        _Provider("airline_qw_public_query", ValueError("invalid response payload")),
+        _Provider("airline_mu_browser_query", [offer]),
+        _Provider("airline_timeout_query", httpx.ReadTimeout("timed out")),
+    ]
+    monkeypatch.setattr("app.data_sources.flight_providers.build_enabled_flight_providers", lambda environment=None: providers)
+
+    result = search_flight_offers_with_enabled_provider_result(
+        FlightSearchRequest(origin_iata="SHA", destination_iata="WNZ", departure_date=day),
+    )
+
+    assert result.offers == [offer]
+    assert [(outcome.source_id, outcome.status, outcome.error_code) for outcome in result.outcomes] == [
+        ("airline_9c_public_query", "RATE_LIMITED", "FLIGHT_PROVIDER_RATE_LIMITED"),
+        ("airline_hu_public_query", "EMPTY", "FLIGHT_PROVIDER_EMPTY"),
+        ("airline_qw_public_query", "FAILED", "FLIGHT_PROVIDER_INVALID_RESPONSE"),
+        ("airline_mu_browser_query", "VERIFIED", None),
+        ("airline_timeout_query", "TIMEOUT", "FLIGHT_PROVIDER_TIMEOUT"),
+    ]
+
+
+def test_planner_records_flight_outcomes_per_source(monkeypatch):
+    def fake_search(request, environment=None):
+        return FlightProviderSearchResult(
+            offers=[],
+            attempted_source_ids=["airline_9c_public_query", "airline_hu_public_query", "airline_qw_public_query"],
+            outcomes=[
+                FlightProviderOutcome("airline_9c_public_query", "RATE_LIMITED", "FLIGHT_PROVIDER_RATE_LIMITED", True, 0, "HTTP 429"),
+                FlightProviderOutcome("airline_hu_public_query", "EMPTY", "FLIGHT_PROVIDER_EMPTY", False, 0, "empty"),
+                FlightProviderOutcome("airline_qw_public_query", "FAILED", "FLIGHT_PROVIDER_INVALID_RESPONSE", False, 0, "business code invalid"),
+            ],
+        )
+
+    monkeypatch.setattr("app.services.planner.search_flight_offers_with_enabled_provider_result", fake_search)
+    request = TravelRequest(
+        request_id="req_flight_outcomes",
+        raw_user_input="2026-07-22 上海到温州",
+        origin_text="上海",
+        destination_text="温州",
+        travel_date=date(2026, 7, 22),
+        preferences=[RecommendationType.BALANCED],
+        hard_constraints=TravelHardConstraints(),
+        soft_preferences=TravelSoftPreferences(),
+    )
+
+    plans, failures, _, _, _, _ = build_plans(request)
+
+    assert plans
+    failure_pairs = {(failure.source_id, failure.error_code) for failure in failures}
+    assert ("airline_9c_public_query", "FLIGHT_PROVIDER_RATE_LIMITED") in failure_pairs
+    assert ("airline_hu_public_query", "FLIGHT_PROVIDER_EMPTY") in failure_pairs
+    assert ("airline_qw_public_query", "FLIGHT_PROVIDER_INVALID_RESPONSE") in failure_pairs
+
+
+@pytest.mark.parametrize(
+    ("outcome", "expected_status"),
+    [
+        (FlightProviderOutcome("airline_9c_public_query", "RATE_LIMITED", "FLIGHT_PROVIDER_RATE_LIMITED", True, 0, "HTTP 429"), "PARTIAL"),
+        (FlightProviderOutcome("airline_hu_public_query", "EMPTY", "FLIGHT_PROVIDER_EMPTY", False, 0, "empty"), "COMPLETE"),
+    ],
+)
+def test_planning_status_distinguishes_unconfirmed_flight_from_verified_empty(monkeypatch, outcome, expected_status):
+    monkeypatch.setattr(
+        "app.services.planner.search_flight_offers_with_enabled_provider_result",
+        lambda request, environment=None: FlightProviderSearchResult(
+            offers=[],
+            attempted_source_ids=[outcome.source_id],
+            outcomes=[outcome],
+        ),
+    )
+
+    def valid_recommendation(payload):
+        plan_id = payload.candidate_plan_ids[0]
+        return RecommendationResult(
+            recommendation_id="rec_transport_coverage",
+            recommendation_source=RecommendationSource.LLM,
+            recommendations=[
+                RecommendationSlot(recommendation_type=kind, status=RecommendationSlotStatus.AVAILABLE, plan_id=plan_id, reason="verified fixture")
+                for kind in (RecommendationType.CHEAPEST, RecommendationType.MOST_COMFORTABLE, RecommendationType.BALANCED)
+            ],
+            llm_validation_result=LLMValidationResult(
+                schema_valid=True,
+                semantic_valid=True,
+                repair_attempted=False,
+                final_strategy="USE_ORIGINAL",
+            ),
+        )
+
+    monkeypatch.setattr("app.services.planner.recommend_with_validation", valid_recommendation)
+    request = TravelRequest(
+        request_id="req_transport_coverage",
+        raw_user_input="2026-07-22 上海到温州",
+        origin_text="上海",
+        destination_text="温州",
+        travel_date=date(2026, 7, 22),
+        preferences=[RecommendationType.BALANCED],
+        hard_constraints=TravelHardConstraints(),
+        soft_preferences=TravelSoftPreferences(),
+    )
+
+    response = plan_trip(
+        request,
+        RequestContext(
+            request_id=request.request_id,
+            trace_id="trace_transport_coverage",
+            correlation_id="corr_transport_coverage",
+            idempotency_key="idem_transport_coverage",
+        ),
+    )
+
+    assert response.planning_status == expected_status
+    assert response.plans
+
+
+def test_planner_does_not_query_or_report_explicitly_excluded_flight(monkeypatch):
+    called = False
+
+    def fake_search(request, environment=None):
+        nonlocal called
+        called = True
+        raise AssertionError("flight provider must not be queried")
+
+    monkeypatch.setattr("app.services.planner.search_flight_offers_with_enabled_provider_result", fake_search)
+    request = TravelRequest(
+        request_id="req_rail_only",
+        raw_user_input="2026-07-22 上海到温州，只坐高铁",
+        origin_text="上海",
+        destination_text="温州",
+        travel_date=date(2026, 7, 22),
+        preferences=[RecommendationType.BALANCED],
+        hard_constraints=TravelHardConstraints(excluded_transport_modes=["FLIGHT"]),
+        soft_preferences=TravelSoftPreferences(),
+    )
+
+    plans, failures, missing, blocked_types, explanations, _ = build_plans(request)
+
+    assert plans
+    assert called is False
+    assert "flight_core_fact" not in missing
+    assert not any(failure.error_code and failure.error_code.startswith("FLIGHT_PROVIDER") for failure in failures)
+    assert not any(plan_type in {PlanType.DIRECT_FLIGHT, PlanType.TRANSFER_FLIGHT} for plan_type in blocked_types)
+    assert not any(item.plan_type in {PlanType.DIRECT_FLIGHT, PlanType.TRANSFER_FLIGHT} for item in explanations)
 
 
 def test_price_wrapper_keeps_self_harvest_offer_without_second_provider():

@@ -2,13 +2,15 @@ import type { ImageSourcePropType } from "react-native";
 import type { ReactNode } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { ui } from "../../designSystem";
-import type { RecommendationSlot, TravelPlan, TravelPlanResponse } from "../../types";
+import type { IntercityTransportMode, RecommendationSlot, TravelPlan, TravelPlanResponse } from "../../types";
 import { formatMoney, minutesToText, riskLabel } from "../../utils/format";
+import { planUsesTransportMode } from "../../utils/routePlanning";
 import { PlanSelector } from "./PlanSelector";
 import { RecommendationRationale } from "./RecommendationRationale";
 import { ResultsHeader } from "./ResultsHeader";
 import { RouteSummaryHero } from "./RouteSummaryHero";
 import { RouteTimeline } from "./RouteTimeline";
+import { TransportModeSelector } from "./TransportModeSelector";
 
 type Props = {
   response: TravelPlanResponse;
@@ -17,9 +19,12 @@ type Props = {
   candidatePlans: TravelPlan[];
   imageSource?: ImageSourcePropType;
   busy: boolean;
+  selectedTransportMode: IntercityTransportMode | null;
+  transportModeSelectorEnabled: boolean;
   schedulePanel?: ReactNode;
   onSelectRecommendation: (plan: TravelPlan, slot: RecommendationSlot) => void;
   onSelectCandidate: (plan: TravelPlan) => void;
+  onSelectTransportMode: (mode: IntercityTransportMode) => void;
   onSources: () => void;
   onRetrySources: () => void;
 };
@@ -51,17 +56,26 @@ function ResultsSkeleton() {
   );
 }
 
-export function ResultsOverview({ response, plan, recommendations, candidatePlans, imageSource, busy, schedulePanel, onSelectRecommendation, onSelectCandidate, onSources, onRetrySources }: Props) {
+export function ResultsOverview({ response, plan, recommendations, candidatePlans, imageSource, busy, selectedTransportMode, transportModeSelectorEnabled, schedulePanel, onSelectRecommendation, onSelectCandidate, onSelectTransportMode, onSources, onRetrySources }: Props) {
+  const visiblePlans = selectedTransportMode
+    ? response.plans.filter((candidate) => planUsesTransportMode(candidate, selectedTransportMode))
+    : response.plans;
   return (
     <View style={styles.page}>
       <ResultsHeader request={response.travel_request} plan={plan} onSources={onSources} />
       <RouteSummaryHero destinationName={response.destination_presentation?.display_name} imageSource={imageSource} plan={plan} request={response.travel_request} />
       <View style={styles.sectionHead}>
-        <Text accessibilityRole="header" style={styles.heading}>选择方案</Text>
+        <Text accessibilityRole="header" style={styles.heading}>{transportModeSelectorEnabled ? "交通方式" : "选择方案"}</Text>
         <Pressable accessibilityRole="button" accessibilityLabel="查看数据来源" hitSlop={ui.hitSlop} onPress={onSources} style={({ pressed }) => pressed && styles.pressed}><Text style={styles.sectionLink}>数据来源</Text></Pressable>
       </View>
-      <PlanSelector onSelect={onSelectRecommendation} plans={response.plans} recommendations={recommendations} selectedPlanId={plan.plan_id} />
-      <RecommendationRationale partial={response.planning_status === "PARTIAL"} plan={plan} plans={response.plans} recommendations={recommendations} />
+      {transportModeSelectorEnabled ? (
+        <>
+          <TransportModeSelector busy={busy} onRetry={onRetrySources} onSelect={onSelectTransportMode} response={response} selectedMode={selectedTransportMode} />
+          <Text accessibilityRole="header" style={styles.heading}>推荐目标</Text>
+        </>
+      ) : null}
+      <PlanSelector onSelect={onSelectRecommendation} plans={visiblePlans} recommendations={recommendations} selectedPlanId={plan.plan_id} />
+      <RecommendationRationale partial={response.planning_status === "PARTIAL"} plan={plan} plans={visiblePlans} recommendations={recommendations} />
       {schedulePanel}
       <RouteTimeline plan={plan} />
       <DataStatus busy={busy} onRetry={onRetrySources} response={response} />

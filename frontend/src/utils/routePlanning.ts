@@ -1,4 +1,14 @@
-import type { Money, RecommendationSlot, RelaxationAlternative, Segment, TimePoint, TravelPlan, TravelRequest } from "../types";
+import type {
+  IntercityTransportMode,
+  Money,
+  RecommendationSlot,
+  RelaxationAlternative,
+  Segment,
+  TimePoint,
+  TravelPlan,
+  TravelPlanResponse,
+  TravelRequest
+} from "../types";
 
 export type TimelinePoint = {
   segment: Segment;
@@ -13,6 +23,115 @@ export type PlanDifference = {
   costDeltaMinor: number;
   durationDeltaMinutes: number;
 };
+
+export type TransportModeAvailability = {
+  mode: IntercityTransportMode;
+  label: string;
+  status: "AVAILABLE" | "EMPTY" | "UNAVAILABLE" | "EXCLUDED";
+  statusLabel: string;
+  reason: string;
+  availablePlanCount: number;
+  retryable: boolean;
+};
+
+const MODE_LABELS: Record<IntercityTransportMode, string> = { RAIL: "铁路", FLIGHT: "航班" };
+const MODE_PLAN_TYPE_MARKERS: Record<IntercityTransportMode, string[]> = {
+  RAIL: ["RAIL"],
+  FLIGHT: ["FLIGHT", "MULTI_AIRPORT"]
+};
+
+export function planUsesTransportMode(plan: TravelPlan, mode: IntercityTransportMode) {
+  return plan.segments.some((segment) => segment.segment_type === mode);
+}
+
+export function primaryPlanTransportMode(plan: TravelPlan): IntercityTransportMode | null {
+  if (planUsesTransportMode(plan, "FLIGHT")) return "FLIGHT";
+  if (planUsesTransportMode(plan, "RAIL")) return "RAIL";
+  return null;
+}
+
+function planTypeMatchesMode(planType: string, mode: IntercityTransportMode) {
+  return MODE_PLAN_TYPE_MARKERS[mode].some((marker) => planType.includes(marker));
+}
+
+function modeIsExcluded(response: TravelPlanResponse, mode: IntercityTransportMode) {
+  const allowed = response.travel_request.hard_constraints.allowed_transport_modes;
+  const excluded = response.travel_request.hard_constraints.excluded_transport_modes;
+  if (excluded.includes(mode)) return true;
+  return allowed.length > 0 && !allowed.includes(mode) && !allowed.includes("MIXED");
+}
+
+function modeIsNotApplicable(response: TravelPlanResponse, mode: IntercityTransportMode) {
+  return response.missing_components.includes(mode === "FLIGHT" ? "flight_airport_candidates" : "rail_station_candidates");
+}
+
+export function deriveTransportModeAvailability(
+  response: TravelPlanResponse,
+  mode: IntercityTransportMode
+): TransportModeAvailability {
+  const availablePlanCount = response.plans.filter((plan) => planUsesTransportMode(plan, mode)).length;
+  if (availablePlanCount > 0) {
+    return {
+      mode,
+      label: MODE_LABELS[mode],
+      status: "AVAILABLE",
+      statusLabel: `${availablePlanCount} 个方案`,
+      reason: `本次有 ${availablePlanCount} 个经过验证的${MODE_LABELS[mode]}方案。`,
+      availablePlanCount,
+      retryable: false
+    };
+  }
+  if (modeIsExcluded(response, mode)) {
+    return {
+      mode,
+      label: MODE_LABELS[mode],
+      status: "EXCLUDED",
+      statusLabel: "未纳入",
+      reason: `你已将${MODE_LABELS[mode]}排除在本次规划之外。`,
+      availablePlanCount: 0,
+      retryable: false
+    };
+  }
+  if (modeIsNotApplicable(response, mode)) {
+    return {
+      mode,
+      label: MODE_LABELS[mode],
+      status: "EXCLUDED",
+      statusLabel: "路线不适用",
+      reason: `本次路线没有可用于生成完整${MODE_LABELS[mode]}方案的交通节点。`,
+      availablePlanCount: 0,
+      retryable: false
+    };
+  }
+
+  const failures = response.source_failures.filter((failure) =>
+    failure.impacted_plan_types.some((planType) => planTypeMatchesMode(planType, mode))
+  );
+  const empty = failures.length > 0 && failures.every((failure) => failure.error_code?.endsWith("_EMPTY"));
+  if (empty) {
+    return {
+      mode,
+      label: MODE_LABELS[mode],
+      status: "EMPTY",
+      statusLabel: "未找到",
+      reason: `${MODE_LABELS[mode]}数据源已完成查询，但未找到可验证方案。`,
+      availablePlanCount: 0,
+      retryable: false
+    };
+  }
+
+  const explanation = (response.missing_plan_explanations ?? []).find((item) => planTypeMatchesMode(item.plan_type, mode));
+  const reason = failures[0]?.user_visible_message || explanation?.user_visible_message || `本次暂时无法确认可用的${MODE_LABELS[mode]}方案。`;
+  return {
+    mode,
+    label: MODE_LABELS[mode],
+    status: "UNAVAILABLE",
+    statusLabel: "暂不可用",
+    reason,
+    availablePlanCount: 0,
+    retryable: failures.some((failure) => !failure.error_code?.endsWith("_EMPTY"))
+  };
+}
 
 export function buildRouteTitle(request: Pick<TravelRequest, "origin_text" | "destination_text">) {
   const origin = request.origin_text.trim();

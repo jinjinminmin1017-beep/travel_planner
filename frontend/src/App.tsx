@@ -33,9 +33,9 @@ import {
   saveRetentionPreferences,
   toggleFavoritePlanSnapshot
 } from "./nativeCapabilities";
-import type { DataSourceMetadata, RecalculateResponse, RelaxationAlternative, SourceFailure, TimePoint, TravelPlan, TravelPlanResponse, TravelRequest } from "./types";
+import type { DataSourceMetadata, IntercityTransportMode, RecalculateResponse, RelaxationAlternative, SourceFailure, TimePoint, TravelPlan, TravelPlanResponse, TravelRequest } from "./types";
 import { minutesToText } from "./utils/format";
-import { applyRelaxationToRequest } from "./utils/routePlanning";
+import { applyRelaxationToRequest, planUsesTransportMode, primaryPlanTransportMode } from "./utils/routePlanning";
 
 const HERO_IMAGES: Record<string, ImageSourcePropType> = {
   qingdao: qingdaoHero
@@ -49,6 +49,7 @@ const POLL_INTERVAL_MS = 1200;
 const MAX_POLL_ATTEMPTS = 100;
 const ACTIVE_PLANNING_STATUSES = new Set(["PENDING", "RUNNING"]);
 const ACTIVE_JOB_STATUSES = new Set(["QUEUED", "RUNNING", "WAITING_SOURCE"]);
+const TRANSPORT_MODE_SELECTOR_ENABLED = process.env.EXPO_PUBLIC_TRANSPORT_MODE_SELECTOR_ENABLED?.trim().toLowerCase() !== "false";
 const HOUR_OPTIONS = Array.from({ length: 24 }, (_, index) => index);
 const MINUTE_OPTIONS = Array.from({ length: 12 }, (_, index) => index * 5);
 function findPlan(response: TravelPlanResponse | null, planId: string | null) {
@@ -426,6 +427,7 @@ export default function App() {
   const [rawInput, setRawInput] = useState("");
   const [response, setResponse] = useState<TravelPlanResponse | null>(null);
   const [selectedPlanId, setSelectedPlanId] = useState<string | null>(null);
+  const [selectedTransportMode, setSelectedTransportMode] = useState<IntercityTransportMode | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [activeTab, setActiveTab] = useState<ActiveTab>("input");
@@ -438,13 +440,22 @@ export default function App() {
   const [destinationPreferenceDraft, setDestinationPreferenceDraft] = useState(() => loadRetentionPreferences().destination_preferences.join("、"));
 
   const recommendations = response?.recommendation_result?.recommendations ?? [];
+  const activeTransportMode = TRANSPORT_MODE_SELECTOR_ENABLED ? selectedTransportMode : null;
+  const visiblePlans = useMemo(() => {
+    if (!response) return [];
+    if (!activeTransportMode) return response.plans;
+    const matchingPlans = response.plans.filter((plan) => planUsesTransportMode(plan, activeTransportMode));
+    return matchingPlans.length ? matchingPlans : response.plans;
+  }, [activeTransportMode, response]);
   const selectedPlan = useMemo(() => {
     const explicit = findPlan(response, selectedPlanId);
-    if (explicit) return explicit;
-    return findPlan(response, preferredRecommendationPlanId(response)) ?? response?.plans[0] ?? null;
-  }, [response, selectedPlanId]);
+    if (explicit && (!activeTransportMode || planUsesTransportMode(explicit, activeTransportMode))) return explicit;
+    const preferred = findPlan(response, preferredRecommendationPlanId(response));
+    if (preferred && visiblePlans.some((plan) => plan.plan_id === preferred.plan_id)) return preferred;
+    return visiblePlans[0] ?? null;
+  }, [activeTransportMode, response, selectedPlanId, visiblePlans]);
   const recommendedPlanIds = useMemo(() => new Set(recommendations.map((slot) => slot.plan_id).filter(Boolean)), [recommendations]);
-  const candidatePlans = useMemo(() => response?.plans.filter((plan) => !recommendedPlanIds.has(plan.plan_id)) ?? [], [response, recommendedPlanIds]);
+  const candidatePlans = useMemo(() => visiblePlans.filter((plan) => !recommendedPlanIds.has(plan.plan_id)), [visiblePlans, recommendedPlanIds]);
   const selectedPlanFavorite = selectedPlan ? favoritePlans.some((plan) => plan.plan_id === selectedPlan.plan_id) : false;
   const recentPlan = recentPlans[0] ?? null;
   const planningFullScreen = activeTab === "results" && loading && (!response || response.plans.length === 0);
@@ -478,9 +489,34 @@ export default function App() {
   function syncSelection(nextResponse: TravelPlanResponse) {
     if (nextResponse.plans.length === 0) {
       setSelectedPlanId(null);
+      setSelectedTransportMode(null);
       return;
     }
-    setSelectedPlanId((current) => findPlan(nextResponse, current)?.plan_id ?? preferredRecommendationPlanId(nextResponse) ?? nextResponse.plans[0]?.plan_id ?? null);
+    const currentPlan = findPlan(nextResponse, selectedPlanId);
+    const currentModePlans = selectedTransportMode
+      ? nextResponse.plans.filter((plan) => planUsesTransportMode(plan, selectedTransportMode))
+      : nextResponse.plans;
+    const nextPlan = currentPlan && currentModePlans.some((plan) => plan.plan_id === currentPlan.plan_id)
+      ? currentPlan
+      : findPlan(nextResponse, preferredRecommendationPlanId(nextResponse)) ?? currentModePlans[0] ?? nextResponse.plans[0];
+    setSelectedPlanId(nextPlan?.plan_id ?? null);
+    setSelectedTransportMode((currentMode) => (
+      currentMode && nextPlan && planUsesTransportMode(nextPlan, currentMode)
+        ? currentMode
+        : nextPlan ? primaryPlanTransportMode(nextPlan) : null
+    ));
+  }
+
+  function selectTransportMode(mode: IntercityTransportMode) {
+    if (!response) return;
+    const modePlans = response.plans.filter((plan) => planUsesTransportMode(plan, mode));
+    if (!modePlans.length) return;
+    const recommendedPlan = recommendations
+      .filter((slot) => slot.status === "AVAILABLE" && slot.plan_id)
+      .map((slot) => modePlans.find((plan) => plan.plan_id === slot.plan_id))
+      .find((plan): plan is TravelPlan => Boolean(plan));
+    setSelectedTransportMode(mode);
+    setSelectedPlanId(recommendedPlan?.plan_id ?? modePlans[0].plan_id);
   }
 
   async function pollUntilSettled(initialResponse: TravelPlanResponse, runId: number, preserveCurrentResults = false) {
@@ -696,7 +732,9 @@ export default function App() {
       const firstRecommendedId = completeResponse.recommendation_result?.recommendations.find(
         (slot) => slot.status === "AVAILABLE" && slot.plan_id
       )?.plan_id;
-      setSelectedPlanId(currentStillRecommended ? updatedResponse.plan.plan_id : firstRecommendedId ?? updatedResponse.plan.plan_id);
+      const nextPlanId = currentStillRecommended ? updatedResponse.plan.plan_id : firstRecommendedId ?? updatedResponse.plan.plan_id;
+      setSelectedPlanId(nextPlanId);
+      setSelectedTransportMode(primaryPlanTransportMode(findPlan(completeResponse, nextPlanId) ?? updatedResponse.plan));
       return;
     }
     setResponse((current) => {
@@ -831,15 +869,21 @@ export default function App() {
                   candidatePlans={candidatePlans}
                   imageSource={HERO_IMAGES[response.destination_presentation?.destination_key ?? "generic"]}
                   onRetrySources={retrySources}
-                  onSelectCandidate={(plan) => setSelectedPlanId(plan.plan_id)}
+                  onSelectCandidate={(plan) => {
+                    setSelectedPlanId(plan.plan_id);
+                    setSelectedTransportMode(primaryPlanTransportMode(plan));
+                  }}
                   onSelectRecommendation={(plan, slot) => {
                     setSelectedPlanId(plan.plan_id);
+                    setSelectedTransportMode(primaryPlanTransportMode(plan));
                     void trackEvent({ eventType: "RECOMMENDATION_CLICK", requestId: response.request_id, traceId: response.trace_id, planId: plan.plan_id, metadata: { recommendation_type: slot.recommendation_type } }).catch(() => undefined);
                   }}
+                  onSelectTransportMode={selectTransportMode}
                   onSources={() => setResultsPane("sources")}
                   plan={selectedPlan}
                   recommendations={recommendations}
                   response={response}
+                  selectedTransportMode={activeTransportMode}
                   schedulePanel={
                     <View>
                       <Pressable accessibilityRole="button" accessibilityLabel={`${scheduleExpanded ? "收起" : "展开"}时间调整`} accessibilityState={{ expanded: scheduleExpanded }} hitSlop={ui.hitSlop} onPress={() => setScheduleExpanded((current) => !current)} style={styles.scheduleToggle}>
@@ -848,6 +892,7 @@ export default function App() {
                       {scheduleExpanded ? <ScheduleAdjustPanel response={response} plan={selectedPlan} loading={loading} onApply={replanWithTime} /> : null}
                     </View>
                   }
+                  transportModeSelectorEnabled={TRANSPORT_MODE_SELECTOR_ENABLED}
                 />
               </>
             ) : <EmptyResults response={response} onEdit={() => setActiveTab("input")} />}
