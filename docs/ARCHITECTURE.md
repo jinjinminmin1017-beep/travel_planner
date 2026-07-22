@@ -1,6 +1,6 @@
 # Architecture
 
-更新日期：2026-07-19
+更新日期：2026-07-22
 
 本文记录当前代码中已确认的架构；尚未落地的内容会明确标注为“目标设计，待实现”。
 
@@ -617,3 +617,73 @@ flowchart TD
 - 通过回滚迁移提交恢复旧 loader 和 JSON 文件，不在新实现中长期保留双配置源功能开关。
 - 回滚只恢复配置加载方式，不回滚 Provider 事实校验、安全门禁、日志脱敏和“不生成模拟航班”的原则。
 - 如单个 Provider 配置有误，通过其 `TRAVEL_SOURCE_<ID>_ENABLED=false` 独立停用，不回滚整个配置体系。
+
+## 交通方式覆盖可见性与航班入口（目标设计，待实现）
+
+### 当前问题与证据
+
+- 2026-07-20 22:31 的最后一次持久化规划为“上海静安寺 → 温州永嘉”，响应只包含 4 个 `DIRECT_RAIL` 方案，没有航班方案。
+- 航班规划并未被跳过：`SHA -> WNZ` 依次查询了已启用的春秋、海航、青岛航空来源；春秋返回 HTTP 429，海航返回空结果，青岛航空返回未通过当前适配器校验的业务响应。该轮没有可验证的 `FlightOffer`，因此 `DIRECT_FLIGHT`、`TRANSFER_FLIGHT` 和 `FLIGHT_RAIL_MIXED` 被阻断。
+- 东航常驻浏览器来源当前仍为 `PENDING_REVIEW + ENABLED=false`，不能为了补出航班卡越过稳定性和许可门禁。
+- 响应已有 `blocked_plan_types`、`missing_plan_explanations` 和 `source_failures`，但结果页仅把实际 `plans` 渲染为可选择方案；用户看不到“航班已查询但暂不可用”的明确交通方式状态。
+- 该响应包含航班核心事实失败却被标记为 `planning_status=COMPLETE`，与“部分方案族或数据源不可用应为 `PARTIAL`”的既有状态语义不一致。
+- 前端 `TravelPlanResponse` 类型没有声明后端已经返回的 `missing_plan_explanations`，导致现有解释链路无法被类型安全地消费。
+
+### 推荐方案
+
+采用“真实方案选择”和“交通方式覆盖状态”分层，不生成占位航班：
+
+1. 结果页增加独立交通方式入口，至少包含“铁路”和“航班”。
+2. 某交通方式存在完整、可验证的门到门计划时，入口为可用；点击后只查看该方式的真实候选，并可选择其中计划。
+3. 某交通方式没有真实计划但本次在查询范围内时，入口仍可见但标记“暂不可用”或“未找到”，点击后展示准确原因和可执行动作；它不是 `TravelPlan`，不得进入推荐、详情、重算或预订。
+4. 原有“综合推荐 / 更舒适 / 更省预算”继续表示推荐目标，不再承担交通方式切换职责。两类控件在信息架构上分开，避免把三个推荐槽误解为三种交通工具。
+5. 首期复用现有 V1.17 响应字段，不新增外部字段、不升级 schema：
+   - 是否可用：检查 `plans[*].segments[*].segment_type`。
+   - 是否在查询范围：根据 `hard_constraints.allowed_transport_modes`、`excluded_transport_modes` 与可解析的城际节点判断；默认城际范围为铁路和航班，显式排除的方式不显示为失败。
+   - 不可用原因：优先匹配 `source_failures[*].impacted_plan_types`，其次匹配 `missing_plan_explanations[*].plan_type`，最后使用不包含推测的通用说明。
+6. Provider 聚合结果在内部改为逐来源结构化 outcome，至少区分 `VERIFIED`、`EMPTY`、`RATE_LIMITED`、`TIMEOUT`、`FAILED`、`DISABLED`；不得把多个来源的混合结果压成“最后一个 source_id + 拼接字符串”。
+7. 交通方式总体结论按保守规则聚合：有真实计划为可用；全部成功空结果才是“未找到”；任一必要来源限流、超时或失败且没有真实计划时为“暂不可确认”。
+8. 默认查询范围内的航班或铁路核心事实失败时，即使另一方式已有推荐方案，终态也必须为 `PARTIAL`；只有显式排除该方式，或该方式不适用于本次路线时，才不影响 `COMPLETE`。
+9. “重试航班来源”复用现有异步任务重试接口；只有失败/超时/限流状态可重试，已验证空结果不进行无上限自动重试。
+10. 可提供“前往航司官方查询”的 redirect-only 辅助操作，但必须标明它不是本次已验证方案，不能作为推荐卡或价格事实。
+
+### 数据流
+
+```text
+TravelRequest
+  -> 计算本次 in-scope 交通方式
+  -> 各方式 Provider 查询
+  -> 逐来源结构化 outcome
+  -> 生成可验证的 TravelPlan
+  -> 聚合 planning_status / blocked_plan_types / explanations / failures
+  -> 前端建立交通方式视图模型
+       -> AVAILABLE：筛选并展示真实 plans
+       -> EMPTY：显示“未找到可验证方案”
+       -> FAILED/TIMEOUT/RATE_LIMITED：显示“暂不可确认”与重试
+       -> EXCLUDED/NOT_APPLICABLE：不作为缺失或失败提示
+```
+
+### 影响范围与文件修改范围
+
+- 后端 Provider：`backend/app/data_sources/flight_providers.py`，将航班尝试结果改为逐来源结构化 outcome，并修正聚合错误语义。
+- 后端规划：`backend/app/services/planner.py`，按 in-scope 交通方式和核心事实覆盖计算 `COMPLETE/PARTIAL`。
+- 后端模型：优先只增加内部模型；外部 `TravelPlanResponse` V1.17 字段保持不变。
+- 前端类型：`frontend/src/types/index.ts`，补齐 `MissingPlanExplanation` 和 `missing_plan_explanations`。
+- 前端结果：`frontend/src/components/results/ResultsOverview.tsx` 下增加交通方式入口组件；`PlanSelector.tsx` 继续只负责推荐目标。
+- 前端状态：`frontend/src/App.tsx` 保存当前交通方式筛选与计划选择；重试后重新从响应推导，不持久化失效的 plan_id。
+- 测试：补充 Provider outcome 聚合、规划状态语义、交通方式入口、重试和无虚构航班回归。
+- 数据库：不迁移；现有响应 JSON 可以兼容读取，旧响应缺少可区分 outcome 时使用保守“暂不可确认”。
+
+### 风险与控制
+
+- 风险：用户把不可用航班入口误认为可预订方案。控制：禁用计划级 CTA，使用状态文案，不展示价格、时刻或航班号占位值。
+- 风险：任一非关键 Provider 失败都把大量结果降为 `PARTIAL`。控制：仅对本次 in-scope 的交通方式和核心事实失败降级，显式排除或不适用方式不参与。
+- 风险：交通方式筛选与推荐计划选择状态冲突。控制：方式筛选只缩小可见候选；被选 plan 不属于新方式时清除选择并要求用户从真实候选中选择。
+- 风险：连续点击重试触发航司限流。控制：沿用 Provider QPS、缓存、熔断与异步任务防重复提交。
+- 风险：把空结果和查询失败混为一谈。控制：只有全部相关来源成功完成且均为空，才能使用“未找到”；其他情况使用“暂不可确认”。
+
+### 回滚方式
+
+- 前端交通方式入口使用独立功能开关；关闭后恢复现有推荐槽与候选列表，不改变 `plans` 数据。
+- 后端逐来源 outcome 若需回滚，只回滚聚合实现；不得恢复虚构航班、静默 fallback 或把失败宣称为空结果。
+- `PARTIAL` 状态修正可独立回滚，但回滚期间仍必须保留航班失败说明，避免再次静默缺失。

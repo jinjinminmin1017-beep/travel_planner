@@ -1,6 +1,6 @@
 # API Contract
 
-更新日期：2026-07-14
+更新日期：2026-07-22
 
 本文只记录已在 `backend/app/main.py` 或 `frontend/src/api/client.ts` 中发现的接口。统一错误结构见 `backend/app/models/schemas.py` 的 `ErrorResponse`。
 
@@ -453,3 +453,45 @@ PLANNING_NO_MATCH
 - 至少一种接驳方式验证成功时，只展示验证成功的方式。
 - 没有完整门到门候选时，按现有 FAILED/NO_MATCH 业务规则返回可解释结果；不得展示只有干线事实、接驳数字为估算值的正常推荐卡。
 - 前端遇到历史 `RULE_ESTIMATED` 可继续兼容展示，但新任务验收不得产生该状态。
+
+## 交通方式覆盖与航班入口消费规则（V1.17，无字段变更，待实现）
+
+适用于 `POST /api/travel/plan`、`POST /api/travel/plan/async`、`GET /api/travel/jobs/{job_id}` 和重试响应。首期复用 `plans`、`source_failures`、`blocked_plan_types`、`missing_plan_explanations` 与 `planning_status`，不增加 schema 字段。
+
+### 服务端状态语义
+
+- 本次查询范围由 `hard_constraints.allowed_transport_modes`、`hard_constraints.excluded_transport_modes` 和路线可适用性共同决定；显式排除的方式不得被报告为缺失。
+- 默认城际请求在铁路站点和机场均可解析时，铁路与航班都属于查询范围。
+- 任一查询范围内的交通方式存在完整门到门 `TravelPlan` 时，该方式可用。
+- 某方式所有相关 Provider 都成功完成且均无 offer 时，才允许表达“未找到可验证方案”。
+- 没有计划且存在限流、超时、挑战、配置或解析失败时，只能表达“暂不可确认”，不得表达“没有航班”。
+- 查询范围内任一核心交通方式暂不可确认时，存在其他可用方案的响应使用 `planning_status=PARTIAL`；不得返回 `COMPLETE`。
+- 每个 Provider 失败应使用对应 `source_id` 的独立 `SourceFailure`；`impacted_plan_types` 必须覆盖受影响的航班方案族。不得把多个来源的结果挂到最后尝试的 source_id。
+
+建议稳定错误码：
+
+```txt
+FLIGHT_PROVIDER_EMPTY
+FLIGHT_PROVIDER_RATE_LIMITED
+FLIGHT_PROVIDER_TIMEOUT
+FLIGHT_PROVIDER_CHALLENGE
+FLIGHT_PROVIDER_INVALID_RESPONSE
+FLIGHT_PROVIDER_DISABLED
+```
+
+其中 `FLIGHT_PROVIDER_EMPTY` 只能表示对应 Provider 请求成功并确认空结果，不能承载 429、超时或解析失败。
+
+### 前端消费规则
+
+- “综合推荐 / 更舒适 / 更省预算”是推荐目标；“铁路 / 航班”是交通方式入口，必须作为两个独立层级展示。
+- 交通方式可用性从真实 `plans[*].segments[*].segment_type` 推导，不得由前端构造航班、票价、时刻或计划 ID。
+- 航班无真实计划但属于查询范围时，航班入口保持可见并显示不可用状态；原因优先读取相关 `source_failures`，其次读取 `missing_plan_explanations`。
+- 不可用入口可以打开原因说明、重试失败来源或 redirect-only 官方查询，但不得进入方案详情、重算或预订流程。
+- 用户显式排除航班时，前端不显示“航班失败”警告；如产品保留航班入口，应标为“未纳入本次规划”，不能标为数据失败。
+- 重试期间保留当前可用铁路结果并显示局部 loading；新响应返回后重新推导方式状态和候选，不沿用已失效的航班状态。
+
+### Loading、Empty 与兼容
+
+- 初次规划仍使用现有 `RUNNING/WAITING_SOURCE`；不提前展示伪造的航班骨架数值。
+- 旧 V1.17 响应若只有聚合 `SourceFailure`，前端使用保守“航班暂不可确认”，不得反推为“无航班”。
+- 本规则不改变外部 schema，也不需要数据库迁移；前后端仍需同步发布，以避免后端返回 `PARTIAL` 而旧前端继续隐藏交通方式缺口。
