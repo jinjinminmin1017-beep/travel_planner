@@ -1,6 +1,6 @@
 # Project Index
 
-更新日期：2026-07-19
+更新日期：2026-07-22
 
 ## 技术栈
 
@@ -17,6 +17,7 @@
 - `frontend/src/types/`：前端 TypeScript 合同类型。
 - `frontend/src/utils/`：展示格式化工具。
 - `frontend/src/components/`：规划状态、正常结果、路线详情和约束无匹配页面组件。
+  - `frontend/src/components/results/TransportModeSelector.tsx`：铁路/航班独立入口；只消费真实计划与既有失败/缺失说明，不生成占位交通事实。
 - `frontend/src/pages/`：目录存在，当前未发现页面文件或路由文件。
 - `frontend/assets/`：地图与目的地静态视觉资源。
 - `backend/`：FastAPI 后端工程。
@@ -30,7 +31,7 @@
   - `config_loader.py`：从 `TRAVEL_DATA_SOURCE_IDS` 与 `TRAVEL_SOURCE_<ID>_*` 构造不可变、类型化的 ENV-only 配置快照。
   - `provider_registry.py`：统一的 adapter settings model 与 Provider factory 注册表；启用源在启动期完成构造校验。
   - `rate_limiter.py`：按 source_id 共享的线程安全 HTTP 请求门控，使外部 Provider 的 `QPS_LIMIT` 在真实请求边界生效。
-  - `flight_providers.py`：航班请求构造、响应解析和快照脱敏；已实现春秋航空 `airline_9c_public_query`、海航 `airline_hu_public_query` 与青岛航空 `airline_qw_public_query` 匿名公开票价查询，其他航司仍需独立实现与验证，环境变量不能声明技术就绪。
+  - `flight_providers.py`：航班请求构造、响应解析、逐来源 outcome 聚合和快照脱敏；已区分 VERIFIED、EMPTY、RATE_LIMITED、TIMEOUT、FAILED、DISABLED，并实现春秋航空 `airline_9c_public_query`、海航 `airline_hu_public_query` 与青岛航空 `airline_qw_public_query` 匿名公开票价查询。其他航司仍需独立实现与验证，环境变量不能声明技术就绪。
   - `browser_worker_client.py`、`browser_flight_providers.py`：loopback worker 客户端和浏览器航班 Provider；东航真实结果页模板与含税 DOM 已确认，源仍保持禁用，需完成许可、目标 Chromium 和 50 次真实 benchmark 才能启用。
 - `backend/app/core/`：请求上下文、安全策略、日志配置。
 - `backend/app/data/`：本地数据目录，如交通节点和目的地资产。

@@ -454,7 +454,7 @@ PLANNING_NO_MATCH
 - 没有完整门到门候选时，按现有 FAILED/NO_MATCH 业务规则返回可解释结果；不得展示只有干线事实、接驳数字为估算值的正常推荐卡。
 - 前端遇到历史 `RULE_ESTIMATED` 可继续兼容展示，但新任务验收不得产生该状态。
 
-## 交通方式覆盖与航班入口消费规则（V1.17，无字段变更，待实现）
+## 交通方式覆盖与航班入口消费规则（V1.17，无字段变更，已实现）
 
 适用于 `POST /api/travel/plan`、`POST /api/travel/plan/async`、`GET /api/travel/jobs/{job_id}` 和重试响应。首期复用 `plans`、`source_failures`、`blocked_plan_types`、`missing_plan_explanations` 与 `planning_status`，不增加 schema 字段。
 
