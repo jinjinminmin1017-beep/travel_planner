@@ -349,7 +349,10 @@ def test_dynamic_flight_rail_mixed_planner_builds_connectable_plan(monkeypatch):
         return RailProviderSearchResult(offers=[], attempted_source_ids=["rail_12306_public_query"], failure_message="empty response")
 
     def fake_flight(request, environment=None):
-        if request.origin_iata == "HHH" and request.destination_iata == "DDD":
+        if (
+            request.allowed_origin_airport_iatas == ("HHH",)
+            and request.allowed_destination_airport_iatas == ("DDD",)
+        ):
             return FlightProviderSearchResult(offers=[_flight_offer("HHH", "DDD", day, 13, 15)], attempted_source_ids=["airline_mu_public_query"])
         return FlightProviderSearchResult(offers=[], attempted_source_ids=["airline_mu_public_query"], failure_message="empty response")
 

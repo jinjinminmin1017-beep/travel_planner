@@ -300,6 +300,7 @@ def test_search_scope_queries_city_provider_once_and_airport_provider_per_pair(
         def __init__(self, source_id, query_scope):
             self.source_id = source_id
             self.query_scope = query_scope
+            self.city_query_codes = {"上海": "SHA", "大连": "DLC"}
             self.calls = []
 
         def search_offers(self, request):

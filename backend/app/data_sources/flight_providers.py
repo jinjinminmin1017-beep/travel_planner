@@ -400,6 +400,7 @@ class SpringAirlinesPublicQueryProvider:
     source_id = SPRING_AIRLINES_SOURCE_ID
     source_name = "Spring Airlines Official Public Flight Query"
     query_scope: FlightQueryScope = "CITY"
+    city_query_codes = FLIGHT_CITY_QUERY_CODES
 
     def __init__(
         self,
@@ -542,6 +543,7 @@ class HainanAirlinesPublicQueryProvider:
     source_id = HAINAN_AIRLINES_SOURCE_ID
     source_name = "Hainan Airlines Official Public Flight Query"
     query_scope: FlightQueryScope = "CITY"
+    city_query_codes = FLIGHT_CITY_QUERY_CODES
 
     def __init__(
         self,
@@ -908,12 +910,8 @@ def build_enabled_flight_state_providers(environment: str | None = None) -> list
     ]
 
 
-def flight_city_query_code(city_name: str, fallback_airport_iata: str | None = None) -> str | None:
-    explicit = FLIGHT_CITY_QUERY_CODES.get(city_name.strip())
-    if explicit:
-        return explicit
-    fallback = (fallback_airport_iata or "").strip().upper()
-    return fallback if re.fullmatch(r"[A-Z]{3}", fallback) else None
+def flight_city_query_code(city_name: str) -> str | None:
+    return FLIGHT_CITY_QUERY_CODES.get(city_name.strip())
 
 
 def _provider_search_requests(
@@ -926,13 +924,10 @@ def _provider_search_requests(
             query_scope = request.query_scope
         return [request.for_query_scope(cast(FlightQueryScope, query_scope))]
     if query_scope == "CITY":
-        origin_city_code = flight_city_query_code(
-            request.origin_city_name,
-            request.origin_city_code,
-        )
-        destination_city_code = flight_city_query_code(
-            request.destination_city_name,
-            request.destination_city_code,
+        city_query_codes = getattr(provider, "city_query_codes", {})
+        origin_city_code = city_query_codes.get(request.origin_city_name.strip())
+        destination_city_code = city_query_codes.get(
+            request.destination_city_name.strip()
         )
         if not origin_city_code or not destination_city_code:
             return []

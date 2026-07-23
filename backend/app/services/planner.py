@@ -676,10 +676,8 @@ def _flight_search_scope(
     )
     if not origin_iatas or not destination_iatas:
         return None
-    origin_city_code = flight_city_query_code(origin_city, origin_iatas[0])
-    destination_city_code = flight_city_query_code(destination_city, destination_iatas[0])
-    if not origin_city_code or not destination_city_code:
-        return None
+    origin_city_code = flight_city_query_code(origin_city) or ""
+    destination_city_code = flight_city_query_code(destination_city) or ""
     return FlightSearchScope(
         origin_city_name=origin_city,
         destination_city_name=destination_city,
