@@ -425,3 +425,27 @@
   - 前端 helper/UI 合同：14 passed；TypeScript 检查通过。
   - Expo Web、iOS、Android 导出通过；`git diff --check` 通过。
 - 兼容性：外部 V1.17 字段未变化，不需要数据库迁移；旧聚合失败响应由前端保守显示为“暂不可用”。
+
+## 2026-07-24 07:17:50 +08:00
+
+- 任务：完成 ARC-20260724-01 航班城市查询范围与实际机场归一化。
+- 代码提交：`03c8232`。
+- 修改内容：
+  - 新增城市/机场查询范围模型；春秋、海航固定 `CITY`，青岛航空、东航 Browser 固定 `AIRPORT`，查询范围不能由 ENV 覆盖。
+  - Provider 聚合按城市对单次查询或 canonical 机场组合查询，缓存键覆盖 scope、城市码和机场允许集合，并按实际航段事实去重。
+  - 春秋分离 `DepartureCode/ArrivalCode` 城市码与 `DepartureAirportCode/ArrivalAirportCode` 实际机场；所有 Provider 缺失实际机场时 fail-closed。
+  - 非空候选零 offer 改为 `FLIGHT_PARSER_REJECTED_ALL`，新增原始候选数、规范化数、实际机场、丢弃原因、parser version 和 evidence id 诊断。
+  - 交通目录通过受控种子映射补齐 IATA，并在 top-N 前 canonical 化；上海候选稳定为 `SHA`、`PVG` 各一次。
+  - Planner 只按响应实际机场构建首末程和中转接驳；跨机场中转要求显式可验证路线和足够衔接时间。
+  - 新增脱敏最小春秋问题 fixture，覆盖 4 个 `PVG -> DLC` offer、解析失败语义、查询次数和浦东首程接驳。
+- 验证：
+  - `.\.venv\Scripts\python -m pytest backend\app\tests -q`：240 passed。
+  - 任务专项：92 passed。
+  - `npm --prefix frontend run test:helpers`：14 passed。
+  - `npm --prefix frontend run typecheck`：通过。
+  - `npm --prefix frontend run build`：Web、iOS、Android 导出通过。
+  - `.\.venv\Scripts\python scripts\export_schemas.py` 后 `git diff --exit-code -- schemas`：无差异。
+  - Python compileall 与 `git diff --check`：通过。
+  - `npm --prefix frontend test`：项目未配置该脚本；已执行实际存在的 `test:helpers`。
+  - Ruff：虚拟环境未安装 `ruff`，项目当前无法执行该检查。
+- 兼容性：外部 API schema 继续为 V1.17；无数据库迁移、无前端字段变更、未启用东航或 Phase 2 航司。

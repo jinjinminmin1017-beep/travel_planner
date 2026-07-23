@@ -1,6 +1,6 @@
 # Architecture
 
-更新日期：2026-07-22
+更新日期：2026-07-24
 
 本文记录当前代码中已确认的架构；尚未落地的内容会明确标注为“目标设计，待实现”。
 
@@ -825,3 +825,173 @@ expires_at                  TEXT NOT NULL
 - 通过配置关闭新的 evidence store 时，Provider 必须回到明确的“证据不可用”状态；生产强制模式不得静默使用旧的成功-only 快照路径。
 - 回滚实现时保留已创建的新表，不删除历史交换；旧代码可以忽略该表。
 - 回滚不能恢复“先判断、失败即丢弃响应”的顺序。若新 store 暂不可用，至少保留同步的完整脱敏文件证据后再继续处理。
+
+## 航班城市查询范围与实际机场归一化（目标设计，待实现）
+
+### 当前问题与证据
+
+- 2026-07-24 最后一次规划任务为 `job_2905e377ffef` / `req_1665ef7e5c04`，路线是上海嘉定格林公馆到大连海事大学，出发日为 2026-07-25。
+- Planner 只形成了 `SHA -> DLC` 的航班查询。春秋 `POST /Flights/SearchByTime` 返回 HTTP 200，Provider 最终却记录 `FLIGHT_PROVIDER_EMPTY`，结果中只有铁路方案。
+- 同一次请求保存的春秋原始快照 `fltraw_124e4ef88dbd` 并非空结果：`Route` 包含 4 组航班，航班号为 9C8843、9C8977、9C7157、9C8981，实际机场均为 `PVG -> DLC`。
+- 春秋请求表单把 `SHA` 放在 `DepCityCode`，`DepAirportCode` 留空，语义是“上海城市范围查询”；响应同时返回 `DepartureCode=SHA` 和 `DepartureAirportCode=PVG`。
+- 海航同一次 `ORI=SHA, DES=DLC` 查询的真实响应也包含实际 `PVG -> DLC` 航段，可按城市范围查询处理。
+- 青岛航空当前请求使用 `origCode3/destCode3`，官网把虹桥和上海浦东作为独立机场选项，当前解析器也要求响应机场等于请求机场；应按单机场查询处理。东航 Browser 使用单机场 URL 和严格机场校验，且继续保持禁用。
+- 当前 `FlightSearchRequest.origin_iata` 同时承载城市查询码和具体机场码。解析器优先读取 `DepartureAirportCode=PVG`，再要求它必须等于请求值 `SHA`，因此把 4 个合法航班全部过滤。
+- 机场目录还存在第二个独立缺口：上海虹桥的内部种子记录没有 IATA，导入记录带 `SHA`；两条记录按名称未被视为同一机场，前二候选被虹桥重复占满，浦东 `PVG` 被挤出。直接放宽解析器会把实际从浦东出发的航班错误连接到虹桥接驳段，不能作为安全修复。
+- 非空上游响应被解析器全部丢弃后仍记为 `EMPTY`，使 `planning_status=COMPLETE` 和“未找到航班”结论失真，也失去了区分“真实空结果”与“解析/建模错误”的能力。
+
+### 设计原则
+
+1. 城市代码、机场 IATA 和用户允许的机场集合必须是三个独立概念，不再复用单一 `origin_iata/destination_iata` 字段表达。
+2. 当前只需要两种最小查询范围：`CITY` 与 `AIRPORT`。该值由航司 adapter 在代码中声明，环境变量不能覆盖。
+3. “实际机场优先”是所有航司、所有直飞/中转航段的统一事实不变量：航班段、首末程接驳、跨机场换乘、费用和风险计算都只能消费响应中的实际起降机场，查询参数不能替代响应事实。
+4. `EMPTY` 只表示上游成功完成且业务响应确认没有候选。上游返回候选但全部解析失败时必须是 `INVALID_RESPONSE/PARSER_REJECTED_ALL`。
+5. 机场候选必须先规范化、去重，再应用 top-N 或组合上限；不得让同一物理机场的多来源记录挤掉同城其他机场。
+
+### 推荐方案
+
+#### 1. 最小查询范围标记
+
+每个航司 adapter 只增加一个代码常量：
+
+```text
+query_scope = CITY | AIRPORT
+```
+
+当前固定映射：
+
+```text
+SpringAirlinesPublicQueryProvider  -> CITY
+HainanAirlinesPublicQueryProvider  -> CITY
+QingdaoAirlinesPublicQueryProvider -> AIRPORT
+BrowserAirlineFlightProvider       -> AIRPORT（继续禁用）
+```
+
+- `CITY`：每个 Provider/城市对只查询一次，允许返回该城市任一合法商业机场；实际机场以响应为准。
+- `AIRPORT`：对规范化后的同城机场组合逐对查询；实际机场仍以响应为准，并必须与本次单机场查询范围一致。
+- `query_scope` 写在 adapter 代码中，不进入 `.env`，不新增 capability version、evidence registry 或运行时自动探测。
+- 新增航司时必须显式选择 `CITY` 或 `AIRPORT`；缺少标记时不加入航班查询列表。
+
+#### 2. 拆分内部查询模型
+
+新增或重构内部模型，至少表达：
+
+```text
+FlightSearchScope
+  origin_city_name
+  destination_city_name
+  origin_city_code
+  destination_city_code
+  allowed_origin_airport_iatas[]
+  allowed_destination_airport_iatas[]
+  departure_date
+  adults
+  currency_code
+  non_stop
+```
+
+- 城市码是 Provider 专用映射，不从任意机场 IATA 直接推导；上海在春秋城市查询中可以使用 `SHA`，但不能因此代表只允许虹桥机场。
+- 具体机场搜索时显式设置机场过滤；城市范围搜索时允许 Provider 返回该城市目录中的任一商业机场。
+- Provider adapter 通过 `query_scope` 告知聚合器如何构造请求；`CITY` 不按机场候选重复发送，`AIRPORT` 才遍历合法机场组合。
+- 缓存键必须包含查询粒度、城市码和显式机场过滤集合，避免城市范围结果与单机场结果相互污染。
+
+#### 3. 建立规范化机场目录
+
+- 机场记录以 IATA 为首要业务标识；没有 IATA 的内部种子记录通过受控映射补齐，或与带 IATA 的导入记录合并为一个 canonical airport。
+- 多来源合并优先使用 IATA/ICAO，其次使用坐标邻近、标准化名称和别名；合并后保留来源证据，不丢失可审计性。
+- `airport_candidates_for_location/city()` 返回 canonical airport，一座机场只出现一次。上海至少应稳定返回 `SHA` 与 `PVG`，排序可以考虑接驳距离，但不得在去重前截断。
+- 只允许有定期客运能力、IATA 和可验证坐标的机场进入航班规划；军用机场和无 IATA 记录不能占用候选配额。
+
+#### 4. 统一实际机场事实边界
+
+- 每个航司 adapter 都必须把响应中的每个航段规范化为包含实际 `origin_airport_iata` 与 `destination_airport_iata` 的 `FlightOfferSegment`。
+- 实际机场必须来自当前航司响应；若当前响应确实不提供，只允许通过另一个已批准、可关联到同一航班/日期/航段的事实源补全并保留证据。不得从查询参数、城市中心机场或候选排序结果推断。
+- Planner 只能消费规范化后的实际机场：
+  - 首程接驳终点 = 第一航段实际起飞机场；
+  - 末程接驳起点 = 最后一航段实际到达机场；
+  - 中转衔接使用相邻航段的实际到达/起飞机场；
+  - 两个相邻航段机场不同，必须显式生成跨机场接驳并验证时间；无法验证则阻断方案。
+- 机场名称、坐标、航站楼、地图路线、接驳耗时、费用和风险都从实际机场对应的 canonical airport node 继续解析。
+- 实际机场缺失、无法唯一映射、超出用户允许范围或缺少必需接驳事实时，该 offer fail-closed，并记录明确原因；不能用请求机场或默认机场替换。
+- 春秋 `SHA` 城市查询返回 `PVG` 只是该统一规则的一个回归样本，不是专用分支：解析器校验 `DepartureCode/ArrivalCode` 的城市范围，同时把 `DepartureAirportCode/ArrivalAirportCode` 作为实际机场。
+- 相同实际航班从城市查询和机场查询重复返回时，按航司、航班号、日期、实际机场和时刻去重。
+
+#### 5. 增加解析诊断与正确 outcome
+
+- 每次 Provider 响应记录：
+  - 原始 route/flight 数；
+  - 成功规范化 offer 数；
+  - 按稳定 reason code 聚合的丢弃数；
+  - 实际机场集合；
+  - parser version 与 evidence id。
+- 建议内部 reason code：
+
+```text
+FLIGHT_CITY_CODE_MISMATCH
+FLIGHT_AIRPORT_OUT_OF_SCOPE
+FLIGHT_AIRPORT_UNRESOLVED
+FLIGHT_NUMBER_INVALID
+FLIGHT_TIME_INVALID
+FLIGHT_CABIN_UNAVAILABLE
+FLIGHT_PARSER_REJECTED_ALL
+```
+
+- `raw_candidate_count > 0 && offer_count == 0` 时，outcome 为 `FAILED`，错误码使用 `FLIGHT_PROVIDER_INVALID_RESPONSE` 或更具体的 `FLIGHT_PARSER_REJECTED_ALL`，`retryable` 由错误类型决定；不得返回 `FLIGHT_PROVIDER_EMPTY`。
+- 只有 `raw_candidate_count == 0` 且业务响应有效时，才能返回 `EMPTY`。
+- 查询范围内航班因解析失败不可确认、铁路可用时，整体状态继续遵守 V1.17 的 `PARTIAL` 规则。
+
+### 数据流
+
+```text
+TravelRequest
+  -> 解析起终点城市
+  -> 加载并规范化同城商业机场
+  -> 生成 FlightSearchScope
+  -> 按 Provider query_scope 选择城市查询或机场组合查询
+  -> 保存上游交换证据
+  -> 按本次查询范围校验响应
+  -> 逐航段提取并验证实际机场 IATA
+  -> 生成只包含实际机场事实的 FlightOffer
+  -> 按每一航段实际机场构造首末程/中转接驳
+  -> 形成 TravelPlan
+  -> 聚合 VERIFIED / EMPTY / FAILED 与 COMPLETE / PARTIAL
+```
+
+### 影响范围与文件修改范围
+
+- `backend/app/data_sources/flight_providers.py`：内部查询范围模型、Provider `query_scope`、春秋/海航/青岛航空请求与解析、解析诊断和 outcome。
+- `backend/app/data_sources/browser_flight_providers.py`：声明 `query_scope=AIRPORT`；东航仍保持禁用。
+- `backend/app/services/location_resolver.py`：canonical airport 合并、按 IATA 反查、去重后排序和候选门禁。
+- `backend/app/services/planner.py`：从“机场对循环查询”改为按 Provider 查询范围编排，并使用 offer 实际机场构造接驳。
+- `backend/app/data_sources/transport_catalog_providers.py` 与交通目录生成流程：补齐/合并内部机场种子，保证 IATA 与坐标一致。
+- `backend/app/data/transport_nodes.json`：通过既有生成流程更新，不手工维护重复记录。
+- `backend/app/tests/`：增加脱敏最小春秋 fixture、机场目录去重、Provider 解析、Planner 门到门和 API 状态回归。
+- 外部 `/api/travel/*` schema version 保持 `1.17`，不修改 `docs/API_CONTRACT.md`，不需要前端字段同步或数据库迁移。
+
+### 验收标准
+
+- Provider 查询范围固定为春秋/海航 `CITY`、青岛航空/东航 Browser `AIRPORT`；ENV 无法覆盖 `query_scope`。
+- `CITY` Provider 每个城市对只调用一次；`AIRPORT` Provider 覆盖规范化后的合法机场组合。
+- 所有航班方案的每一航段都使用响应实际机场；实际机场缺失且没有第二事实源时不得生成方案。
+- 使用 2026-07-24 问题响应的脱敏最小 fixture 时，春秋解析器能得到 4 个 `PVG -> DLC` offer，不再返回 `EMPTY`；生成计划的首程接驳自然指向实际的 `PVG`。
+- 中转航班相邻航段使用各自实际机场；发生跨机场时必须有显式、可验证且时间可行的接驳段。
+- 上海 canonical airport 候选中 `SHA`、`PVG` 各出现一次；重复种子/导入记录不能挤占候选配额。
+- 非空 Route 全部被拒绝时返回解析失败，并使铁路可用的默认城际结果为 `PARTIAL`；真正空 Route 才返回 `EMPTY`。
+- 海航城市查询、青岛航空单机场查询和东航 Browser 单机场校验保持各自语义。
+- 外部响应结构、前端交通方式入口、铁路计划和重试流程无回归。
+
+### 风险与控制
+
+- 风险：错误接受邻近城市机场。控制：实际机场必须属于 canonical 城市映射并满足显式允许集合，禁止只按距离判断城市归属。
+- 风险：简单删除严格相等检查后生成错误接驳。控制：先完成实际机场反查与接驳重建，再接受 offer。
+- 风险：城市范围查询增加候选量和处理时间。控制：每个 Provider/城市对只查询一次、缓存结果、后端确定性去重并限制最终计划数。
+- 风险：目录合并误伤不同机场。控制：IATA/ICAO 为强标识，坐标和名称只作为无代码记录的受控补充，并保留来源记录。
+- 风险：Provider 字段再次变化。控制：非空响应零 offer 必须报警和 fail-closed，保存 parser version、evidence id 与丢弃统计。
+- 风险：`query_scope` 标错导致漏查或重复查询。控制：为四个现有 adapter 固定映射测试；新航司没有显式标记时 fail-closed。
+
+### 回滚方式
+
+- 实现应拆成“机场规范化”“query_scope 编排”“Provider 解析”“Planner 实际机场接驳”独立提交，便于逐层回滚。
+- 回滚城市范围解析时，春秋该类响应必须降级为“暂不可确认/解析失败”，不得恢复为错误的“没有航班”。
+- 回滚不得保留“接受 PVG offer 但连接虹桥接驳”的中间状态；查询和建计划必须作为同一安全发布单元启用。
+- 机场目录为可再生数据；回滚通过恢复生成器规则并重新生成，不执行破坏性数据库迁移。
