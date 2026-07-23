@@ -429,9 +429,10 @@
 ## 2026-07-24 07:17:50 +08:00
 
 - 任务：完成 ARC-20260724-01 航班城市查询范围与实际机场归一化。
-- 代码提交：`03c8232`。
+- 代码提交：`03c8232`、`c09b993`。
 - 修改内容：
   - 新增城市/机场查询范围模型；春秋、海航固定 `CITY`，青岛航空、东航 Browser 固定 `AIRPORT`，查询范围不能由 ENV 覆盖。
+  - 城市范围 Provider 使用各 adapter 自带的显式城市码映射；未知城市不从机场 IATA 推导城市码，只跳过对应 CITY Provider，AIRPORT Provider 仍按 canonical 机场组合查询。
   - Provider 聚合按城市对单次查询或 canonical 机场组合查询，缓存键覆盖 scope、城市码和机场允许集合，并按实际航段事实去重。
   - 春秋分离 `DepartureCode/ArrivalCode` 城市码与 `DepartureAirportCode/ArrivalAirportCode` 实际机场；所有 Provider 缺失实际机场时 fail-closed。
   - 非空候选零 offer 改为 `FLIGHT_PARSER_REJECTED_ALL`，新增原始候选数、规范化数、实际机场、丢弃原因、parser version 和 evidence id 诊断。
