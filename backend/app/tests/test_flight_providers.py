@@ -1,6 +1,8 @@
 import re
 import sqlite3
+import json
 from datetime import date, datetime
+from pathlib import Path
 
 import pytest
 import httpx
@@ -16,6 +18,7 @@ from app.data_sources.flight_providers import (
     FlightProviderOutcome,
     FlightProviderSearchResult,
     FlightSearchRequest,
+    FlightSearchScope,
     FlightStateRequest,
     HainanAirlinesPublicQueryProvider,
     OfficialAirlineRequestSchema,
@@ -30,6 +33,7 @@ from app.data_sources.flight_providers import (
     save_flight_raw_snapshot,
     search_flight_offers_with_enabled_provider_result,
 )
+from app.data_sources.browser_flight_providers import BrowserAirlineFlightProvider
 from app.models.schemas import (
     LLMValidationResult,
     PlanType,
@@ -172,9 +176,14 @@ def test_public_airline_provider_filters_sold_out_and_missing_price():
         snapshot_backend="disabled",
     )
 
-    offers = provider.search_offers(FlightSearchRequest(origin_iata="SHA", destination_iata="TAO", departure_date=date(2026, 5, 21)))
-
-    assert offers == []
+    with pytest.raises(FlightProviderError, match="FLIGHT_PARSER_REJECTED_ALL"):
+        provider.search_offers(
+            FlightSearchRequest(
+                origin_iata="SHA",
+                destination_iata="TAO",
+                departure_date=date(2026, 5, 21),
+            )
+        )
 
 
 def test_public_airline_provider_rejects_base_url_outside_allowlist():
@@ -239,6 +248,89 @@ def test_spring_airlines_provider_posts_public_form_and_maps_real_shape():
     assert offer.cabin_options[0].remaining_count is None
     assert offer.cabin_options[1].availability == "LIMITED"
     assert offer.cabin_options[1].remaining_count == 10
+
+
+def test_flight_provider_query_scopes_are_code_owned():
+    assert SpringAirlinesPublicQueryProvider.query_scope == "CITY"
+    assert HainanAirlinesPublicQueryProvider.query_scope == "CITY"
+    assert QingdaoAirlinesPublicQueryProvider.query_scope == "AIRPORT"
+    assert BrowserAirlineFlightProvider.query_scope == "AIRPORT"
+
+
+def test_spring_city_query_accepts_actual_pvg_airport_fixture():
+    fixture_path = (
+        Path(__file__).parent
+        / "fixtures"
+        / "spring_sha_dlc_pvg_minimal.json"
+    )
+    payload = json.loads(fixture_path.read_text(encoding="utf-8"))
+    provider = SpringAirlinesPublicQueryProvider(
+        client=_FakeClient(_FakeResponse(payload)),
+        cache_ttl_seconds=0,
+        snapshot_backend="disabled",
+    )
+
+    offers = provider.search_offers(
+        FlightSearchRequest(
+            origin_iata="SHA",
+            destination_iata="DLC",
+            departure_date=date(2026, 7, 25),
+            origin_city_name="上海",
+            destination_city_name="大连",
+            query_scope="CITY",
+            origin_city_code="SHA",
+            destination_city_code="DLC",
+            allowed_origin_airport_iatas=("SHA", "PVG"),
+            allowed_destination_airport_iatas=("DLC",),
+            max_results=5,
+        )
+    )
+
+    assert len(offers) == 4
+    assert {
+        (offer.segments[0].origin_iata, offer.segments[0].destination_iata)
+        for offer in offers
+    } == {("PVG", "DLC")}
+
+
+def test_search_scope_queries_city_provider_once_and_airport_provider_per_pair(
+    monkeypatch,
+):
+    class _ScopeProvider:
+        def __init__(self, source_id, query_scope):
+            self.source_id = source_id
+            self.query_scope = query_scope
+            self.calls = []
+
+        def search_offers(self, request):
+            self.calls.append(request)
+            return []
+
+    city_provider = _ScopeProvider("city_provider", "CITY")
+    airport_provider = _ScopeProvider("airport_provider", "AIRPORT")
+    monkeypatch.setattr(
+        "app.data_sources.flight_providers.build_enabled_flight_providers",
+        lambda environment=None: [city_provider, airport_provider],
+    )
+    scope = FlightSearchScope(
+        origin_city_name="上海",
+        destination_city_name="大连",
+        origin_city_code="SHA",
+        destination_city_code="DLC",
+        allowed_origin_airport_iatas=("SHA", "PVG"),
+        allowed_destination_airport_iatas=("DLC",),
+        departure_date=date(2026, 7, 25),
+    )
+
+    search_flight_offers_with_enabled_provider_result(scope)
+
+    assert len(city_provider.calls) == 1
+    assert city_provider.calls[0].query_scope == "CITY"
+    assert len(airport_provider.calls) == 2
+    assert {
+        (request.origin_iata, request.destination_iata)
+        for request in airport_provider.calls
+    } == {("SHA", "DLC"), ("PVG", "DLC")}
 
 
 def test_spring_airlines_provider_requires_city_names_without_guessing():
@@ -546,6 +638,51 @@ def test_planner_records_flight_outcomes_per_source(monkeypatch):
     assert ("airline_9c_public_query", "FLIGHT_PROVIDER_RATE_LIMITED") in failure_pairs
     assert ("airline_hu_public_query", "FLIGHT_PROVIDER_EMPTY") in failure_pairs
     assert ("airline_qw_public_query", "FLIGHT_PROVIDER_INVALID_RESPONSE") in failure_pairs
+
+
+def test_planner_builds_local_transfers_from_offer_actual_airports(monkeypatch):
+    day = date(2026, 7, 25)
+    actual_offer = _flight_offer("PVG", "DLC", day, 10, 12)
+    monkeypatch.setattr(
+        "app.services.planner.search_flight_offers_with_enabled_provider_result",
+        lambda request, environment=None: FlightProviderSearchResult(
+            offers=[actual_offer],
+            attempted_source_ids=["airline_9c_public_query"],
+            outcomes=[
+                FlightProviderOutcome(
+                    "airline_9c_public_query",
+                    "VERIFIED",
+                    None,
+                    False,
+                    1,
+                    "verified fixture",
+                )
+            ],
+        ),
+    )
+    request = TravelRequest(
+        request_id="req_actual_airport",
+        raw_user_input="2026-07-25 上海到大连",
+        origin_text="上海",
+        destination_text="大连",
+        travel_date=day,
+        preferences=[RecommendationType.BALANCED],
+        hard_constraints=TravelHardConstraints(),
+        soft_preferences=TravelSoftPreferences(),
+    )
+
+    plans, *_ = build_plans(request)
+    flight_plan = next(
+        plan for plan in plans if plan.plan_type == PlanType.DIRECT_FLIGHT
+    )
+    first_transfer = flight_plan.segments[0]
+    flight_segment = flight_plan.segments[1]
+    last_transfer = flight_plan.segments[-1]
+
+    assert first_transfer.destination == "上海浦东机场"
+    assert flight_segment.origin_airport == "上海浦东机场"
+    assert flight_segment.destination_airport == "Dalian Zhoushuizi International Airport"
+    assert last_transfer.origin == "Dalian Zhoushuizi International Airport"
 
 
 @pytest.mark.parametrize(

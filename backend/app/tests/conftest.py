@@ -37,7 +37,17 @@ def deterministic_data_source_env(monkeypatch):
 @pytest.fixture(autouse=True)
 def fake_real_flight_provider_for_planner(monkeypatch):
     def fake_search(request, environment=None):
-        carrier = "CZ" if request.origin_iata == "PEK" else "MU"
+        origin_iata = (
+            request.allowed_origin_airport_iatas[0]
+            if getattr(request, "allowed_origin_airport_iatas", ())
+            else request.origin_iata
+        )
+        destination_iata = (
+            request.allowed_destination_airport_iatas[0]
+            if getattr(request, "allowed_destination_airport_iatas", ())
+            else request.destination_iata
+        )
+        carrier = "CZ" if origin_iata == "PEK" else "MU"
         number = "3102" if carrier == "CZ" else "5511"
         source_id = "airline_cz_public_query" if carrier == "CZ" else "airline_mu_public_query"
         source_name = "China Southern Official Public Flight Query" if carrier == "CZ" else "China Eastern Official Public Flight Query"
@@ -52,8 +62,8 @@ def fake_real_flight_provider_for_planner(monkeypatch):
                         FlightOfferSegment(
                             carrier_code=carrier,
                             flight_number=number,
-                            origin_iata=request.origin_iata,
-                            destination_iata=request.destination_iata,
+                            origin_iata=origin_iata,
+                            destination_iata=destination_iata,
                             departure_at=datetime.combine(request.departure_date, datetime.min.time(), tzinfo=SHANGHAI_TZ).replace(hour=11, minute=20),
                             arrival_at=datetime.combine(request.departure_date, datetime.min.time(), tzinfo=SHANGHAI_TZ).replace(hour=13, minute=0),
                             duration="PT1H40M",

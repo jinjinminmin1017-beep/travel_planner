@@ -13,6 +13,19 @@ from urllib.request import Request, urlopen
 
 RAIL_12306_STATION_URL = "https://kyfw.12306.cn/otn/resources/js/framework/station_name.js"
 OURAIRPORTS_AIRPORTS_URL = "https://davidmegginson.github.io/ourairports-data/airports.csv"
+CONTROLLED_SEED_AIRPORT_IATA: dict[str, str] = {
+    "sha_hongqiao_airport": "SHA",
+    "sha_pudong_airport": "PVG",
+    "tao_jiaodong_airport": "TAO",
+    "pek_capital_airport": "PEK",
+    "pek_daxing_airport": "PKX",
+    "can_baiyun_airport": "CAN",
+    "ctu_tianfu_airport": "TFU",
+    "szx_baoan_airport": "SZX",
+    "hgh_xiaoshan_airport": "HGH",
+    "sia_xianyang_airport": "XIY",
+    "wuh_tianhe_airport": "WUH",
+}
 
 
 @dataclass(frozen=True)
@@ -112,7 +125,10 @@ def parse_ourairports_catalog(
             continue
         iata_code = (row.get("iata_code") or "").strip()
         airport_type = (row.get("type") or "").strip()
-        if not iata_code and airport_type not in {"large_airport", "medium_airport"}:
+        scheduled_service = row.get("scheduled_service") == "yes"
+        latitude = _optional_float(row.get("latitude_deg"))
+        longitude = _optional_float(row.get("longitude_deg"))
+        if not iata_code or not scheduled_service or latitude is None or longitude is None:
             continue
         city_name = _normalize_airport_city_name((row.get("municipality") or "").strip(), city_name_aliases or {})
         airport_name = (row.get("name") or "").strip()
@@ -126,9 +142,9 @@ def parse_ourairports_catalog(
                 node_type="AIRPORT",
                 node_name=airport_name,
                 city_name=city_name,
-                latitude=_optional_float(row.get("latitude_deg")),
-                longitude=_optional_float(row.get("longitude_deg")),
-                hub_rank=_airport_hub_rank(airport_type, row.get("scheduled_service") == "yes"),
+                latitude=latitude,
+                longitude=longitude,
+                hub_rank=_airport_hub_rank(airport_type, scheduled_service),
                 aliases=aliases,
                 station_code=None,
                 iata_code=iata_code or None,
@@ -203,6 +219,10 @@ def normalize_transport_node_item(item: dict, node_type: str | None = None) -> d
     has_coordinates = latitude is not None and longitude is not None
     source_id = str(item.get("source_id") or "internal_seed")
     is_seed = source_id in {"internal_seed", "internal_calc"}
+    node_id = str(item["node_id"])
+    iata_code = str(item["iata_code"]).upper() if item.get("iata_code") else None
+    if inferred_type == "AIRPORT" and not iata_code:
+        iata_code = CONTROLLED_SEED_AIRPORT_IATA.get(node_id)
     source_name = item.get("source_name")
     if not source_name:
         source_name = "Internal Transport Node Seed" if is_seed else "Unknown Transport Node Source"
@@ -213,7 +233,7 @@ def normalize_transport_node_item(item: dict, node_type: str | None = None) -> d
     if not coordinate_quality:
         coordinate_quality = "MANUAL" if has_coordinates and is_seed else ("PROVIDER" if has_coordinates else "MISSING")
     return {
-        "node_id": str(item["node_id"]),
+        "node_id": node_id,
         "node_type": inferred_type,
         "node_name": str(item["node_name"]),
         "city_name": _normalize_city_name(str(item["city_name"])),
@@ -222,7 +242,7 @@ def normalize_transport_node_item(item: dict, node_type: str | None = None) -> d
         "hub_rank": int(item.get("hub_rank") or 3),
         "aliases": [str(alias) for alias in item.get("aliases", []) if alias],
         "station_code": str(item["station_code"]) if item.get("station_code") else None,
-        "iata_code": str(item["iata_code"]) if item.get("iata_code") else None,
+        "iata_code": iata_code,
         "icao_code": str(item["icao_code"]) if item.get("icao_code") else None,
         "source_id": source_id,
         "source_name": str(source_name),

@@ -1,4 +1,9 @@
 from app.data_sources.transport_catalog_providers import city_pinyin_aliases_from_rail_nodes, merge_transport_nodes, normalize_transport_node_item, parse_12306_station_catalog, parse_ourairports_catalog
+from app.services.location_resolver import (
+    airport_candidate_for_iata,
+    airport_candidates_for_city,
+    airport_iata_for_candidate,
+)
 
 
 def test_parse_12306_station_catalog_uses_official_city_field():
@@ -108,7 +113,7 @@ def test_normalize_transport_node_item_adds_full_schema_to_seed_airport():
         "hub_rank": 1,
         "aliases": ["浦东机场"],
         "station_code": None,
-        "iata_code": None,
+        "iata_code": "PVG",
         "icao_code": None,
         "source_id": "internal_seed",
         "source_name": "Internal Transport Node Seed",
@@ -118,3 +123,13 @@ def test_normalize_transport_node_item_adds_full_schema_to_seed_airport():
         "commercial_allowed": False,
         "coordinate_quality": "MANUAL",
     }
+
+
+def test_shanghai_airport_candidates_are_canonical_before_limit():
+    candidates = airport_candidates_for_city("上海", limit=2)
+    iatas = [airport_iata_for_candidate(candidate) for candidate in candidates]
+
+    assert set(iatas) == {"SHA", "PVG"}
+    assert len(iatas) == len(set(iatas))
+    assert airport_candidate_for_iata("PVG", expected_city="上海") is not None
+    assert airport_candidate_for_iata("PVG", expected_city="大连") is None

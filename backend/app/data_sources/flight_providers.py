@@ -8,7 +8,7 @@ import re
 import sqlite3
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
@@ -25,6 +25,37 @@ logger = logging.getLogger("app.flight")
 
 class FlightProviderError(RuntimeError):
     pass
+
+
+class FlightParserRejectedAllError(FlightProviderError):
+    """The upstream returned candidates, but none passed deterministic parsing."""
+
+
+FlightQueryScope = Literal["CITY", "AIRPORT"]
+
+
+@dataclass(frozen=True)
+class FlightSearchScope:
+    origin_city_name: str
+    destination_city_name: str
+    origin_city_code: str
+    destination_city_code: str
+    allowed_origin_airport_iatas: tuple[str, ...]
+    allowed_destination_airport_iatas: tuple[str, ...]
+    departure_date: date
+    adults: int = 1
+    currency_code: str = "CNY"
+    max_results: int = 5
+    non_stop: bool | None = None
+
+    @property
+    def origin_iata(self) -> str:
+        """Compatibility view for existing planner diagnostics and test doubles."""
+        return self.origin_city_code
+
+    @property
+    def destination_iata(self) -> str:
+        return self.destination_city_code
 
 
 @dataclass(frozen=True)
@@ -55,6 +86,19 @@ QINGDAO_AIRLINES_SOURCE_ID = "airline_qw_public_query"
 QINGDAO_AIRLINES_INIT_PATH = "/api/sale/v1/b2cTicket/get"
 QINGDAO_AIRLINES_SEARCH_PATH = "/api/ewp/sales/v1/air/list"
 SHANGHAI_TZ = timezone(timedelta(hours=8))
+FLIGHT_CITY_QUERY_CODES: dict[str, str] = {
+    "上海": "SHA",
+    "北京": "BJS",
+    "大连": "DLC",
+    "广州": "CAN",
+    "青岛": "TAO",
+    "成都": "CTU",
+    "深圳": "SZX",
+    "杭州": "HGH",
+    "西安": "XIY",
+    "武汉": "WUH",
+    "温州": "WNZ",
+}
 
 _RATE_LIMIT_LOCK = threading.Lock()
 _LAST_PROVIDER_CALL_AT: dict[str, float] = {}
@@ -74,6 +118,23 @@ class FlightSearchRequest:
     currency_code: str = "CNY"
     max_results: int = 5
     non_stop: bool | None = None
+    query_scope: FlightQueryScope = "AIRPORT"
+    origin_city_code: str | None = None
+    destination_city_code: str | None = None
+    allowed_origin_airport_iatas: tuple[str, ...] = ()
+    allowed_destination_airport_iatas: tuple[str, ...] = ()
+
+    def for_query_scope(self, query_scope: FlightQueryScope) -> "FlightSearchRequest":
+        return replace(self, query_scope=query_scope)
+
+
+@dataclass
+class FlightParseDiagnostics:
+    raw_candidate_count: int = 0
+    rejected_counts: dict[str, int] = field(default_factory=dict)
+
+    def reject(self, reason_code: str) -> None:
+        self.rejected_counts[reason_code] = self.rejected_counts.get(reason_code, 0) + 1
 
 
 @dataclass(frozen=True)
@@ -164,6 +225,7 @@ class FlightState:
 
 class FlightOfferProvider(Protocol):
     source_id: str
+    query_scope: FlightQueryScope
 
     def search_offers(self, request: FlightSearchRequest) -> list[FlightOffer]:
         ...
@@ -204,6 +266,8 @@ def flight_data_source_metadata(
 
 
 class OfficialAirlinePublicQueryProvider:
+    query_scope: FlightQueryScope = "AIRPORT"
+
     def __init__(
         self,
         *,
@@ -237,6 +301,7 @@ class OfficialAirlinePublicQueryProvider:
         self.client = client or httpx.Client(timeout=timeout_seconds, follow_redirects=False, headers=self._headers())
 
     def search_offers(self, request: FlightSearchRequest) -> list[FlightOffer]:
+        request = request.for_query_scope(self.query_scope)
         if self.request_schema is None:
             raise FlightProviderError(f"{self.source_id} has no verified request implementation")
         if not self.base_url:
@@ -293,6 +358,18 @@ class OfficialAirlinePublicQueryProvider:
             evidence_id=snapshot_id,
             cache_ttl_seconds=self.cache_ttl_seconds,
         )
+        raw_candidate_count = _public_airline_raw_candidate_count(payload)
+        _log_flight_parse_diagnostics(
+            source_id=self.source_id,
+            evidence_id=snapshot_id,
+            raw_candidate_count=raw_candidate_count,
+            offers=offers,
+            rejected_counts={"FLIGHT_PARSER_REJECTED_ALL": raw_candidate_count} if raw_candidate_count and not offers else {},
+        )
+        if raw_candidate_count > 0 and not offers:
+            raise FlightParserRejectedAllError(
+                f"FLIGHT_PARSER_REJECTED_ALL source_id={self.source_id} raw_candidate_count={raw_candidate_count}"
+            )
         offers = sorted(offers, key=lambda offer: offer.segments[0].departure_at or datetime.max.replace(tzinfo=SHANGHAI_TZ))
         offers = offers[: max(1, request.max_results)]
         if offers:
@@ -322,6 +399,7 @@ class SpringAirlinesPublicQueryProvider:
 
     source_id = SPRING_AIRLINES_SOURCE_ID
     source_name = "Spring Airlines Official Public Flight Query"
+    query_scope: FlightQueryScope = "CITY"
 
     def __init__(
         self,
@@ -348,6 +426,7 @@ class SpringAirlinesPublicQueryProvider:
         )
 
     def search_offers(self, request: FlightSearchRequest) -> list[FlightOffer]:
+        request = request.for_query_scope(self.query_scope)
         if not _base_url_matches_allowed_hosts(self.base_url, self.allowed_hosts):
             raise FlightProviderError(f"{self.source_id} base URL is outside the source allowlist")
         if request.adults < 1:
@@ -401,12 +480,26 @@ class SpringAirlinesPublicQueryProvider:
             snapshot_backend=self.snapshot_backend,
             snapshot_path=self.snapshot_sqlite_path,
         )
+        diagnostics = FlightParseDiagnostics()
         offers = _parse_spring_airlines_payload(
             payload,
             request=request,
             evidence_id=snapshot_id,
             cache_ttl_seconds=self.cache_ttl_seconds,
+            diagnostics=diagnostics,
         )
+        _log_flight_parse_diagnostics(
+            source_id=self.source_id,
+            evidence_id=snapshot_id,
+            raw_candidate_count=diagnostics.raw_candidate_count,
+            offers=offers,
+            rejected_counts=diagnostics.rejected_counts,
+        )
+        if diagnostics.raw_candidate_count > 0 and not offers:
+            raise FlightParserRejectedAllError(
+                f"FLIGHT_PARSER_REJECTED_ALL source_id={self.source_id} "
+                f"raw_candidate_count={diagnostics.raw_candidate_count}"
+            )
         offers.sort(
             key=lambda offer: (
                 offer.total_price.amount_minor,
@@ -448,6 +541,7 @@ class HainanAirlinesPublicQueryProvider:
 
     source_id = HAINAN_AIRLINES_SOURCE_ID
     source_name = "Hainan Airlines Official Public Flight Query"
+    query_scope: FlightQueryScope = "CITY"
 
     def __init__(
         self,
@@ -474,6 +568,7 @@ class HainanAirlinesPublicQueryProvider:
         )
 
     def search_offers(self, request: FlightSearchRequest) -> list[FlightOffer]:
+        request = request.for_query_scope(self.query_scope)
         self._validate_request(request)
         cache_key = _cache_key(self.source_id, request)
         cached = _cache_get(cache_key, self.cache_ttl_seconds)
@@ -520,12 +615,26 @@ class HainanAirlinesPublicQueryProvider:
             snapshot_backend=self.snapshot_backend,
             snapshot_path=self.snapshot_sqlite_path,
         )
+        diagnostics = FlightParseDiagnostics()
         offers = _parse_hainan_airlines_response(
             response_text,
             request=request,
             evidence_id=snapshot_id,
             cache_ttl_seconds=self.cache_ttl_seconds,
+            diagnostics=diagnostics,
         )
+        _log_flight_parse_diagnostics(
+            source_id=self.source_id,
+            evidence_id=snapshot_id,
+            raw_candidate_count=diagnostics.raw_candidate_count,
+            offers=offers,
+            rejected_counts=diagnostics.rejected_counts,
+        )
+        if diagnostics.raw_candidate_count > 0 and not offers:
+            raise FlightParserRejectedAllError(
+                f"FLIGHT_PARSER_REJECTED_ALL source_id={self.source_id} "
+                f"raw_candidate_count={diagnostics.raw_candidate_count}"
+            )
         offers.sort(
             key=lambda offer: (
                 offer.total_price.amount_minor,
@@ -569,6 +678,7 @@ class QingdaoAirlinesPublicQueryProvider:
 
     source_id = QINGDAO_AIRLINES_SOURCE_ID
     source_name = "Qingdao Airlines Official Public Flight Query"
+    query_scope: FlightQueryScope = "AIRPORT"
 
     def __init__(
         self,
@@ -591,6 +701,7 @@ class QingdaoAirlinesPublicQueryProvider:
         self.client = client or httpx.Client(timeout=timeout_seconds, follow_redirects=False)
 
     def search_offers(self, request: FlightSearchRequest) -> list[FlightOffer]:
+        request = request.for_query_scope(self.query_scope)
         self._validate_request(request)
         cache_key = _cache_key(self.source_id, request)
         cached = _cache_get(cache_key, self.cache_ttl_seconds)
@@ -647,12 +758,26 @@ class QingdaoAirlinesPublicQueryProvider:
                 f"{self.source_id} returned business code {code}"
                 + (f" ({business_message})" if business_message else "")
             )
+        diagnostics = FlightParseDiagnostics()
         offers = _parse_qingdao_airlines_payload(
             payload,
             request=request,
             evidence_id=snapshot_id,
             cache_ttl_seconds=self.cache_ttl_seconds,
+            diagnostics=diagnostics,
         )
+        _log_flight_parse_diagnostics(
+            source_id=self.source_id,
+            evidence_id=snapshot_id,
+            raw_candidate_count=diagnostics.raw_candidate_count,
+            offers=offers,
+            rejected_counts=diagnostics.rejected_counts,
+        )
+        if diagnostics.raw_candidate_count > 0 and not offers:
+            raise FlightParserRejectedAllError(
+                f"FLIGHT_PARSER_REJECTED_ALL source_id={self.source_id} "
+                f"raw_candidate_count={diagnostics.raw_candidate_count}"
+            )
         offers.sort(
             key=lambda offer: (
                 offer.total_price.amount_minor,
@@ -753,18 +878,25 @@ class OpenSkyStatesProvider:
 def build_enabled_flight_providers(environment: str | None = None) -> list[FlightOfferProvider]:
     from app.data_sources.provider_registry import build_enabled_providers
 
-    return [
-        cast(FlightOfferProvider, provider)
-        for provider in build_enabled_providers(
-            {
-                "spring_airlines_public_query",
-                "hainan_airlines_public_query",
-                "qingdao_airlines_public_query",
-                "browser_airline_flight",
-            },
-            environment,
-        )
-    ]
+    providers: list[FlightOfferProvider] = []
+    for provider in build_enabled_providers(
+        {
+            "spring_airlines_public_query",
+            "hainan_airlines_public_query",
+            "qingdao_airlines_public_query",
+            "browser_airline_flight",
+        },
+        environment,
+    ):
+        query_scope = getattr(provider, "query_scope", None)
+        if query_scope not in {"CITY", "AIRPORT"}:
+            logger.error(
+                "flight_provider_missing_query_scope source_id=%s",
+                getattr(provider, "source_id", "unknown"),
+            )
+            continue
+        providers.append(cast(FlightOfferProvider, provider))
+    return providers
 
 
 def build_enabled_flight_state_providers(environment: str | None = None) -> list[FlightStateProvider]:
@@ -776,11 +908,127 @@ def build_enabled_flight_state_providers(environment: str | None = None) -> list
     ]
 
 
-def search_flight_offers_with_enabled_provider(request: FlightSearchRequest, environment: str | None = None) -> list[FlightOffer]:
+def flight_city_query_code(city_name: str, fallback_airport_iata: str | None = None) -> str | None:
+    explicit = FLIGHT_CITY_QUERY_CODES.get(city_name.strip())
+    if explicit:
+        return explicit
+    fallback = (fallback_airport_iata or "").strip().upper()
+    return fallback if re.fullmatch(r"[A-Z]{3}", fallback) else None
+
+
+def _provider_search_requests(
+    provider: FlightOfferProvider,
+    request: FlightSearchRequest | FlightSearchScope,
+) -> list[FlightSearchRequest]:
+    query_scope = getattr(provider, "query_scope", None)
+    if isinstance(request, FlightSearchRequest):
+        if query_scope not in {"CITY", "AIRPORT"}:
+            query_scope = request.query_scope
+        return [request.for_query_scope(cast(FlightQueryScope, query_scope))]
+    if query_scope == "CITY":
+        origin_city_code = flight_city_query_code(
+            request.origin_city_name,
+            request.origin_city_code,
+        )
+        destination_city_code = flight_city_query_code(
+            request.destination_city_name,
+            request.destination_city_code,
+        )
+        if not origin_city_code or not destination_city_code:
+            return []
+        return [
+            FlightSearchRequest(
+                origin_iata=origin_city_code,
+                destination_iata=destination_city_code,
+                departure_date=request.departure_date,
+                origin_city_name=request.origin_city_name,
+                destination_city_name=request.destination_city_name,
+                adults=request.adults,
+                currency_code=request.currency_code,
+                max_results=request.max_results,
+                non_stop=request.non_stop,
+                query_scope="CITY",
+                origin_city_code=origin_city_code,
+                destination_city_code=destination_city_code,
+                allowed_origin_airport_iatas=_normalized_iata_tuple(
+                    request.allowed_origin_airport_iatas
+                ),
+                allowed_destination_airport_iatas=_normalized_iata_tuple(
+                    request.allowed_destination_airport_iatas
+                ),
+            )
+        ]
+    if query_scope == "AIRPORT":
+        return [
+            FlightSearchRequest(
+                origin_iata=origin_iata,
+                destination_iata=destination_iata,
+                departure_date=request.departure_date,
+                origin_city_name=request.origin_city_name,
+                destination_city_name=request.destination_city_name,
+                adults=request.adults,
+                currency_code=request.currency_code,
+                max_results=request.max_results,
+                non_stop=request.non_stop,
+                query_scope="AIRPORT",
+                origin_city_code=request.origin_city_code,
+                destination_city_code=request.destination_city_code,
+                allowed_origin_airport_iatas=(origin_iata,),
+                allowed_destination_airport_iatas=(destination_iata,),
+            )
+            for origin_iata in _normalized_iata_tuple(
+                request.allowed_origin_airport_iatas
+            )
+            for destination_iata in _normalized_iata_tuple(
+                request.allowed_destination_airport_iatas
+            )
+        ]
+    return []
+
+
+def _normalized_iata_tuple(values: tuple[str, ...]) -> tuple[str, ...]:
+    return tuple(
+        dict.fromkeys(
+            code.strip().upper()
+            for code in values
+            if re.fullmatch(r"[A-Za-z]{3}", code.strip())
+        )
+    )
+
+
+def _deduplicate_flight_offers(offers: list[FlightOffer]) -> list[FlightOffer]:
+    deduplicated: list[FlightOffer] = []
+    seen: set[tuple[tuple[str, str, str, str, str, str], ...]] = set()
+    for offer in offers:
+        identity = tuple(
+            (
+                segment.carrier_code.upper(),
+                segment.flight_number.upper(),
+                segment.origin_iata.upper(),
+                segment.destination_iata.upper(),
+                segment.departure_at.isoformat() if segment.departure_at else "",
+                segment.arrival_at.isoformat() if segment.arrival_at else "",
+            )
+            for segment in offer.segments
+        )
+        if not identity or identity in seen:
+            continue
+        seen.add(identity)
+        deduplicated.append(offer)
+    return deduplicated
+
+
+def search_flight_offers_with_enabled_provider(
+    request: FlightSearchRequest | FlightSearchScope,
+    environment: str | None = None,
+) -> list[FlightOffer]:
     return search_flight_offers_with_enabled_provider_result(request, environment).offers
 
 
-def search_flight_offers_with_enabled_provider_result(request: FlightSearchRequest, environment: str | None = None) -> FlightProviderSearchResult:
+def search_flight_offers_with_enabled_provider_result(
+    request: FlightSearchRequest | FlightSearchScope,
+    environment: str | None = None,
+) -> FlightProviderSearchResult:
     attempted_source_ids: list[str] = []
     offers: list[FlightOffer] = []
     outcomes: list[FlightProviderOutcome] = []
@@ -803,34 +1051,59 @@ def search_flight_offers_with_enabled_provider_result(request: FlightSearchReque
         )
     for provider in providers:
         attempted_source_ids.append(provider.source_id)
-        try:
-            provider_offers = provider.search_offers(request)
-            offers.extend(provider_offers)
-            if provider_offers:
-                outcomes.append(
-                    FlightProviderOutcome(
-                        source_id=provider.source_id,
-                        status="VERIFIED",
-                        error_code=None,
-                        retryable=False,
-                        offer_count=len(provider_offers),
-                        message=f"verified {len(provider_offers)} flight offers",
-                    )
+        provider_offers: list[FlightOffer] = []
+        provider_failures: list[FlightProviderOutcome] = []
+        provider_requests = _provider_search_requests(provider, request)
+        if not provider_requests:
+            provider_failures.append(
+                FlightProviderOutcome(
+                    source_id=provider.source_id,
+                    status="FAILED",
+                    error_code="FLIGHT_CITY_CODE_UNAVAILABLE",
+                    retryable=False,
+                    offer_count=0,
+                    message="provider city query code is unavailable",
                 )
-            else:
-                outcomes.append(
-                    FlightProviderOutcome(
-                        source_id=provider.source_id,
-                        status="EMPTY",
-                        error_code="FLIGHT_PROVIDER_EMPTY",
-                        retryable=False,
-                        offer_count=0,
-                        message="provider query completed with no verifiable flight offers",
-                    )
+            )
+        for provider_request in provider_requests:
+            try:
+                provider_offers.extend(provider.search_offers(provider_request))
+            except (httpx.HTTPError, FlightProviderError, ValueError, KeyError) as exc:
+                provider_failures.append(_flight_provider_failure_outcome(provider.source_id, exc))
+                logger.warning(
+                    "flight_provider_search_failure source_id=%s query_scope=%s route=%s->%s error=%s",
+                    provider.source_id,
+                    getattr(provider, "query_scope", provider_request.query_scope),
+                    provider_request.origin_iata,
+                    provider_request.destination_iata,
+                    exc,
                 )
-        except (httpx.HTTPError, FlightProviderError, ValueError, KeyError) as exc:
-            outcomes.append(_flight_provider_failure_outcome(provider.source_id, exc))
-            logger.warning("flight_provider_search_failure source_id=%s error=%s", provider.source_id, exc)
+        provider_offers = _deduplicate_flight_offers(provider_offers)
+        offers.extend(provider_offers)
+        if provider_offers:
+            outcomes.append(
+                FlightProviderOutcome(
+                    source_id=provider.source_id,
+                    status="VERIFIED",
+                    error_code=None,
+                    retryable=False,
+                    offer_count=len(provider_offers),
+                    message=f"verified {len(provider_offers)} flight offers",
+                )
+            )
+        elif provider_failures:
+            outcomes.append(provider_failures[0])
+        else:
+            outcomes.append(
+                FlightProviderOutcome(
+                    source_id=provider.source_id,
+                    status="EMPTY",
+                    error_code="FLIGHT_PROVIDER_EMPTY",
+                    retryable=False,
+                    offer_count=0,
+                    message="provider query completed with no verifiable flight offers",
+                )
+            )
     offers.sort(
         key=lambda offer: (
             offer.total_price.amount_minor,
@@ -840,7 +1113,7 @@ def search_flight_offers_with_enabled_provider_result(request: FlightSearchReque
     )
     failure_messages = [f"{outcome.source_id}: {outcome.message}" for outcome in outcomes if outcome.status != "VERIFIED"]
     return FlightProviderSearchResult(
-        offers=offers[: max(1, request.max_results)],
+        offers=_deduplicate_flight_offers(offers)[: max(1, request.max_results)],
         attempted_source_ids=attempted_source_ids,
         failure_message="; ".join(failure_messages) or None,
         outcomes=outcomes,
@@ -865,6 +1138,10 @@ def _flight_provider_failure_outcome(source_id: str, exc: Exception) -> FlightPr
     elif any(marker in lowered for marker in ("not enabled", "not configured", "not implemented", "disabled")):
         status = "DISABLED"
         error_code = "FLIGHT_PROVIDER_DISABLED"
+        retryable = False
+    elif isinstance(exc, FlightParserRejectedAllError) or "flight_parser_rejected_all" in lowered:
+        status = "FAILED"
+        error_code = "FLIGHT_PARSER_REJECTED_ALL"
         retryable = False
     elif isinstance(exc, httpx.TransportError):
         status = "FAILED"
@@ -1000,7 +1277,9 @@ def _parse_spring_airlines_payload(
     request: FlightSearchRequest,
     evidence_id: str,
     cache_ttl_seconds: int,
+    diagnostics: FlightParseDiagnostics | None = None,
 ) -> list[FlightOffer]:
+    diagnostics = diagnostics or FlightParseDiagnostics()
     raw_routes = payload.get("Route")
     if not isinstance(raw_routes, list):
         return []
@@ -1011,27 +1290,41 @@ def _parse_spring_airlines_payload(
         for raw_flight in raw_flights:
             if not isinstance(raw_flight, dict):
                 continue
+            diagnostics.raw_candidate_count += 1
             flight_no = str(raw_flight.get("No") or "").strip().upper()
             if not re.fullmatch(r"9C\d+[A-Z]?", flight_no):
+                diagnostics.reject("FLIGHT_NUMBER_INVALID")
                 continue
-            origin_iata = str(
-                raw_flight.get("DepartureAirportCode")
-                or raw_flight.get("DepartureCode")
-                or request.origin_iata
-            ).strip().upper()
-            destination_iata = str(
-                raw_flight.get("ArrivalAirportCode")
-                or raw_flight.get("ArrivalCode")
-                or request.destination_iata
-            ).strip().upper()
-            if origin_iata != request.origin_iata.upper() or destination_iata != request.destination_iata.upper():
+            departure_city_code = str(raw_flight.get("DepartureCode") or "").strip().upper()
+            arrival_city_code = str(raw_flight.get("ArrivalCode") or "").strip().upper()
+            expected_origin_city_code = (request.origin_city_code or request.origin_iata).upper()
+            expected_destination_city_code = (request.destination_city_code or request.destination_iata).upper()
+            if (
+                departure_city_code != expected_origin_city_code
+                or arrival_city_code != expected_destination_city_code
+            ):
+                diagnostics.reject("FLIGHT_CITY_CODE_MISMATCH")
+                continue
+            origin_iata = str(raw_flight.get("DepartureAirportCode") or "").strip().upper()
+            destination_iata = str(raw_flight.get("ArrivalAirportCode") or "").strip().upper()
+            if not _actual_airport_is_allowed(origin_iata, request, origin=True) or not _actual_airport_is_allowed(
+                destination_iata, request, origin=False
+            ):
+                diagnostics.reject(
+                    "FLIGHT_AIRPORT_UNRESOLVED"
+                    if not re.fullmatch(r"[A-Z]{3}", origin_iata)
+                    or not re.fullmatch(r"[A-Z]{3}", destination_iata)
+                    else "FLIGHT_AIRPORT_OUT_OF_SCOPE"
+                )
                 continue
             stopovers = raw_flight.get("Stopovers")
             if request.non_stop is True and isinstance(stopovers, list) and stopovers:
+                diagnostics.reject("FLIGHT_NON_STOP_REQUIRED")
                 continue
             departure_at = _parse_datetime(raw_flight.get("DepartureTime"), request.departure_date)
             arrival_at = _parse_datetime(raw_flight.get("ArrivalTime"), request.departure_date)
             if departure_at is None or arrival_at is None or arrival_at <= departure_at:
+                diagnostics.reject("FLIGHT_TIME_INVALID")
                 continue
             cabins = _spring_airlines_cabin_options(
                 raw_flight,
@@ -1039,6 +1332,7 @@ def _parse_spring_airlines_payload(
                 evidence_id=evidence_id,
             )
             if not cabins:
+                diagnostics.reject("FLIGHT_CABIN_UNAVAILABLE")
                 continue
             selected = min(cabins, key=lambda cabin: cabin.price.amount_minor)
             segment_id = str(raw_flight.get("SegmentId") or raw_flight.get("RouteId") or "").strip()
@@ -1160,7 +1454,9 @@ def _parse_hainan_airlines_response(
     request: FlightSearchRequest,
     evidence_id: str,
     cache_ttl_seconds: int,
+    diagnostics: FlightParseDiagnostics | None = None,
 ) -> list[FlightOffer]:
+    diagnostics = diagnostics or FlightParseDiagnostics()
     flight_blocks = re.findall(
         r"var\s+Flight\s*=\s*\{\};(?P<body>.*?)Flights\[position\]\s*=\s*Flight;",
         response_text,
@@ -1169,21 +1465,31 @@ def _parse_hainan_airlines_response(
     offers: list[FlightOffer] = []
     allowed_carriers = {"HU", "Y8", "JD", "8L", "UQ", "FU", "GX", "CN"}
     for block in flight_blocks:
+        diagnostics.raw_candidate_count += 1
         if len(re.findall(r"var\s+Segment\s*=\s*\{\};", block)) != 1:
+            diagnostics.reject("FLIGHT_SEGMENT_STRUCTURE_INVALID")
             continue
         carrier = _js_assignment(block, "Segment.marketingAirlineEN").upper()
         flight_number = _js_assignment(block, "Segment.marketingFlightNum").upper()
         if carrier not in allowed_carriers or not re.fullmatch(r"\d{3,4}[A-Z]?", flight_number):
+            diagnostics.reject("FLIGHT_NUMBER_INVALID")
             continue
         origin_iata = _js_assignment(block, "Segment.departureIATA").upper()
         destination_iata = _js_assignment(block, "Segment.arrivalIATA").upper()
         if not re.fullmatch(r"[A-Z]{3}", origin_iata) or not re.fullmatch(r"[A-Z]{3}", destination_iata):
+            diagnostics.reject("FLIGHT_AIRPORT_UNRESOLVED")
+            continue
+        if not _actual_airport_is_allowed(origin_iata, request, origin=True) or not _actual_airport_is_allowed(
+            destination_iata, request, origin=False
+        ):
+            diagnostics.reject("FLIGHT_AIRPORT_OUT_OF_SCOPE")
             continue
         departure_date_text = _js_assignment(block, "Segment.departureDate")
         departure_time_text = _js_assignment(block, "Segment.departureTime")
         arrival_date_text = _js_assignment(block, "Segment.arrivalDate")
         arrival_time_text = _js_assignment(block, "Segment.arrivalTime")
         if not all((departure_date_text, departure_time_text, arrival_date_text, arrival_time_text)):
+            diagnostics.reject("FLIGHT_TIME_INVALID")
             continue
         departure_at = _parse_datetime(
             f"{departure_date_text}T{departure_time_text}",
@@ -1199,6 +1505,7 @@ def _parse_hainan_airlines_response(
             or departure_at.date() != request.departure_date
             or arrival_at <= departure_at
         ):
+            diagnostics.reject("FLIGHT_TIME_INVALID")
             continue
         cabins = _hainan_airlines_cabin_options(
             block,
@@ -1206,6 +1513,7 @@ def _parse_hainan_airlines_response(
             evidence_id=evidence_id,
         )
         if not cabins:
+            diagnostics.reject("FLIGHT_CABIN_UNAVAILABLE")
             continue
         selected = min(cabins, key=lambda cabin: cabin.price.amount_minor)
         duration_hour = _js_assignment(block, "Segment.durationHour")
@@ -1387,7 +1695,9 @@ def _parse_qingdao_airlines_payload(
     request: FlightSearchRequest,
     evidence_id: str,
     cache_ttl_seconds: int,
+    diagnostics: FlightParseDiagnostics | None = None,
 ) -> list[FlightOffer]:
+    diagnostics = diagnostics or FlightParseDiagnostics()
     result = payload.get("result")
     raw_flights = result.get("departAVFS") if isinstance(result, dict) else None
     if not isinstance(raw_flights, list):
@@ -1396,23 +1706,35 @@ def _parse_qingdao_airlines_payload(
     for raw_flight in raw_flights:
         if not isinstance(raw_flight, dict):
             continue
+        diagnostics.raw_candidate_count += 1
         flight_no = str(raw_flight.get("flightNo") or "").strip().upper()
         if not re.fullmatch(r"QW\d{3,4}[A-Z]?", flight_no):
+            diagnostics.reject("FLIGHT_NUMBER_INVALID")
             continue
         origin_iata = str(raw_flight.get("departApCode3") or "").strip().upper()
         destination_iata = str(raw_flight.get("destApCode3") or "").strip().upper()
-        if origin_iata != request.origin_iata.upper() or destination_iata != request.destination_iata.upper():
+        if not _actual_airport_is_allowed(origin_iata, request, origin=True) or not _actual_airport_is_allowed(
+            destination_iata, request, origin=False
+        ):
+            diagnostics.reject(
+                "FLIGHT_AIRPORT_UNRESOLVED"
+                if not re.fullmatch(r"[A-Z]{3}", origin_iata)
+                or not re.fullmatch(r"[A-Z]{3}", destination_iata)
+                else "FLIGHT_AIRPORT_OUT_OF_SCOPE"
+            )
             continue
         departure_date = _date_from_value(raw_flight.get("flightDate"), request.departure_date)
         arrival_date = _date_from_value(raw_flight.get("destDate"), departure_date)
         departure_at = _parse_datetime(raw_flight.get("departTime"), departure_date)
         arrival_at = _parse_datetime(raw_flight.get("destTime"), arrival_date)
         if departure_at is None or arrival_at is None:
+            diagnostics.reject("FLIGHT_TIME_INVALID")
             continue
         if arrival_at <= departure_at:
             arrival_at += timedelta(days=1)
         cabins = _qingdao_airlines_cabin_options(raw_flight, flight_no=flight_no, evidence_id=evidence_id)
         if not cabins:
+            diagnostics.reject("FLIGHT_CABIN_UNAVAILABLE")
             continue
         selected = min(cabins, key=lambda cabin: cabin.price.amount_minor)
         offers.append(
@@ -1556,6 +1878,62 @@ def _parse_public_airline_payload(
     return offers
 
 
+def _public_airline_raw_candidate_count(payload: dict[str, Any]) -> int:
+    return len(_extract_offer_items(payload))
+
+
+def _actual_airport_is_allowed(
+    airport_iata: str,
+    request: FlightSearchRequest,
+    *,
+    origin: bool,
+) -> bool:
+    normalized = airport_iata.strip().upper()
+    if not re.fullmatch(r"[A-Z]{3}", normalized):
+        return False
+    allowed = (
+        request.allowed_origin_airport_iatas
+        if origin
+        else request.allowed_destination_airport_iatas
+    )
+    normalized_allowed = {code.strip().upper() for code in allowed if code}
+    if normalized_allowed:
+        return normalized in normalized_allowed
+    if request.query_scope == "AIRPORT":
+        expected = request.origin_iata if origin else request.destination_iata
+        return normalized == expected.strip().upper()
+    return True
+
+
+def _log_flight_parse_diagnostics(
+    *,
+    source_id: str,
+    evidence_id: str,
+    raw_candidate_count: int,
+    offers: list[FlightOffer],
+    rejected_counts: dict[str, int],
+) -> None:
+    actual_airports = sorted(
+        {
+            airport
+            for offer in offers
+            for segment in offer.segments
+            for airport in (segment.origin_iata, segment.destination_iata)
+        }
+    )
+    logger.info(
+        "flight_parser_diagnostics source_id=%s parser_version=%s evidence_id=%s "
+        "raw_candidate_count=%s offer_count=%s actual_airports=%s rejected_counts=%s",
+        source_id,
+        "flight_scope_v1",
+        evidence_id,
+        raw_candidate_count,
+        len(offers),
+        ",".join(actual_airports),
+        json.dumps(rejected_counts, ensure_ascii=True, sort_keys=True, separators=(",", ":")),
+    )
+
+
 def _extract_offer_items(payload: dict[str, Any]) -> list[Any]:
     if isinstance(payload.get("offers"), list):
         return payload["offers"]
@@ -1600,11 +1978,16 @@ def _segments_from_offer(item: dict[str, Any], request: FlightSearchRequest) -> 
                 flight_number = match.group(2)
         elif re.fullmatch(r"[A-Za-z]{2}\d+[A-Za-z]?", flight_number):
             flight_number = flight_number[len(carrier_code) :]
-        origin_iata = str(raw.get("origin_iata") or raw.get("originIata") or raw.get("origin") or departure.get("iataCode") or request.origin_iata).strip().upper()
-        destination_iata = str(raw.get("destination_iata") or raw.get("destinationIata") or raw.get("destination") or arrival.get("iataCode") or request.destination_iata).strip().upper()
+        origin_iata = str(raw.get("origin_iata") or raw.get("originIata") or raw.get("origin") or departure.get("iataCode") or "").strip().upper()
+        destination_iata = str(raw.get("destination_iata") or raw.get("destinationIata") or raw.get("destination") or arrival.get("iataCode") or "").strip().upper()
         departure_at = _parse_datetime(raw.get("departure_at") or raw.get("departureAt") or raw.get("departureTime") or departure.get("at"), request.departure_date)
         arrival_at = _parse_datetime(raw.get("arrival_at") or raw.get("arrivalAt") or raw.get("arrivalTime") or arrival.get("at"), request.departure_date)
-        if not carrier_code or not flight_number or not origin_iata or not destination_iata:
+        if (
+            not carrier_code
+            or not flight_number
+            or not re.fullmatch(r"[A-Z]{3}", origin_iata)
+            or not re.fullmatch(r"[A-Z]{3}", destination_iata)
+        ):
             continue
         segments.append(
             FlightOfferSegment(
@@ -1617,6 +2000,12 @@ def _segments_from_offer(item: dict[str, Any], request: FlightSearchRequest) -> 
                 duration=str(raw.get("duration") or item.get("duration") or "") or None,
             )
         )
+    if not segments:
+        return []
+    if not _actual_airport_is_allowed(segments[0].origin_iata, request, origin=True):
+        return []
+    if not _actual_airport_is_allowed(segments[-1].destination_iata, request, origin=False):
+        return []
     return segments
 
 
@@ -1823,8 +2212,13 @@ def _cache_key(source_id: str, request: FlightSearchRequest) -> str:
     return ":".join(
         [
             source_id,
+            request.query_scope,
             request.origin_iata.upper(),
             request.destination_iata.upper(),
+            (request.origin_city_code or "").upper(),
+            (request.destination_city_code or "").upper(),
+            ",".join(_normalized_iata_tuple(request.allowed_origin_airport_iatas)),
+            ",".join(_normalized_iata_tuple(request.allowed_destination_airport_iatas)),
             request.origin_city_name or "",
             request.destination_city_name or "",
             request.departure_date.isoformat(),

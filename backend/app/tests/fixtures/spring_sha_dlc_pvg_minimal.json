@@ -1,0 +1,113 @@
+{
+  "Code": "0",
+  "Route": [
+    [
+      {
+        "No": "9C8843",
+        "SegmentId": "spring_9c8843_20260725",
+        "Departure": "上海",
+        "DepartureCode": "SHA",
+        "DepartureAirportCode": "PVG",
+        "DepartureStation": "上海浦东国际机场",
+        "DepartureTime": "2026-07-25 07:10:00",
+        "Arrival": "大连",
+        "ArrivalCode": "DLC",
+        "ArrivalAirportCode": "DLC",
+        "ArrivalStation": "大连周水子国际机场",
+        "ArrivalTime": "2026-07-25 09:05:00",
+        "Stopovers": [],
+        "AircraftCabins": [
+          {
+            "CabinLevelName": "经济舱",
+            "IsHide": false,
+            "AircraftCabinInfos": [
+              {
+                "Name": "Y",
+                "Price": 690,
+                "Remain": 5
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "No": "9C8977",
+        "SegmentId": "spring_9c8977_20260725",
+        "Departure": "上海",
+        "DepartureCode": "SHA",
+        "DepartureAirportCode": "PVG",
+        "DepartureTime": "2026-07-25 10:20:00",
+        "Arrival": "大连",
+        "ArrivalCode": "DLC",
+        "ArrivalAirportCode": "DLC",
+        "ArrivalTime": "2026-07-25 12:15:00",
+        "Stopovers": [],
+        "AircraftCabins": [
+          {
+            "CabinLevelName": "经济舱",
+            "IsHide": false,
+            "AircraftCabinInfos": [
+              {
+                "Name": "Y",
+                "Price": 720,
+                "Remain": 7
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "No": "9C7157",
+        "SegmentId": "spring_9c7157_20260725",
+        "Departure": "上海",
+        "DepartureCode": "SHA",
+        "DepartureAirportCode": "PVG",
+        "DepartureTime": "2026-07-25 15:00:00",
+        "Arrival": "大连",
+        "ArrivalCode": "DLC",
+        "ArrivalAirportCode": "DLC",
+        "ArrivalTime": "2026-07-25 16:55:00",
+        "Stopovers": [],
+        "AircraftCabins": [
+          {
+            "CabinLevelName": "经济舱",
+            "IsHide": false,
+            "AircraftCabinInfos": [
+              {
+                "Name": "Y",
+                "Price": 760,
+                "Remain": 4
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "No": "9C8981",
+        "SegmentId": "spring_9c8981_20260725",
+        "Departure": "上海",
+        "DepartureCode": "SHA",
+        "DepartureAirportCode": "PVG",
+        "DepartureTime": "2026-07-25 19:30:00",
+        "Arrival": "大连",
+        "ArrivalCode": "DLC",
+        "ArrivalAirportCode": "DLC",
+        "ArrivalTime": "2026-07-25 21:25:00",
+        "Stopovers": [],
+        "AircraftCabins": [
+          {
+            "CabinLevelName": "经济舱",
+            "IsHide": false,
+            "AircraftCabinInfos": [
+              {
+                "Name": "Y",
+                "Price": 810,
+                "Remain": 6
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  ]
+}

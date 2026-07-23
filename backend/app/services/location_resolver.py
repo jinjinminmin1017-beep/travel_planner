@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from app.data_sources.geocoding_providers import GeocodeCandidate, GeocodeRequest, geocode_with_enabled_provider_result
+from app.data_sources.transport_catalog_providers import CONTROLLED_SEED_AIRPORT_IATA
 from app.models.schemas import AirportCandidate, DataSourceMetadata, DataSourceType, GeoPoint, StationCandidate, TransportMode, money, now_timepoint
 from app.services.cache_store import get_json, location_resolution_ttl_seconds, set_json
 
@@ -159,7 +160,11 @@ def _node_record_from_catalog_item(item: Any, section: str) -> NodeRecord:
         hub_rank=int(item["hub_rank"]),
         aliases=tuple(str(alias) for alias in item.get("aliases", []) if alias),
         station_code=str(item["station_code"]) if item.get("station_code") else None,
-        iata_code=str(item["iata_code"]) if item.get("iata_code") else None,
+        iata_code=(
+            str(item["iata_code"]).upper()
+            if item.get("iata_code")
+            else CONTROLLED_SEED_AIRPORT_IATA.get(str(item["node_id"]))
+        ),
         source_id=str(item.get("source_id") or "internal_calc"),
         source_name=str(item.get("source_name") or "Internal Location Catalog"),
         license_status=str(item.get("license_status") or "APPROVED"),
@@ -168,8 +173,28 @@ def _node_record_from_catalog_item(item: Any, section: str) -> NodeRecord:
     )
 
 
+def _canonical_airport_records(records: list[NodeRecord]) -> list[NodeRecord]:
+    canonical: list[NodeRecord] = []
+    seen_iatas: set[str] = set()
+    for record in records:
+        iata = (record.iata_code or "").strip().upper()
+        if (
+            len(iata) != 3
+            or not iata.isalpha()
+            or not iata.isascii()
+            or record.point.latitude is None
+            or record.point.longitude is None
+            or record.license_status != "APPROVED"
+            or iata in seen_iatas
+        ):
+            continue
+        seen_iatas.add(iata)
+        canonical.append(record)
+    return canonical
+
+
 STATIONS = tuple(_load_transport_nodes("stations"))
-AIRPORTS = tuple(_load_transport_nodes("airports"))
+AIRPORTS = tuple(_canonical_airport_records(_load_transport_nodes("airports")))
 
 
 def resolve_location(query: str, environment: str | None = None) -> LocationResolution:
@@ -448,6 +473,22 @@ def airport_iata_for_candidate(candidate: AirportCandidate) -> str | None:
     return None
 
 
+def airport_candidate_for_iata(
+    iata_code: str,
+    *,
+    expected_city: str | None = None,
+) -> AirportCandidate | None:
+    normalized_iata = iata_code.strip().upper()
+    normalized_city = _normalize_city_name(expected_city or "")
+    for record in AIRPORTS:
+        if (record.iata_code or "").upper() != normalized_iata:
+            continue
+        if normalized_city and record.city_name != normalized_city:
+            return None
+        return _airport_candidate(record, _city_reference_point(record.city_name))
+    return None
+
+
 def transfer_station_candidates_between(origin_city: str, destination_city: str, limit: int = 6) -> list[StationCandidate]:
     origin_point = _city_reference_point(origin_city)
     destination_point = _city_reference_point(destination_city)
@@ -587,11 +628,15 @@ def _rank_nodes(nodes: tuple[NodeRecord, ...], city: str, point: GeoPoint | None
     )
     deduped: list[NodeRecord] = []
     seen_names: set[str] = set()
+    seen_iatas: set[str] = set()
     for node in ranked:
         key = _normalize(node.node_name)
-        if key in seen_names:
+        iata = (node.iata_code or "").upper()
+        if key in seen_names or (iata and iata in seen_iatas):
             continue
         seen_names.add(key)
+        if iata:
+            seen_iatas.add(iata)
         deduped.append(node)
     return deduped
 

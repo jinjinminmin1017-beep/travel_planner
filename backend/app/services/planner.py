@@ -14,6 +14,8 @@ from app.data_sources.flight_providers import (
     FlightProviderOutcomeStatus,
     FlightProviderSearchResult,
     FlightSearchRequest,
+    FlightSearchScope,
+    flight_city_query_code,
     search_flight_offers_with_enabled_provider_result,
 )
 from app.data_sources.map_providers import estimate_route_with_enabled_provider_result
@@ -66,6 +68,7 @@ from app.services.flight_planning_engine import FlightPlanSpec
 from app.services.intent_parser import parse_travel_request
 from app.services.local_transfer_engine import LocalTransferUnavailable, build_local_transfer_segment
 from app.services.location_resolver import (
+    airport_candidate_for_iata,
     airport_candidates_for_city,
     airport_iata_for_candidate,
     planning_nodes_for_request,
@@ -652,6 +655,84 @@ def _dynamic_airport_candidates(route_nodes, city: str, limit: int = 2) -> list[
     return candidates[:limit]
 
 
+def _flight_search_scope(
+    *,
+    origin_city: str,
+    destination_city: str,
+    origin_airports: list[AirportCandidate],
+    destination_airports: list[AirportCandidate],
+    departure_date,
+    max_results: int,
+) -> FlightSearchScope | None:
+    origin_iatas = tuple(
+        code
+        for candidate in origin_airports
+        if (code := airport_iata_for_candidate(candidate))
+    )
+    destination_iatas = tuple(
+        code
+        for candidate in destination_airports
+        if (code := airport_iata_for_candidate(candidate))
+    )
+    if not origin_iatas or not destination_iatas:
+        return None
+    origin_city_code = flight_city_query_code(origin_city, origin_iatas[0])
+    destination_city_code = flight_city_query_code(destination_city, destination_iatas[0])
+    if not origin_city_code or not destination_city_code:
+        return None
+    return FlightSearchScope(
+        origin_city_name=origin_city,
+        destination_city_name=destination_city,
+        origin_city_code=origin_city_code,
+        destination_city_code=destination_city_code,
+        allowed_origin_airport_iatas=origin_iatas,
+        allowed_destination_airport_iatas=destination_iatas,
+        departure_date=departure_date,
+        adults=1,
+        currency_code="CNY",
+        max_results=max_results,
+        non_stop=None,
+    )
+
+
+def _actual_airports_for_offer(
+    offer: FlightOffer,
+    *,
+    origin_city: str,
+    destination_city: str,
+    preferred_candidates: list[AirportCandidate],
+) -> dict[str, AirportCandidate] | None:
+    if not offer.segments:
+        return None
+    result: dict[str, AirportCandidate] = {}
+    for index, segment in enumerate(offer.segments):
+        for iata, expected_city in (
+            (segment.origin_iata, origin_city if index == 0 else None),
+            (
+                segment.destination_iata,
+                destination_city if index == len(offer.segments) - 1 else None,
+            ),
+        ):
+            normalized_iata = iata.strip().upper()
+            candidate = next(
+                (
+                    item
+                    for item in preferred_candidates
+                    if airport_iata_for_candidate(item) == normalized_iata
+                    and (not expected_city or item.city_name == expected_city)
+                ),
+                None,
+            )
+            candidate = candidate or airport_candidate_for_iata(
+                normalized_iata,
+                expected_city=expected_city,
+            )
+            if candidate is None:
+                return None
+            result[normalized_iata] = candidate
+    return result
+
+
 def _segment_departure_at(segment) -> datetime | None:
     value = getattr(segment, "departure_time", None)
     return value.datetime if value else None
@@ -674,20 +755,26 @@ def _flight_segments_from_offer(
     *,
     segment_prefix: str,
     offer: FlightOffer,
-    day,
-    origin_airport_name: str,
-    destination_airport_name: str,
+    actual_airports: dict[str, AirportCandidate],
 ) -> list[FlightSegment]:
     segments: list[FlightSegment] = []
     segment_count = max(1, len(offer.segments))
     for index, offer_segment in enumerate(offer.segments, start=1):
-        fallback_dep = _tp(day, 9 + min(index, 8), 0)
-        fallback_arr = TimePoint(datetime=fallback_dep.datetime + timedelta(minutes=120), timezone=fallback_dep.timezone, source_timezone=fallback_dep.source_timezone)
-        dep = _timepoint_from_datetime(offer_segment.departure_at, fallback_dep)
-        arr = _timepoint_from_datetime(offer_segment.arrival_at, fallback_arr)
+        if (
+            offer_segment.departure_at is None
+            or offer_segment.arrival_at is None
+            or offer_segment.arrival_at <= offer_segment.departure_at
+        ):
+            return []
+        origin_airport = actual_airports.get(offer_segment.origin_iata.upper())
+        destination_airport = actual_airports.get(offer_segment.destination_iata.upper())
+        if origin_airport is None or destination_airport is None:
+            return []
+        dep = _timepoint_from_datetime(offer_segment.departure_at, now_timepoint())
+        arr = _timepoint_from_datetime(offer_segment.arrival_at, now_timepoint())
         duration = max(0, int((arr.datetime - dep.datetime).total_seconds() // 60))
-        origin_label = origin_airport_name if index == 1 else offer_segment.origin_iata
-        destination_label = destination_airport_name if index == len(offer.segments) else offer_segment.destination_iata
+        origin_label = origin_airport.airport_name
+        destination_label = destination_airport.airport_name
         flight_number = f"{offer_segment.carrier_code}{offer_segment.flight_number}".strip() or f"{offer_segment.origin_iata}-{offer_segment.destination_iata}"
         segment_price = money(offer.total_price.amount_minor // segment_count + (offer.total_price.amount_minor % segment_count if index == 1 else 0))
         cabin_options = _cabin_options_from_offer(offer)
@@ -713,6 +800,54 @@ def _flight_segments_from_offer(
     return segments
 
 
+def _flight_journey_segments(
+    *,
+    flight_segments: list[FlightSegment],
+    offer: FlightOffer,
+    actual_airports: dict[str, AirportCandidate],
+    taxi,
+    segment_prefix: str,
+) -> list[FlightSegment | LocalTransferSegment] | None:
+    if len(flight_segments) != len(offer.segments) or not flight_segments:
+        return None
+    journey: list[FlightSegment | LocalTransferSegment] = [flight_segments[0]]
+    for index in range(1, len(flight_segments)):
+        previous_flight = flight_segments[index - 1]
+        next_flight = flight_segments[index]
+        previous_offer_segment = offer.segments[index - 1]
+        next_offer_segment = offer.segments[index]
+        gap_minutes = int(
+            (
+                next_flight.departure_time.datetime
+                - previous_flight.arrival_time.datetime
+            ).total_seconds()
+            // 60
+        )
+        if gap_minutes < 45:
+            return None
+        if previous_offer_segment.destination_iata != next_offer_segment.origin_iata:
+            previous_airport = actual_airports.get(
+                previous_offer_segment.destination_iata.upper()
+            )
+            next_airport = actual_airports.get(
+                next_offer_segment.origin_iata.upper()
+            )
+            if previous_airport is None or next_airport is None:
+                return None
+            transfer = taxi(
+                f"{segment_prefix}_airport_transfer_{index}",
+                previous_airport.airport_name,
+                next_airport.airport_name,
+                0,
+                0,
+            )
+            if transfer.duration_minutes + 60 > gap_minutes:
+                return None
+            journey.append(transfer)
+        journey.append(next_flight)
+    return journey
+
+
 def _flight_provider_error_code(message: str | None) -> str:
     value = message or ""
     lowered = value.lower()
@@ -726,6 +861,8 @@ def _flight_provider_error_code(message: str | None) -> str:
         return "FLIGHT_PROVIDER_CHALLENGE"
     if any(marker in lowered for marker in ("timeout", "timed out")):
         return "FLIGHT_PROVIDER_TIMEOUT"
+    if "flight_parser_rejected_all" in lowered:
+        return "FLIGHT_PARSER_REJECTED_ALL"
     if "empty response" in lowered or "no offers" in lowered:
         return "FLIGHT_PROVIDER_EMPTY"
     if value:
@@ -744,7 +881,11 @@ def _flight_provider_user_message(error_code: str) -> str:
         return "航班数据源触发访问频率限制，本次暂时无法确认航班方案。"
     if error_code == "FLIGHT_PROVIDER_CHALLENGE":
         return "航班数据源触发安全验证，本次暂时无法确认航班方案。"
-    if error_code in {"FLIGHT_PROVIDER_INVALID_RESPONSE", "FLIGHT_PROVIDER_FAILED"}:
+    if error_code in {
+        "FLIGHT_PROVIDER_INVALID_RESPONSE",
+        "FLIGHT_PROVIDER_FAILED",
+        "FLIGHT_PARSER_REJECTED_ALL",
+    }:
         return "航班数据源返回异常，本次暂时无法确认航班方案。"
     return "航班数据源已完成查询，但未找到可验证的航班方案。"
 
@@ -1100,6 +1241,7 @@ def _build_dynamic_flight_plans(
     max_airport_pairs: int = 2,
     max_plans: int = 2,
 ) -> list[TravelPlan]:
+    del max_airport_pairs
     origin_airports = _dynamic_airport_candidates(route_nodes, origin_city)
     destination_airports = _dynamic_airport_candidates(route_nodes, destination_city)
     if not origin_airports or not destination_airports:
@@ -1107,69 +1249,88 @@ def _build_dynamic_flight_plans(
         return []
 
     plans: list[TravelPlan] = []
-    provider_outcomes: list[FlightProviderOutcome] = []
-    airport_pairs = [(origin_airport, destination_airport) for origin_airport in origin_airports for destination_airport in destination_airports][:max_airport_pairs]
-    for pair_index, (origin_airport, destination_airport) in enumerate(airport_pairs, start=1):
-        origin_iata = airport_iata_for_candidate(origin_airport)
-        destination_iata = airport_iata_for_candidate(destination_airport)
-        if not origin_iata or not destination_iata:
-            continue
-        result = search_flight_offers_with_enabled_provider_result(
-            FlightSearchRequest(
-                origin_iata=origin_iata,
-                destination_iata=destination_iata,
-                departure_date=day,
-                origin_city_name=origin_airport.city_name,
-                destination_city_name=destination_airport.city_name,
-                adults=1,
-                currency_code="CNY",
-                max_results=max_plans,
-                non_stop=None,
-            )
+    scope = _flight_search_scope(
+        origin_city=origin_city,
+        destination_city=destination_city,
+        origin_airports=origin_airports,
+        destination_airports=destination_airports,
+        departure_date=day,
+        max_results=max_plans,
+    )
+    if scope is None:
+        collector.add_missing("flight_airport_candidates")
+        return []
+    result = search_flight_offers_with_enabled_provider_result(scope)
+    provider_outcomes = _legacy_flight_outcomes(result)
+    _record_flight_provider_outcomes(
+        collector,
+        provider_outcomes,
+        route_label=f"{scope.origin_city_code}->{scope.destination_city_code}",
+    )
+    preferred_candidates = [*origin_airports, *destination_airports]
+    for offer_index, offer in enumerate(result.offers[:max_plans], start=1):
+        actual_airports = _actual_airports_for_offer(
+            offer,
+            origin_city=origin_city,
+            destination_city=destination_city,
+            preferred_candidates=preferred_candidates,
         )
-        result_outcomes = _legacy_flight_outcomes(result)
-        provider_outcomes.extend(result_outcomes)
-        _record_flight_provider_outcomes(
-            collector,
-            result_outcomes,
-            route_label=f"{origin_iata}->{destination_iata}",
-        )
-        if not result.offers:
+        if actual_airports is None:
             continue
-        for offer_index, offer in enumerate(result.offers[: max(1, max_plans - len(plans))], start=1):
-            flight_segments = _flight_segments_from_offer(
-                segment_prefix=f"seg_flight_dynamic_{len(plans) + 1}",
+        flight_segments = _flight_segments_from_offer(
+            segment_prefix=f"seg_flight_dynamic_{len(plans) + 1}",
+            offer=offer,
+            actual_airports=actual_airports,
+        )
+        if not flight_segments:
+            continue
+        plan_index = len(plans) + 1
+        is_transfer = len(flight_segments) > 1
+        first_airport = actual_airports[offer.segments[0].origin_iata.upper()]
+        last_airport = actual_airports[offer.segments[-1].destination_iata.upper()]
+        try:
+            flight_journey = _flight_journey_segments(
+                flight_segments=flight_segments,
                 offer=offer,
-                day=day,
-                origin_airport_name=origin_airport.airport_name,
-                destination_airport_name=destination_airport.airport_name,
+                actual_airports=actual_airports,
+                taxi=taxi,
+                segment_prefix=f"seg_flight_dynamic_{plan_index}",
             )
-            if not flight_segments:
+            if flight_journey is None:
                 continue
-            plan_index = len(plans) + 1
-            is_transfer = len(flight_segments) > 1
-            try:
-                segments = [
-                    taxi(f"seg_origin_airport_dynamic_{plan_index}", origin_text, origin_airport.airport_name, 52, 11800),
-                    *flight_segments,
-                    taxi(f"seg_airport_dest_dynamic_{plan_index}", destination_airport.airport_name, destination_text, 54, 13600),
-                ]
-            except LocalTransferUnavailable:
-                continue
-            plans.append(
-                _plan(
-                    f"plan_flight_dynamic_{plan_index}",
-                    f"Dynamic flight {flight_segments[0].flight_number}",
-                    PlanType.TRANSFER_FLIGHT if is_transfer else PlanType.DIRECT_FLIGHT,
-                    segments,
-                    7.8 if pair_index == 1 and offer_index == 1 else 7.4,
-                    RiskLevel.MEDIUM if is_transfer else RiskLevel.LOW,
-                    "Verified flight provider offer",
-                    "Flight times and fare come from the enabled flight provider; local transfers use verified map routes only.",
-                )
+            segments = [
+                taxi(
+                    f"seg_origin_airport_dynamic_{plan_index}",
+                    origin_text,
+                    first_airport.airport_name,
+                    52,
+                    11800,
+                ),
+                *flight_journey,
+                taxi(
+                    f"seg_airport_dest_dynamic_{plan_index}",
+                    last_airport.airport_name,
+                    destination_text,
+                    54,
+                    13600,
+                ),
+            ]
+        except LocalTransferUnavailable:
+            continue
+        plans.append(
+            _plan(
+                f"plan_flight_dynamic_{plan_index}",
+                f"Dynamic flight {flight_segments[0].flight_number}",
+                PlanType.TRANSFER_FLIGHT if is_transfer else PlanType.DIRECT_FLIGHT,
+                segments,
+                7.8 if offer_index == 1 else 7.4,
+                RiskLevel.MEDIUM if is_transfer else RiskLevel.LOW,
+                "Verified flight provider offer",
+                "Flight times and fare come from the enabled flight provider; local transfers use verified map routes only.",
             )
-            if len(plans) >= max_plans:
-                return plans
+        )
+        if len(plans) >= max_plans:
+            return plans
 
     if not plans and any(outcome.status != "VERIFIED" for outcome in provider_outcomes):
         collector.add_missing("flight_core_fact")
@@ -1473,6 +1634,35 @@ def _build_dynamic_flight_rail_mixed_plans(
     plans: list[TravelPlan] = []
     failure_messages: list[str] = []
     rail_rate_limited = False
+    flight_search_cache: dict[tuple[str, str], FlightProviderSearchResult] = {}
+
+    def cached_flight_search(
+        search_origin_city: str,
+        search_destination_city: str,
+        search_origin_airports: list[AirportCandidate],
+        search_destination_airports: list[AirportCandidate],
+    ) -> FlightProviderSearchResult:
+        cache_key = (search_origin_city, search_destination_city)
+        if cache_key not in flight_search_cache:
+            scope = _flight_search_scope(
+                origin_city=search_origin_city,
+                destination_city=search_destination_city,
+                origin_airports=search_origin_airports,
+                destination_airports=search_destination_airports,
+                departure_date=day,
+                max_results=2,
+            )
+            flight_search_cache[cache_key] = (
+                search_flight_offers_with_enabled_provider_result(scope)
+                if scope is not None
+                else FlightProviderSearchResult(
+                    offers=[],
+                    attempted_source_ids=[],
+                    failure_message="canonical flight airport scope is unavailable",
+                )
+            )
+        return flight_search_cache[cache_key]
+
     logger.info(
         "rail_mixed_planner_start request_id=%s origin_station_count=%s destination_station_count=%s origin_airport_count=%s destination_airport_count=%s transfer_station_count=%s",
         travel_request.request_id,
@@ -1498,18 +1688,11 @@ def _build_dynamic_flight_rail_mixed_plans(
                     hub_iata = airport_iata_for_candidate(hub_airport)
                     if not origin_iata or not hub_iata:
                         continue
-                    flight_result = search_flight_offers_with_enabled_provider_result(
-                        FlightSearchRequest(
-                            origin_iata=origin_iata,
-                            destination_iata=hub_iata,
-                            departure_date=day,
-                            origin_city_name=origin_airport.city_name,
-                            destination_city_name=hub_airport.city_name,
-                            adults=1,
-                            currency_code="CNY",
-                            max_results=2,
-                            non_stop=None,
-                        )
+                    flight_result = cached_flight_search(
+                        origin_city,
+                        transfer_station.city_name,
+                        origin_airports,
+                        hub_airports,
                     )
                     _record_flight_provider_outcomes(
                         collector,
@@ -1532,21 +1715,43 @@ def _build_dynamic_flight_rail_mixed_plans(
                             rail_rate_limited = True
                             break
                         continue
+                    flight_offer = flight_result.offers[0]
+                    actual_airports = _actual_airports_for_offer(
+                        flight_offer,
+                        origin_city=origin_airport.city_name,
+                        destination_city=hub_airport.city_name,
+                        preferred_candidates=[origin_airport, hub_airport],
+                    )
+                    if actual_airports is None:
+                        continue
                     flight_segments = _flight_segments_from_offer(
                         segment_prefix=f"seg_mixed_flight_first_{len(plans) + 1}",
-                        offer=flight_result.offers[0],
-                        day=day,
-                        origin_airport_name=origin_airport.airport_name,
-                        destination_airport_name=hub_airport.airport_name,
+                        offer=flight_offer,
+                        actual_airports=actual_airports,
                     )
                     rail_segment = _rail_segment_from_offer(f"seg_mixed_rail_second_{len(plans) + 1}", rail_result.offers[0])
                     if flight_segments and _has_connection(flight_segments[-1], rail_segment, 90):
                         plan_index = len(plans) + 1
                         try:
+                            flight_journey = _flight_journey_segments(
+                                flight_segments=flight_segments,
+                                offer=flight_offer,
+                                actual_airports=actual_airports,
+                                taxi=taxi,
+                                segment_prefix=f"seg_mixed_flight_first_{plan_index}",
+                            )
+                            if flight_journey is None:
+                                continue
+                            first_airport = actual_airports[
+                                flight_offer.segments[0].origin_iata.upper()
+                            ]
+                            last_airport = actual_airports[
+                                flight_offer.segments[-1].destination_iata.upper()
+                            ]
                             segments = [
-                                taxi(f"seg_mixed_origin_airport_{plan_index}", origin_text, origin_airport.airport_name, 52, 11800),
-                                *flight_segments,
-                                taxi(f"seg_mixed_airport_station_{plan_index}", hub_airport.airport_name, transfer_station.station_name, 50, 9000),
+                                taxi(f"seg_mixed_origin_airport_{plan_index}", origin_text, first_airport.airport_name, 52, 11800),
+                                *flight_journey,
+                                taxi(f"seg_mixed_airport_station_{plan_index}", last_airport.airport_name, transfer_station.station_name, 50, 9000),
                                 rail_segment,
                                 taxi(f"seg_mixed_station_dest_{plan_index}", rail_segment.destination_station, destination_text, 32, 6200),
                             ]
@@ -1591,18 +1796,11 @@ def _build_dynamic_flight_rail_mixed_plans(
                     rail_result = search_rail_offers_with_enabled_provider_result(
                         RailSearchRequest(train_number="", origin_station=origin_station, destination_station=transfer_station.station_name, departure_date=day)
                     )
-                    flight_result = search_flight_offers_with_enabled_provider_result(
-                        FlightSearchRequest(
-                            origin_iata=hub_iata,
-                            destination_iata=destination_iata,
-                            departure_date=day,
-                            origin_city_name=hub_airport.city_name,
-                            destination_city_name=destination_airport.city_name,
-                            adults=1,
-                            currency_code="CNY",
-                            max_results=2,
-                            non_stop=None,
-                        )
+                    flight_result = cached_flight_search(
+                        transfer_station.city_name,
+                        destination_city,
+                        hub_airports,
+                        destination_airports,
                     )
                     _record_flight_provider_outcomes(
                         collector,
@@ -1623,22 +1821,44 @@ def _build_dynamic_flight_rail_mixed_plans(
                             break
                         continue
                     rail_segment = _rail_segment_from_offer(f"seg_mixed_rail_first_{len(plans) + 1}", rail_result.offers[0])
+                    flight_offer = flight_result.offers[0]
+                    actual_airports = _actual_airports_for_offer(
+                        flight_offer,
+                        origin_city=hub_airport.city_name,
+                        destination_city=destination_airport.city_name,
+                        preferred_candidates=[hub_airport, destination_airport],
+                    )
+                    if actual_airports is None:
+                        continue
                     flight_segments = _flight_segments_from_offer(
                         segment_prefix=f"seg_mixed_flight_second_{len(plans) + 1}",
-                        offer=flight_result.offers[0],
-                        day=day,
-                        origin_airport_name=hub_airport.airport_name,
-                        destination_airport_name=destination_airport.airport_name,
+                        offer=flight_offer,
+                        actual_airports=actual_airports,
                     )
                     if flight_segments and _has_connection(rail_segment, flight_segments[0], 120):
                         plan_index = len(plans) + 1
                         try:
+                            flight_journey = _flight_journey_segments(
+                                flight_segments=flight_segments,
+                                offer=flight_offer,
+                                actual_airports=actual_airports,
+                                taxi=taxi,
+                                segment_prefix=f"seg_mixed_flight_second_{plan_index}",
+                            )
+                            if flight_journey is None:
+                                continue
+                            first_airport = actual_airports[
+                                flight_offer.segments[0].origin_iata.upper()
+                            ]
+                            last_airport = actual_airports[
+                                flight_offer.segments[-1].destination_iata.upper()
+                            ]
                             segments = [
                                 taxi(f"seg_mixed_origin_station_{plan_index}", origin_text, rail_segment.origin_station, 38, 7800),
                                 rail_segment,
-                                taxi(f"seg_mixed_station_airport_{plan_index}", transfer_station.station_name, hub_airport.airport_name, 50, 9000),
-                                *flight_segments,
-                                taxi(f"seg_mixed_airport_dest_{plan_index}", destination_airport.airport_name, destination_text, 54, 13600),
+                                taxi(f"seg_mixed_station_airport_{plan_index}", transfer_station.station_name, first_airport.airport_name, 50, 9000),
+                                *flight_journey,
+                                taxi(f"seg_mixed_airport_dest_{plan_index}", last_airport.airport_name, destination_text, 54, 13600),
                             ]
                         except LocalTransferUnavailable:
                             continue

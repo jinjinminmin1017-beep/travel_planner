@@ -36,6 +36,7 @@ MU_BROWSER_SOURCE_ID = "airline_mu_browser_query"
 
 class BrowserAirlineFlightProvider:
     source_name = "China Eastern Official Browser Flight Query"
+    query_scope: Literal["AIRPORT"] = "AIRPORT"
 
     def __init__(
         self,
@@ -57,6 +58,7 @@ class BrowserAirlineFlightProvider:
         self.snapshot_sqlite_path = Path(snapshot_sqlite_path)
 
     def search_offers(self, request: FlightSearchRequest) -> list[FlightOffer]:
+        request = request.for_query_scope(self.query_scope)
         if request.currency_code.upper() != "CNY":
             raise FlightProviderError(f"{self.source_id} currently supports CNY only")
         cache_key = _cache_key(self.source_id, request)
