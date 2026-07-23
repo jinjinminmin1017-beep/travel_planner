@@ -53,11 +53,11 @@
 - 东航单机场结果页已于 2026-07-19 在真实浏览器确认，默认模板为 `https://www.ceair.com/zh/cny/shopping/oneway/{origin_iata}-{destination_iata}/{departure_date}`；覆盖值仍受 HTTPS 与 `ceair.com` host allowlist 约束。
 - worker 以航司为粒度串行执行；相同查询在途合并，成功结果缓存 60-180 秒，连续失败触发短期熔断。页面失效只重建 page，context 异常只重建该航司会话；Chromium 断开后下一次查询重建浏览器与全部会话，并通过健康接口暴露分级重建计数。
 - 东航业务响应与页面结果卡并行作为完成信号；DOM 路径再次核对结果页路线和日期，强制确认“现金-含税”，只映射官网公开展示的 MU/FM 航班、时刻和可用舱价。响应/DOM 结构、税费口径、挑战页或路线不一致均 fail-closed。
-- worker 总超时会中止后续业务响应等待与 DOM 解析；已被底层浏览器接收的导航可能自然结束，但不再进入结果转换。官方 host 的 403/418/429/503 文档、XHR 或 fetch 响应会被保留为非持久化的当前请求风险信号，用于返回稳定挑战错误。
+- worker 总超时会中止后续业务响应等待与 DOM 解析；已被底层浏览器接收的导航可能自然结束，但不再进入结果转换。目标要求（待实现）：官方 host 的 403/418/429/503 文档、XHR 或 fetch 响应必须在业务判断前写入完整脱敏交换证据，再返回稳定挑战错误；不得只保留非持久化的当前请求信号。
 - `/health` 保留全局计数，同时按 `source_id` 输出搜索/成功/空结果/挑战/缓存/去重/超时/解析/熔断计数、对应比率和最多 200 个样本的 cold/warm P50/P95/P99；不包含 URL、响应正文、Cookie、Token 或设备材料。
 - worker 只返回规范化的航班号、机场、带时区时刻、整数最小货币单位舱价、可售状态、阶段耗时和非敏感 evidence ID。验证码、WAF、限流、超时、密文和结构变化返回稳定错误，不得作为成功空结果。
 - Python `BrowserAirlineFlightProvider` 继续使用现有进程缓存、SQLite 脱敏快照、规范化 offer 持久化和 Planner 降级语义。worker 返回的路线、日期、金额、舱位和时区必须再次校验后才能成为 `FlightOffer`。
-- 日志和 `/health` 指标只包含 source_id、航线、日期、队列/导航/响应/解析耗时、结果数量、缓存/合并/挑战/超时计数；不记录原始响应、Cookie、Token、设备指纹、完整 POST body 或请求头。
+- 普通文本日志和 `/health` 指标只包含 source_id、航线、日期、队列/导航/响应/解析耗时、结果数量、缓存/合并/挑战/超时计数。目标日志边界（待实现）：完整请求/响应另存到受控证据库，保留全部非敏感字段和正文；Cookie、Token、设备指纹、动态签名等值必须确定性脱敏并留下字段名、长度和不可逆关联指纹，禁止明文落盘。
 - 当前状态：结果页模板、含税 DOM、独立 Edge Chromium 进程与 loopback API 已完成真实查询验证；取消、分级恢复和指标测试已完成。首批低频 benchmark 为前 5 次成功、随后 3 次超时并触发熔断；第二批按 10 秒额外间隔仍连续 3 次超时并自动停止，可见浏览器的同一页面也无法在 30 秒内完成。尚未完成 50 次且未达到 95% 成功率；官方条款未提供自动化与数据复用授权，因此保持 `PENDING_REVIEW + ENABLED=false`，Phase 2 不得越过门禁启动。
 
 ## LLM Prompt 架构边界
@@ -687,3 +687,141 @@ TravelRequest
 - 前端交通方式入口使用独立功能开关；关闭后恢复现有推荐槽与候选列表，不改变 `plans` 数据。
 - 后端逐来源 outcome 若需回滚，只回滚聚合实现；不得恢复虚构航班、静默 fallback 或把失败宣称为空结果。
 - `PARTIAL` 状态修正可独立回滚，但回滚期间仍必须保留航班失败说明，避免再次静默缺失。
+
+## 航班 Provider 完整交换证据日志（目标设计，待实现）
+
+### 当前问题
+
+- 当前 `save_flight_raw_snapshot()` 只在 HTTP 风险检查、HTTP 状态检查和部分业务码检查通过后执行。HTTP 429、403、5xx、业务错误码、非法 JSON、解析异常和网络异常不会形成响应快照。
+- 2026-07-20 春秋 `SHA -> WNZ` 只能从文本日志确认 HTTP 429，无法回看响应正文、完整响应头、响应长度、上游 request-id 或正文哈希，因此事后无法区分限流、WAF、无航线误码或上游策略变化。
+- 青岛航空同一任务返回 HTTP 200 + `code=0`，历史日志只保存“business code 0”。2026-07-22 重新查询才得到 `message=未查询到航班！`，证明只存归一化错误会丢失决定业务分类的关键证据。
+- 重新请求不是可靠审计方法：上游库存、风控、IP 状态、页面版本和时间都会变化，复现结果可能与原始请求不同。
+- “不记录敏感信息”与“不记录失败响应”不是同一要求。当前实现用丢弃证据规避敏感信息，安全但不可诊断，属于日志架构缺口。
+
+### 设计目标
+
+1. 每一次航班 Provider 外部交换都生成唯一 `exchange_id`，成功、空结果、4xx、5xx、业务错误、解析失败、超时和网络异常全部可追溯。
+2. 请求证据在发送前落初始记录；收到响应后，在任何风险、状态码、业务码或解析判断之前完成响应证据写入。
+3. 完整保存脱敏后的请求与响应，不截断响应正文；同时保存脱敏前后的长度与不可逆哈希，用于判断两次响应是否一致。
+4. 文本日志只写 `exchange_id` 和摘要；排查时通过 `exchange_id` 导出完整脱敏证据，避免把大正文写入滚动日志。
+5. Cookie、Authorization、Token、设备材料、动态签名和可能的个人信息不得明文落盘；脱敏不能删除字段本身，应保留字段路径、值类型、长度和 HMAC 指纹，便于比较是否变化。
+6. 证据持久化失败不得静默。配置为强制证据模式时，对应 Provider 结果必须 fail-closed，并返回 `FLIGHT_EVIDENCE_PERSISTENCE_FAILED`，避免使用无法审计的外部事实。
+
+### 两层日志模型
+
+#### 1. 普通结构化日志
+
+继续写入现有 backend log，只记录：
+
+- `exchange_id`、`request_id`、`trace_id`、`correlation_id`
+- `source_id`、阶段、航线、日期、attempt
+- HTTP 状态、业务 outcome、稳定错误码
+- 总耗时、响应字节数、响应正文哈希
+- 证据是否成功持久化
+
+不得写响应正文、完整 headers、Cookie 或 Token。
+
+#### 2. 完整脱敏交换证据库
+
+在 `logs/flight_harvest.sqlite3` 新增 additive 表 `flight_provider_exchanges`，旧 `flight_raw_snapshots` 保留只读兼容，不执行破坏性迁移。
+
+建议字段：
+
+```text
+exchange_id                 TEXT PRIMARY KEY
+request_id                  TEXT
+trace_id                    TEXT
+correlation_id              TEXT
+source_id                   TEXT NOT NULL
+stage                       TEXT NOT NULL
+attempt_number              INTEGER NOT NULL
+request_started_at          TEXT NOT NULL
+response_received_at        TEXT
+duration_ms                 INTEGER
+request_method              TEXT NOT NULL
+request_url_redacted        TEXT NOT NULL
+request_headers_redacted    TEXT NOT NULL
+request_body_redacted       BLOB
+request_body_sha256         TEXT
+response_status_code        INTEGER
+response_headers_redacted   TEXT
+response_body_redacted      BLOB
+response_body_sha256        TEXT
+response_content_type       TEXT
+response_content_length     INTEGER
+transport_outcome           TEXT NOT NULL
+business_code               TEXT
+business_message            TEXT
+parser_version              TEXT NOT NULL
+redaction_version           TEXT NOT NULL
+error_code                  TEXT
+retryable                   INTEGER NOT NULL
+evidence_completed          INTEGER NOT NULL
+created_at                  TEXT NOT NULL
+expires_at                  TEXT NOT NULL
+```
+
+- 请求/响应正文使用 gzip 或 zlib 压缩后存储，解压后必须是完整脱敏内容，不得因大小静默截断。
+- 为 `request_id`、`source_id + created_at`、`transport_outcome + created_at` 建索引。
+- URL 保留 scheme、host、path 和非敏感 query；敏感 query value 用脱敏占位与 HMAC 指纹替换。
+- JSON、表单、HTML 和纯文本使用不同脱敏器；未知 Content-Type 仍保存完整字节的哈希、长度，并将可安全解码内容按保守规则脱敏。
+
+### 写入顺序
+
+```text
+构造请求
+  -> 创建 exchange_id 并写入完整脱敏请求证据
+  -> 发送请求
+  -> 收到响应
+  -> 立即写入完整脱敏响应 headers/body/status/hash
+  -> 标记 evidence_completed=true
+  -> 执行 429/WAF/HTTP 状态判断
+  -> 执行业务码与 Empty 判断
+  -> 执行解析和事实校验
+  -> 回写最终 outcome/error_code/parser_version
+  -> 文本日志仅输出 exchange_id + 摘要
+```
+
+超时或连接失败时没有响应正文，但仍必须完成该 exchange：保存完整脱敏请求、异常类型、阶段、耗时和 `response_received_at=null`。
+
+### 脱敏与完整性的边界
+
+- “完整”指协议交换中所有字段、层级和非敏感值均保留；不是把凭证和个人信息明文复制进日志。
+- 敏感值替换格式至少包含 `redacted=true`、原始类型、原始长度和 `HMAC-SHA256` 指纹。HMAC key 从部署 Secret 注入，不写入 SQLite、文本日志或仓库。
+- 同时保存整个原始 request/response body 的 SHA-256；它只能用于一致性判断，不能用于恢复正文。
+- 脱敏器必须版本化；导出证据时包含 `redaction_version` 和 `parser_version`，避免规则升级后无法解释历史结果。
+- 响应正文即使是验证码页、WAF 页或 429 提示，也要在脱敏后完整保存；不得把“风险响应”当成无需证据的例外。
+- 证据库文件继续位于忽略提交的 `logs/`；生产环境必须限制文件权限、禁止通过公开 API 下载，并配置备份和删除策略。
+
+### 保留与导出
+
+- 完整脱敏交换默认保留 90 天，失败、限流、挑战、解析错误至少保留 180 天；配置可延长，不得低于问题追踪周期。
+- 增加内部 CLI：`scripts/export_flight_exchange.py --exchange-id <id>`，只导出脱敏 JSON/正文及哈希，不导出任何 Secret。
+- 清理任务按 `expires_at` 删除，并记录删除数量、最老/最新时间；不得在一次无界事务中清空整个数据库。
+- 相同查询的重试必须生成新的 `exchange_id`，并通过 `request_id/correlation_id` 关联，禁止覆盖旧证据。
+
+### 影响范围与文件修改范围
+
+- 新增 `backend/app/data_sources/flight_evidence_store.py`：交换模型、SQLite 持久化、压缩、索引、保留清理和导出读取。
+- 新增或扩展统一脱敏模块，避免每个航司各写一套正则。
+- 修改 `flight_providers.py`、`browser_worker_client.py` 与 worker handler，在业务判断前调用证据记录器。
+- 修改 `provider_registry.py` 和类型化 settings，注入证据后端、路径、强制模式和保留期限。
+- 更新 `.env.example`，只增加非敏感配置；HMAC key 只写变量名和生成说明，不写真实值。
+- 新增 `scripts/export_flight_exchange.py` 和证据清理命令。
+- 数据库为 additive 内部迁移；不修改外部 API schema，不需要前端同步。
+- 测试覆盖所有 HTTP/业务/解析/超时分支、脱敏、完整性哈希、并发写入、保留清理和持久化失败。
+
+### 风险与控制
+
+- 数据库快速增长：正文压缩、索引、分级保留和增量清理；不得通过截断失败正文解决容量问题。
+- 敏感值漏记：字段名黑名单、结构化递归脱敏、非 JSON 回退规则、敏感样本测试和导出二次扫描。
+- 脱敏过度导致证据不可用：保留字段路径、类型、长度和 HMAC 指纹；业务 message、状态码、响应结构和非敏感正文必须保留。
+- 证据写入拖慢规划：写入在 Provider I/O 边界同步完成以保证顺序，正文压缩和 SQLite 写入设置明确超时；后续可使用有界队列，但在强制模式下必须等待持久化确认。
+- SQLite 并发锁：使用短事务、WAL、busy timeout 和单独 evidence store；禁止把远程请求放进数据库事务。
+- 日志导出造成泄露：CLI 仅限本机受控执行，导出再次脱敏并写审计记录，不新增公开下载 API。
+
+### 回滚方式
+
+- 通过配置关闭新的 evidence store 时，Provider 必须回到明确的“证据不可用”状态；生产强制模式不得静默使用旧的成功-only 快照路径。
+- 回滚实现时保留已创建的新表，不删除历史交换；旧代码可以忽略该表。
+- 回滚不能恢复“先判断、失败即丢弃响应”的顺序。若新 store 暂不可用，至少保留同步的完整脱敏文件证据后再继续处理。
