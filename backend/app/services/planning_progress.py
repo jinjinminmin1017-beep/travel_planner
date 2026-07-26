@@ -6,6 +6,14 @@ from typing import Protocol
 from app.models.schemas import TravelPlan
 
 
+@dataclass
+class PlanningExecutionMetrics:
+    route_cache_hits: int = 0
+    route_cache_misses: int = 0
+    location_cache_hits: int = 0
+    location_cache_misses: int = 0
+
+
 @dataclass(frozen=True)
 class PlanningProgressUpdate:
     """Domain-only progressive result emitted after normal candidate safety gates."""
@@ -23,4 +31,3 @@ class PlanningProgressSink(Protocol):
 class NoOpPlanningProgressSink:
     def publish(self, update: PlanningProgressUpdate) -> None:
         del update
-

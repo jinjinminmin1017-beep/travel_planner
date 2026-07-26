@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import logging
 import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime, time, timedelta, timezone
+from threading import RLock
+from typing import Callable
 from uuid import uuid4
 
 from app.core.context import RequestContext
@@ -66,7 +69,14 @@ from app.services.constraints.relaxation_selector import build_constraint_analys
 from app.services.destination_assets import resolve_destination_presentation
 from app.services.flight_planning_engine import FlightPlanSpec
 from app.services.intent_parser import parse_travel_request
-from app.services.local_transfer_engine import LocalTransferUnavailable, build_local_transfer_segment
+from app.services.local_transfer_engine import (
+    LocalTransferUnavailable,
+    PlanningLocationResolverCache,
+    PlanningRouteEstimatorCache,
+    RouteEstimator,
+    LocationPointResolver,
+    build_local_transfer_segment,
+)
 from app.services.location_resolver import (
     airport_candidate_for_iata,
     airport_candidates_for_city,
@@ -76,7 +86,7 @@ from app.services.location_resolver import (
     transfer_station_candidates_between,
 )
 from app.services.planning_rules import assert_option_available
-from app.services.planning_progress import NoOpPlanningProgressSink, PlanningProgressSink, PlanningProgressUpdate
+from app.services.planning_progress import NoOpPlanningProgressSink, PlanningExecutionMetrics, PlanningProgressSink, PlanningProgressUpdate
 from app.services.rail_connection_matcher import (
     RailConnectionCandidate,
     RailConnectionMetrics,
@@ -131,20 +141,24 @@ class PlanningIssueCollector:
     failures: list[SourceFailure] = field(default_factory=list)
     missing_components: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    _lock: RLock = field(default_factory=RLock, init=False, repr=False)
 
     def add_missing(self, component: str) -> None:
-        if component not in self.missing_components:
-            self.missing_components.append(component)
+        with self._lock:
+            if component not in self.missing_components:
+                self.missing_components.append(component)
 
     def add_warning(self, warning: str) -> None:
-        if warning not in self.warnings:
-            self.warnings.append(warning)
+        with self._lock:
+            if warning not in self.warnings:
+                self.warnings.append(warning)
 
     def has_rail_rate_limit(self) -> bool:
-        return any(
-            failure.source_id == "rail_12306_public_query" and failure.error_code == "RAIL_PROVIDER_RATE_LIMITED"
-            for failure in self.failures
-        )
+        with self._lock:
+            return any(
+                failure.source_id == "rail_12306_public_query" and failure.error_code == "RAIL_PROVIDER_RATE_LIMITED"
+                for failure in self.failures
+            )
 
     def add_source_failure(
         self,
@@ -162,15 +176,16 @@ class PlanningIssueCollector:
         fallback_reason: str | None,
         fallback_used: bool,
     ) -> None:
-        if any(
-            failure.source_id == source_id
-            and failure.error_code == error_code
-            and failure.message == message
-            for failure in self.failures
-        ):
-            return
-        self.failures.append(
-            SourceFailure(
+        with self._lock:
+            if any(
+                failure.source_id == source_id
+                and failure.error_code == error_code
+                and failure.message == message
+                for failure in self.failures
+            ):
+                return
+            self.failures.append(
+                SourceFailure(
                 failure_id=f"fail_{uuid4().hex[:8]}",
                 request_id=self.travel_request.request_id,
                 trace_id="trace_pending",
@@ -190,8 +205,8 @@ class PlanningIssueCollector:
                 impacted_plan_types=impacted_plan_types,
                 user_visible_message=user_visible_message,
                 occurred_at=now_timepoint(),
+                )
             )
-        )
 
 
 @dataclass(frozen=True)
@@ -203,7 +218,17 @@ class RailConnectionBatch:
     metrics: RailConnectionMetrics
 
 
-def _taxi(segment_id: str, origin: str, destination: str, minutes: int, cost_minor: int, option_id: str = "transfer_taxi", collector: PlanningIssueCollector | None = None) -> LocalTransferSegment:
+def _taxi(
+    segment_id: str,
+    origin: str,
+    destination: str,
+    minutes: int,
+    cost_minor: int,
+    option_id: str = "transfer_taxi",
+    collector: PlanningIssueCollector | None = None,
+    route_estimator: RouteEstimator = estimate_route_with_enabled_provider_result,
+    location_resolver: LocationPointResolver | None = None,
+) -> LocalTransferSegment:
     return build_local_transfer_segment(
         segment_id=segment_id,
         origin=origin,
@@ -211,7 +236,8 @@ def _taxi(segment_id: str, origin: str, destination: str, minutes: int, cost_min
         default_minutes=minutes,
         default_cost_minor=cost_minor,
         selected_option_id=option_id,
-        route_estimator=estimate_route_with_enabled_provider_result,
+        route_estimator=route_estimator,
+        location_resolver=location_resolver,
         issue_sink=collector,
     )
 
@@ -2072,15 +2098,28 @@ def _publish_safe_progress(
 def build_plans(
     travel_request: TravelRequest,
     progress_sink: PlanningProgressSink | None = None,
+    execution_metrics: PlanningExecutionMetrics | None = None,
 ) -> tuple[list[TravelPlan], list[SourceFailure], list[str], list[PlanType], list[MissingPlanExplanation], list[str]]:
     progress_sink = progress_sink or NoOpPlanningProgressSink()
     day = travel_request.travel_date
     origin = travel_request.origin_text
     destination = travel_request.destination_text
     collector = PlanningIssueCollector(travel_request)
+    route_estimator_cache = PlanningRouteEstimatorCache(estimate_route_with_enabled_provider_result)
+    location_resolver_cache = PlanningLocationResolverCache()
 
     def taxi(segment_id: str, origin: str, destination: str, minutes: int, cost_minor: int, option_id: str = "transfer_taxi") -> LocalTransferSegment:
-        return _taxi(segment_id, origin, destination, minutes, cost_minor, option_id=option_id, collector=collector)
+        return _taxi(
+            segment_id,
+            origin,
+            destination,
+            minutes,
+            cost_minor,
+            option_id=option_id,
+            collector=collector,
+            route_estimator=route_estimator_cache,
+            location_resolver=location_resolver_cache,
+        )
 
     route_nodes = planning_nodes_for_request(origin, destination)
     origin_city = resolve_location_city(origin) or ""
@@ -2102,8 +2141,8 @@ def build_plans(
         day.isoformat(),
     )
 
-    dynamic_rail_plans = (
-        _build_dynamic_direct_rail_plans(
+    def build_direct_rail() -> list[TravelPlan]:
+        return _build_dynamic_direct_rail_plans(
             travel_request=travel_request,
             route_nodes=route_nodes,
             day=day,
@@ -2114,12 +2153,9 @@ def build_plans(
             taxi=taxi,
             collector=collector,
         )
-        if TransportMode.RAIL in generation_modes
-        else []
-    )
-    _publish_safe_progress(progress_sink, dynamic_rail_plans, travel_request, 65, "RAIL_READY")
-    dynamic_flight_plans = (
-        _build_dynamic_flight_plans(
+
+    def build_direct_flight() -> list[TravelPlan]:
+        return _build_dynamic_flight_plans(
             travel_request=travel_request,
             route_nodes=route_nodes,
             day=day,
@@ -2130,10 +2166,47 @@ def build_plans(
             taxi=taxi,
             collector=collector,
         )
-        if TransportMode.FLIGHT in generation_modes
-        else []
-    )
-    _publish_safe_progress(progress_sink, [*dynamic_rail_plans, *dynamic_flight_plans], travel_request, 78, "DIRECT_MODES_READY")
+
+    dynamic_rail_plans: list[TravelPlan] = []
+    dynamic_flight_plans: list[TravelPlan] = []
+    direct_builders: dict[str, Callable[[], list[TravelPlan]]] = {}
+    if TransportMode.RAIL in generation_modes:
+        direct_builders["RAIL"] = build_direct_rail
+    if TransportMode.FLIGHT in generation_modes:
+        direct_builders["FLIGHT"] = build_direct_flight
+    parallel_enabled = os.getenv("TRAVEL_PROVIDER_FAMILY_PARALLEL_ENABLED", "true").strip().lower() not in {"0", "false", "no", "off"}
+    if parallel_enabled and len(direct_builders) > 1:
+        with ThreadPoolExecutor(max_workers=2, thread_name_prefix="planning-provider-family") as executor:
+            futures = {executor.submit(builder): mode for mode, builder in direct_builders.items()}
+            completed_count = 0
+            for future in as_completed(futures):
+                mode = futures[future]
+                family_plans = future.result()
+                if mode == "RAIL":
+                    dynamic_rail_plans = family_plans
+                else:
+                    dynamic_flight_plans = family_plans
+                completed_count += 1
+                _publish_safe_progress(
+                    progress_sink,
+                    [*dynamic_rail_plans, *dynamic_flight_plans],
+                    travel_request,
+                    65 if completed_count == 1 else 78,
+                    f"{mode}_READY",
+                )
+    else:
+        if "RAIL" in direct_builders:
+            dynamic_rail_plans = build_direct_rail()
+            _publish_safe_progress(progress_sink, dynamic_rail_plans, travel_request, 65, "RAIL_READY")
+        if "FLIGHT" in direct_builders:
+            dynamic_flight_plans = build_direct_flight()
+            _publish_safe_progress(
+                progress_sink,
+                [*dynamic_rail_plans, *dynamic_flight_plans],
+                travel_request,
+                78,
+                "DIRECT_MODES_READY",
+            )
     dynamic_transfer_rail_plans = []
     if TransportMode.RAIL in generation_modes and not dynamic_rail_plans and not collector.has_rail_rate_limit():
         dynamic_transfer_rail_plans = _build_dynamic_transfer_rail_plans(
@@ -2182,6 +2255,11 @@ def build_plans(
             "MIXED_READY",
         )
     plans = [*dynamic_rail_plans, *dynamic_flight_plans, *dynamic_transfer_rail_plans, *dynamic_mixed_plans]
+    if execution_metrics is not None:
+        execution_metrics.route_cache_hits = route_estimator_cache.hits
+        execution_metrics.route_cache_misses = route_estimator_cache.misses
+        execution_metrics.location_cache_hits = location_resolver_cache.hits
+        execution_metrics.location_cache_misses = location_resolver_cache.misses
     logger.info(
         "rail_planning_flow_candidates request_id=%s direct_rail_count=%s transfer_rail_count=%s mixed_count=%s total_plan_count=%s rail_rate_limited=%s",
         travel_request.request_id,
@@ -2248,9 +2326,14 @@ def plan_trip(
     ctx: RequestContext,
     *,
     progress_sink: PlanningProgressSink | None = None,
+    execution_metrics: PlanningExecutionMetrics | None = None,
 ) -> TravelPlanResponse:
     travel_request = parse_travel_request(raw_or_request, ctx) if isinstance(raw_or_request, str) else raw_or_request
-    plans, failures, missing, blocked_types, explanations, warnings = build_plans(travel_request, progress_sink=progress_sink)
+    plans, failures, missing, blocked_types, explanations, warnings = build_plans(
+        travel_request,
+        progress_sink=progress_sink,
+        execution_metrics=execution_metrics,
+    )
     for failure in failures:
         failure.trace_id = ctx.trace_id
         failure.correlation_id = ctx.correlation_id

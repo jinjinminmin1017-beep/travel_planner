@@ -42,10 +42,10 @@ from app.models.schemas import (
     now_timepoint,
 )
 from app.services.intent_parser import IntentParserError, parse_travel_request_with_validation
-from app.services.observability import metrics_snapshot, record_app_event
+from app.services.observability import metrics_snapshot, record_app_event, record_async_planning_metrics
 from app.services.persistence import init_persistence
 from app.services.planner import plan_trip, recalculate_plan
-from app.services.planning_progress import NoOpPlanningProgressSink, PlanningProgressUpdate
+from app.services.planning_progress import NoOpPlanningProgressSink, PlanningExecutionMetrics, PlanningProgressUpdate
 from app.services.store import begin_async_job, get_async_job_by_idempotency, get_async_job_response, get_plan, get_recalculate_response, invalidate_async_job_generation, replace_response_snapshot, save_async_job_response, save_async_job_response_if_current, save_feedback, save_recalculate_response, save_response
 from app.services.task_queue import progressive_results_enabled
 
@@ -379,9 +379,12 @@ def _planning_job_response(
 
 
 class _AsyncJobProgressSink:
-    def __init__(self, job_id: str, generation: int) -> None:
+    def __init__(self, job_id: str, generation: int, started_at: float) -> None:
         self.job_id = job_id
         self.generation = generation
+        self.started_at = started_at
+        self.first_usable_plan_latency_ms: float | None = None
+        self.snapshot_count = 0
 
     def publish(self, update: PlanningProgressUpdate) -> None:
         current = get_async_job_response(self.job_id)
@@ -421,6 +424,9 @@ class _AsyncJobProgressSink:
             ).model_dump()
         )
         if save_async_job_response_if_current(snapshot, self.generation):
+            self.snapshot_count += 1
+            if self.first_usable_plan_latency_ms is None and snapshot.plans:
+                self.first_usable_plan_latency_ms = (perf_counter() - self.started_at) * 1000
             logger.info(
                 "planning_progress_snapshot job_id=%s request_id=%s stage=%s progress=%s plan_count=%s",
                 self.job_id,
@@ -432,6 +438,9 @@ class _AsyncJobProgressSink:
 
 
 def _complete_plan_job(job_id: str, travel_request: TravelRequest, ctx, created_at, generation: int) -> None:
+    started_at = perf_counter()
+    execution_metrics = PlanningExecutionMetrics()
+    progress_sink = _AsyncJobProgressSink(job_id, generation, started_at) if progressive_results_enabled() else NoOpPlanningProgressSink()
     current = get_async_job_response(job_id)
     if current and current.async_job and current.async_job.job_status == AsyncJobStatus.CANCELLED:
         return
@@ -450,8 +459,12 @@ def _complete_plan_job(job_id: str, travel_request: TravelRequest, ctx, created_
     if current and current.async_job and current.async_job.job_status == AsyncJobStatus.CANCELLED:
         return
     try:
-        progress_sink = _AsyncJobProgressSink(job_id, generation) if progressive_results_enabled() else NoOpPlanningProgressSink()
-        final = plan_trip(travel_request, ctx, progress_sink=progress_sink)
+        final = plan_trip(
+            travel_request,
+            ctx,
+            progress_sink=progress_sink,
+            execution_metrics=execution_metrics,
+        )
         if final.planning_status in {PlanningStatus.COMPLETE, PlanningStatus.NO_MATCH}:
             job_status = AsyncJobStatus.COMPLETE
         elif final.planning_status == PlanningStatus.FAILED:
@@ -466,6 +479,16 @@ def _complete_plan_job(job_id: str, travel_request: TravelRequest, ctx, created_
             polling_url=f"/api/travel/jobs/{job_id}",
         )
         save_async_job_response_if_current(final.model_copy(update={"async_job": final_job}), generation)
+        record_async_planning_metrics(
+            first_usable_plan_latency_ms=getattr(progress_sink, "first_usable_plan_latency_ms", None),
+            final_result_latency_ms=(perf_counter() - started_at) * 1000,
+            progressive_snapshot_count=getattr(progress_sink, "snapshot_count", 0),
+            deadline_outcome="NOT_CONFIGURED",
+            route_cache_hits=execution_metrics.route_cache_hits,
+            route_cache_misses=execution_metrics.route_cache_misses,
+            location_cache_hits=execution_metrics.location_cache_hits,
+            location_cache_misses=execution_metrics.location_cache_misses,
+        )
     except Exception:  # Background errors must become pollable business state.
         logger.exception(
             "planning_job_error job_id=%s request_id=%s trace_id=%s correlation_id=%s",
@@ -486,6 +509,16 @@ def _complete_plan_job(job_id: str, travel_request: TravelRequest, ctx, created_
         failed.missing_components.append("travel_plan")
         failed.user_visible_warnings = ["规划任务暂时失败，请稍后重试。"]
         save_async_job_response_if_current(failed, generation)
+        record_async_planning_metrics(
+            first_usable_plan_latency_ms=getattr(progress_sink, "first_usable_plan_latency_ms", None),
+            final_result_latency_ms=(perf_counter() - started_at) * 1000,
+            progressive_snapshot_count=getattr(progress_sink, "snapshot_count", 0),
+            deadline_outcome="ERROR",
+            route_cache_hits=execution_metrics.route_cache_hits,
+            route_cache_misses=execution_metrics.route_cache_misses,
+            location_cache_hits=execution_metrics.location_cache_hits,
+            location_cache_misses=execution_metrics.location_cache_misses,
+        )
 
 
 def _intent_parser_error_response(request: Request, exc: IntentParserError) -> JSONResponse:

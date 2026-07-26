@@ -1,10 +1,15 @@
 from dataclasses import dataclass, field
 
 from app.data_sources.map_providers import MapRouteEstimate, MapRouteProviderResult, data_source_metadata
-from app.models.schemas import PlanType, SourceFailure, TransportMode, money
+from app.models.schemas import GeoPoint, PlanType, SourceFailure, TransportMode, money
 import pytest
 
-from app.services.local_transfer_engine import LocalTransferUnavailable, build_local_transfer_segment
+from app.services.local_transfer_engine import (
+    LocalTransferUnavailable,
+    PlanningLocationResolverCache,
+    PlanningRouteEstimatorCache,
+    build_local_transfer_segment,
+)
 
 
 @dataclass
@@ -169,3 +174,43 @@ def test_invalid_bus_response_does_not_block_other_local_transfer_modes():
     assert sink.missing == []
     assert sink.warnings == []
     assert any(failure["error_code"] == "MAP_ROUTE_RESPONSE_INVALID" for failure in sink.failures)
+
+
+def test_planning_scope_caches_reuse_location_and_route_queries_for_identical_keys():
+    location_calls = 0
+    route_calls = 0
+
+    def resolve_location(query):
+        nonlocal location_calls
+        location_calls += 1
+        return GeoPoint(
+            name=query,
+            latitude=31.20 if "虹桥" in query else 31.23,
+            longitude=121.32 if "虹桥" in query else 121.47,
+        )
+
+    def estimate_route(request, environment=None):
+        nonlocal route_calls
+        route_calls += 1
+        return _estimate_for_mode(request, environment)
+
+    location_cache = PlanningLocationResolverCache(resolve_location)
+    route_cache = PlanningRouteEstimatorCache(estimate_route, provider_family="test-map-provider")
+    arguments = {
+        "origin": "上海虹桥站",
+        "destination": "上海站",
+        "default_minutes": 15,
+        "default_cost_minor": 3200,
+        "route_estimator": route_cache,
+        "location_resolver": location_cache,
+    }
+
+    build_local_transfer_segment(segment_id="seg_cache_a", **arguments)
+    build_local_transfer_segment(segment_id="seg_cache_b", **arguments)
+
+    assert location_calls == 2
+    assert route_calls == 4
+    assert location_cache.misses == 2
+    assert location_cache.hits == 2
+    assert route_cache.misses == 4
+    assert route_cache.hits == 4

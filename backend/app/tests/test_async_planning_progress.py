@@ -17,7 +17,7 @@ from app.models.schemas import (
     now_timepoint,
 )
 from app.services.planner import plan_trip
-from app.services.planning_progress import PlanningProgressUpdate
+from app.services.planning_progress import PlanningExecutionMetrics, PlanningProgressUpdate
 from app.services.store import (
     begin_async_job,
     get_async_job_response,
@@ -86,8 +86,14 @@ def test_planner_publishes_only_complete_candidate_safe_plans_before_final_recom
         idempotency_key=f"idem_{request_id}",
     )
     sink = _CollectingProgressSink()
+    execution_metrics = PlanningExecutionMetrics()
 
-    final = plan_trip(_request(request_id), context, progress_sink=sink)
+    final = plan_trip(
+        _request(request_id),
+        context,
+        progress_sink=sink,
+        execution_metrics=execution_metrics,
+    )
 
     assert sink.updates
     assert sink.updates[0].progress < final.progress
@@ -100,6 +106,10 @@ def test_planner_publishes_only_complete_candidate_safe_plans_before_final_recom
         for plan in update.plans
     )
     assert {plan.plan_id for plan in sink.updates[0].plans}.issubset({plan.plan_id for plan in final.plans})
+    assert execution_metrics.route_cache_misses > 0
+    assert execution_metrics.route_cache_hits > 0
+    assert execution_metrics.location_cache_misses > 0
+    assert execution_metrics.location_cache_hits > 0
 
 
 def test_generation_guard_rejects_lower_progress_and_cancelled_job_overwrite():

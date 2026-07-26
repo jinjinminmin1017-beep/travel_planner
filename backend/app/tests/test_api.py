@@ -58,6 +58,11 @@ def test_observability_metrics_are_read_only_and_aggregate_requests():
     assert body["counters"]["travel_requests"] >= 1
     assert "generated_at" in body
     assert isinstance(body["provider_failures"], dict)
+    assert set(body["planning_latency_ms"]) == {
+        "first_usable_plan_latency_ms",
+        "final_result_latency_ms",
+    }
+    assert isinstance(body["planning_deadline_outcomes"], dict)
 
 
 def test_security_middleware_adds_device_id_and_enforces_limits(monkeypatch):

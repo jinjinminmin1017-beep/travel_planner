@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter
+from threading import RLock
 from typing import Any
 
 from app.models.schemas import TravelPlanResponse, now_timepoint
@@ -9,6 +10,12 @@ _COUNTERS: Counter[str] = Counter()
 _PROVIDER_FAILURES: Counter[str] = Counter()
 _APP_EVENTS: Counter[str] = Counter()
 _APP_EVENT_LINKS: list[dict[str, Any]] = []
+_PLANNING_LATENCY_SAMPLES: dict[str, list[float]] = {
+    "first_usable_plan_latency_ms": [],
+    "final_result_latency_ms": [],
+}
+_PLANNING_DEADLINE_OUTCOMES: Counter[str] = Counter()
+_METRICS_LOCK = RLock()
 
 
 def record_travel_response(response: TravelPlanResponse) -> None:
@@ -38,13 +45,63 @@ def record_travel_response(response: TravelPlanResponse) -> None:
 
 
 def metrics_snapshot() -> dict[str, Any]:
+    with _METRICS_LOCK:
+        planning_latency = {
+            name: _summarize_samples(samples)
+            for name, samples in _PLANNING_LATENCY_SAMPLES.items()
+        }
+        deadline_outcomes = dict(_PLANNING_DEADLINE_OUTCOMES)
     return {
         "generated_at": now_timepoint().model_dump(mode="json"),
         "counters": dict(_COUNTERS),
         "provider_failures": dict(_PROVIDER_FAILURES),
         "app_events": dict(_APP_EVENTS),
         "app_event_links": list(_APP_EVENT_LINKS[-50:]),
+        "planning_latency_ms": planning_latency,
+        "planning_deadline_outcomes": deadline_outcomes,
     }
+
+
+def _summarize_samples(samples: list[float]) -> dict[str, float | int | None]:
+    if not samples:
+        return {"count": 0, "p50": None, "p95": None, "p99": None}
+    ordered = sorted(samples)
+
+    def percentile(ratio: float) -> float:
+        index = min(len(ordered) - 1, max(0, round((len(ordered) - 1) * ratio)))
+        return round(ordered[index], 1)
+
+    return {
+        "count": len(ordered),
+        "p50": percentile(0.50),
+        "p95": percentile(0.95),
+        "p99": percentile(0.99),
+    }
+
+
+def record_async_planning_metrics(
+    *,
+    first_usable_plan_latency_ms: float | None,
+    final_result_latency_ms: float,
+    progressive_snapshot_count: int,
+    deadline_outcome: str,
+    route_cache_hits: int,
+    route_cache_misses: int,
+    location_cache_hits: int,
+    location_cache_misses: int,
+) -> None:
+    with _METRICS_LOCK:
+        if first_usable_plan_latency_ms is not None:
+            _PLANNING_LATENCY_SAMPLES["first_usable_plan_latency_ms"].append(first_usable_plan_latency_ms)
+        _PLANNING_LATENCY_SAMPLES["final_result_latency_ms"].append(final_result_latency_ms)
+        for samples in _PLANNING_LATENCY_SAMPLES.values():
+            del samples[:-200]
+        _COUNTERS["planning_progress_snapshots"] += progressive_snapshot_count
+        _COUNTERS["planning_route_cache_hits"] += route_cache_hits
+        _COUNTERS["planning_route_cache_misses"] += route_cache_misses
+        _COUNTERS["planning_location_cache_hits"] += location_cache_hits
+        _COUNTERS["planning_location_cache_misses"] += location_cache_misses
+        _PLANNING_DEADLINE_OUTCOMES[deadline_outcome] += 1
 
 
 def record_app_event(

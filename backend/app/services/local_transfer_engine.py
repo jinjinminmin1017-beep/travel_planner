@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from concurrent.futures import Future
 from dataclasses import dataclass
+from threading import RLock
 from typing import Callable, Protocol
 
 from app.data_sources.map_providers import MapRouteEstimate, MapRouteProviderResult, MapRouteRequest
@@ -53,6 +55,76 @@ class LocalTransferUnavailable(RuntimeError):
 
 
 RouteEstimator = Callable[[MapRouteRequest, str | None], MapRouteProviderResult]
+LocationPointResolver = Callable[[str], LocationPointResolution | GeoPoint]
+
+
+class PlanningLocationResolverCache:
+    def __init__(self, resolver: LocationPointResolver | None = None) -> None:
+        self._resolver = resolver or resolve_location_point
+        self._lock = RLock()
+        self._futures: dict[str, Future[LocationPointResolution | GeoPoint]] = {}
+        self.hits = 0
+        self.misses = 0
+
+    def __call__(self, query: str) -> LocationPointResolution | GeoPoint:
+        key = " ".join(query.strip().casefold().split())
+        with self._lock:
+            future = self._futures.get(key)
+            owner = future is None
+            if owner:
+                future = Future()
+                self._futures[key] = future
+                self.misses += 1
+            else:
+                self.hits += 1
+        assert future is not None
+        if owner:
+            try:
+                future.set_result(self._resolver(query))
+            except BaseException as exc:
+                future.set_exception(exc)
+                raise
+        return future.result()
+
+
+class PlanningRouteEstimatorCache:
+    def __init__(self, estimator: RouteEstimator, provider_family: str = "enabled_map_provider_chain") -> None:
+        self._estimator = estimator
+        self._provider_family = provider_family
+        self._lock = RLock()
+        self._futures: dict[tuple[object, ...], Future[MapRouteProviderResult]] = {}
+        self.hits = 0
+        self.misses = 0
+
+    def __call__(self, request: MapRouteRequest, environment: str | None = None) -> MapRouteProviderResult:
+        key = (
+            round(request.origin.latitude, 6),
+            round(request.origin.longitude, 6),
+            round(request.destination.latitude, 6),
+            round(request.destination.longitude, 6),
+            request.mode.value,
+            request.origin_city or "",
+            request.destination_city or "",
+            self._provider_family,
+            environment or "",
+        )
+        with self._lock:
+            future = self._futures.get(key)
+            owner = future is None
+            if owner:
+                future = Future()
+                self._futures[key] = future
+                self.misses += 1
+            else:
+                self.hits += 1
+        assert future is not None
+        if owner:
+            try:
+                future.set_result(self._estimator(request, environment))
+            except BaseException as exc:
+                future.set_exception(exc)
+                raise
+        return future.result()
 
 
 @dataclass(frozen=True)
@@ -60,6 +132,7 @@ class TransferContext:
     origin: str
     destination: str
     route_estimator: RouteEstimator
+    location_resolver: LocationPointResolver = resolve_location_point
     issue_sink: LocalTransferIssueSink | None = None
 
     @property
@@ -83,12 +156,13 @@ def build_local_transfer_segment(
     default_cost_minor: int,
     selected_option_id: str = "transfer_taxi",
     route_estimator: RouteEstimator,
+    location_resolver: LocationPointResolver | None = None,
     issue_sink: LocalTransferIssueSink | None = None,
 ) -> LocalTransferSegment:
     # The legacy defaults remain in the call shape for compatibility, but are
     # intentionally not used: new responses may contain only provider facts.
     del default_minutes, default_cost_minor
-    context = TransferContext(origin, destination, route_estimator, issue_sink)
+    context = TransferContext(origin, destination, route_estimator, location_resolver or resolve_location_point, issue_sink)
     options = build_local_transfer_options(context)
     if not options:
         error_code = "MAP_TRANSFER_UNAVAILABLE"
@@ -117,8 +191,8 @@ def build_local_transfer_segment(
 
 
 def build_local_transfer_options(context: TransferContext) -> list[LocalTransferOption]:
-    origin = _coerce_location_resolution(resolve_location_point(context.origin), context.origin)
-    destination = _coerce_location_resolution(resolve_location_point(context.destination), context.destination)
+    origin = _coerce_location_resolution(context.location_resolver(context.origin), context.origin)
+    destination = _coerce_location_resolution(context.location_resolver(context.destination), context.destination)
     if not origin.point or not destination.point:
         _record_location_failure(context, origin, destination)
         return []
