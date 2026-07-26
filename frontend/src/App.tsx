@@ -17,6 +17,14 @@ import {
 import qingdaoHero from "../assets/destination-scenes/qingdao-pier.jpg";
 import { cancelPlanningJob, planTripAsync, pollPlanningJob, retryPlanningJob, trackEvent } from "./api/client";
 import { ui } from "./designSystem";
+import {
+  DEFAULT_OBSERVATION_WINDOW_MS,
+  derivePlanningPageState,
+  hasObservationWindowExpired,
+  isPlanningActive,
+  nextPollDelayMs,
+  type PlanningObservationState
+} from "./planning/planningState";
 import { PlanningProgressScreen } from "./components/planning/PlanningProgressScreen";
 import { ConstraintNoMatchScreen } from "./components/constraints/ConstraintNoMatchScreen";
 import { ResultsBottomAction } from "./components/results/ResultsBottomAction";
@@ -45,10 +53,10 @@ type ActiveTab = "input" | "results";
 type ResultsPane = "overview" | "details" | "sources";
 type TimeAnchor = "DEPARTURE" | "ARRIVAL";
 
-const POLL_INTERVAL_MS = 1200;
-const MAX_POLL_ATTEMPTS = 100;
-const ACTIVE_PLANNING_STATUSES = new Set(["PENDING", "RUNNING"]);
-const ACTIVE_JOB_STATUSES = new Set(["QUEUED", "RUNNING", "WAITING_SOURCE"]);
+const configuredObservationWindowMs = Number(process.env.EXPO_PUBLIC_PLANNING_OBSERVATION_WINDOW_MS);
+const OBSERVATION_WINDOW_MS = Number.isFinite(configuredObservationWindowMs) && configuredObservationWindowMs > 0
+  ? configuredObservationWindowMs
+  : DEFAULT_OBSERVATION_WINDOW_MS;
 const TRANSPORT_MODE_SELECTOR_ENABLED = process.env.EXPO_PUBLIC_TRANSPORT_MODE_SELECTOR_ENABLED?.trim().toLowerCase() !== "false";
 const HOUR_OPTIONS = Array.from({ length: 24 }, (_, index) => index);
 const MINUTE_OPTIONS = Array.from({ length: 12 }, (_, index) => index * 5);
@@ -327,6 +335,52 @@ function EmptyResults({ response, onEdit }: { response: TravelPlanResponse | nul
   );
 }
 
+function ObservationPausedState({
+  response,
+  busy,
+  onCancel,
+  onContinue
+}: {
+  response: TravelPlanResponse;
+  busy: boolean;
+  onCancel: () => void;
+  onContinue: () => void;
+}) {
+  return (
+    <View style={styles.statePage}>
+      <Text style={styles.stateTitle}>仍在规划</Text>
+      <Text style={styles.bodyText}>
+        服务端任务仍在运行。你可以继续获取同一个任务的最新进度，不会重复创建规划。
+      </Text>
+      <Text style={styles.secondaryText}>当前进度 {response.progress}%</Text>
+      <View style={styles.actionRow}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="继续获取当前规划任务"
+          accessibilityState={{ disabled: busy }}
+          disabled={busy}
+          hitSlop={ui.hitSlop}
+          style={styles.primarySmallButton}
+          onPress={onContinue}
+        >
+          {busy ? <ActivityIndicator color="#ffffff" /> : <Text style={styles.primarySmallButtonText}>继续获取</Text>}
+        </Pressable>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="取消当前规划任务"
+          accessibilityState={{ disabled: busy }}
+          disabled={busy}
+          hitSlop={ui.hitSlop}
+          style={styles.secondarySmallButton}
+          onPress={onCancel}
+        >
+          <Text style={styles.iconButtonText}>取消规划</Text>
+        </Pressable>
+      </View>
+    </View>
+  );
+}
+
 function SourceFailureRow({ failure }: { failure: SourceFailure }) {
   return (
     <View style={styles.sourceFailureCard}>
@@ -426,6 +480,8 @@ export default function App() {
   const planningRunId = useRef(0);
   const [rawInput, setRawInput] = useState("");
   const [response, setResponse] = useState<TravelPlanResponse | null>(null);
+  const [planningResponse, setPlanningResponse] = useState<TravelPlanResponse | null>(null);
+  const [observationState, setObservationState] = useState<PlanningObservationState>("IDLE");
   const [selectedPlanId, setSelectedPlanId] = useState<string | null>(null);
   const [selectedTransportMode, setSelectedTransportMode] = useState<IntercityTransportMode | null>(null);
   const [loading, setLoading] = useState(false);
@@ -458,7 +514,13 @@ export default function App() {
   const candidatePlans = useMemo(() => visiblePlans.filter((plan) => !recommendedPlanIds.has(plan.plan_id)), [visiblePlans, recommendedPlanIds]);
   const selectedPlanFavorite = selectedPlan ? favoritePlans.some((plan) => plan.plan_id === selectedPlan.plan_id) : false;
   const recentPlan = recentPlans[0] ?? null;
-  const planningFullScreen = activeTab === "results" && loading && (!response || response.plans.length === 0);
+  const authoritativeResponse = planningResponse ?? response;
+  const pageState = derivePlanningPageState({
+    response: authoritativeResponse,
+    observationState,
+    errorType: error ? (authoritativeResponse ? "NON_BLOCKING" : "BLOCKING") : "NONE"
+  });
+  const planningFullScreen = activeTab === "results" && pageState === "PLANNING_EMPTY";
 
   useEffect(() => {
     if (response && selectedPlan) {
@@ -469,27 +531,18 @@ export default function App() {
 
   useEffect(() => {
     const subscription = AppState.addEventListener("change", (state) => {
-      if (state !== "active" || !response) return;
-      if (isPlanningActive(response)) {
-        const runId = planningRunId.current;
-        void pollUntilSettled(response, runId).finally(() => setLoading(false));
+      if (state !== "active" || !authoritativeResponse) return;
+      if (isPlanningActive(authoritativeResponse)) {
+        void resumePlanning();
       } else if (selectedPlan && hasExpiredRedirect(selectedPlan)) {
         Alert.alert("跳转信息可能已过期", "请重新打开跳转入口，系统会生成新的 redirect-only 链接。");
       }
     });
     return () => subscription.remove();
-  }, [response, selectedPlan]);
-
-  function isPlanningActive(nextResponse: TravelPlanResponse) {
-    const planningActive = ACTIVE_PLANNING_STATUSES.has(nextResponse.planning_status);
-    const jobActive = nextResponse.async_job ? ACTIVE_JOB_STATUSES.has(nextResponse.async_job.job_status) : false;
-    return planningActive || jobActive;
-  }
+  }, [authoritativeResponse, selectedPlan]);
 
   function syncSelection(nextResponse: TravelPlanResponse) {
     if (nextResponse.plans.length === 0) {
-      setSelectedPlanId(null);
-      setSelectedTransportMode(null);
       return;
     }
     const currentPlan = findPlan(nextResponse, selectedPlanId);
@@ -519,46 +572,112 @@ export default function App() {
     setSelectedPlanId(recommendedPlan?.plan_id ?? modePlans[0].plan_id);
   }
 
-  async function pollUntilSettled(initialResponse: TravelPlanResponse, runId: number, preserveCurrentResults = false) {
-    let current = initialResponse;
-    for (let attempt = 0; attempt < MAX_POLL_ATTEMPTS; attempt += 1) {
-      if (runId !== planningRunId.current) return;
-      if (!current.async_job?.polling_url || !isPlanningActive(current)) return;
-      await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
-      if (runId !== planningRunId.current) return;
-      current = await pollPlanningJob(current.async_job.polling_url);
-      if (!preserveCurrentResults || current.plans.length > 0 || current.planning_status === "NO_MATCH") {
-        setResponse(current);
-        syncSelection(current);
+  function applyPlanningSnapshot(nextResponse: TravelPlanResponse) {
+    if (isPlanningActive(nextResponse)) {
+      setPlanningResponse(nextResponse);
+      if (nextResponse.plans.length > 0) {
+        setResponse(nextResponse);
+        syncSelection(nextResponse);
       }
-      if (!isPlanningActive(current)) {
-        if (current.planning_status !== "FAILED") {
-          const eventType = current.planning_status === "NO_MATCH" ? "PLANNING_NO_MATCH" : current.planning_status === "PARTIAL" ? "PLANNING_PARTIAL" : "PLANNING_SUCCESS";
-          void trackEvent({
-            eventType,
-            requestId: current.request_id,
-            traceId: current.trace_id,
-            planId: current.plans[0]?.plan_id ?? null,
-            metadata: current.planning_status === "NO_MATCH"
-              ? {
-                  planning_status: current.planning_status,
-                  constraint_types: current.constraint_analysis?.alternatives.flatMap((item) => item.violations.map((violation) => violation.constraint_type)) ?? [],
-                  alternative_count: current.constraint_analysis?.alternatives.length ?? 0,
-                  coverage_statuses: current.constraint_analysis?.coverage.map((item) => item.status) ?? []
-                }
-              : { planning_status: current.planning_status }
-          }).catch(() => undefined);
-        }
+      return;
+    }
+    setPlanningResponse(null);
+    setResponse(nextResponse);
+    syncSelection(nextResponse);
+  }
+
+  function trackPlanningTerminal(current: TravelPlanResponse) {
+    if (current.planning_status === "FAILED") return;
+    const eventType = current.planning_status === "NO_MATCH" ? "PLANNING_NO_MATCH" : current.planning_status === "PARTIAL" ? "PLANNING_PARTIAL" : "PLANNING_SUCCESS";
+    void trackEvent({
+      eventType,
+      requestId: current.request_id,
+      traceId: current.trace_id,
+      planId: current.plans[0]?.plan_id ?? null,
+      metadata: current.planning_status === "NO_MATCH"
+        ? {
+            planning_status: current.planning_status,
+            constraint_types: current.constraint_analysis?.alternatives.flatMap((item) => item.violations.map((violation) => violation.constraint_type)) ?? [],
+            alternative_count: current.constraint_analysis?.alternatives.length ?? 0,
+            coverage_statuses: current.constraint_analysis?.coverage.map((item) => item.status) ?? []
+          }
+        : { planning_status: current.planning_status }
+    }).catch(() => undefined);
+  }
+
+  async function pollUntilSettled(initialResponse: TravelPlanResponse, runId: number) {
+    let current = initialResponse;
+    const observationStartedAt = Date.now();
+    let attempt = 0;
+    while (true) {
+      if (runId !== planningRunId.current) return;
+      if (!current.async_job?.polling_url || !isPlanningActive(current)) {
+        setObservationState("IDLE");
         return;
       }
+      if (hasObservationWindowExpired(observationStartedAt, Date.now(), OBSERVATION_WINDOW_MS)) {
+        setPlanningResponse(current);
+        setObservationState("PAUSED");
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, nextPollDelayMs(attempt)));
+      if (runId !== planningRunId.current) return;
+      try {
+        current = await pollPlanningJob(current.async_job.polling_url);
+      } catch (caught) {
+        setError(caught instanceof Error ? caught.message : "获取规划进度失败");
+        setPlanningResponse(current);
+        setObservationState("PAUSED");
+        return;
+      }
+      applyPlanningSnapshot(current);
+      if (!isPlanningActive(current)) {
+        setObservationState("IDLE");
+        trackPlanningTerminal(current);
+        return;
+      }
+      attempt += 1;
     }
-    setError("规划仍在进行中，请稍后重试或改写需求。");
+  }
+
+  async function resumePlanning() {
+    const current = planningResponse ?? response;
+    const pollingUrl = current?.async_job?.polling_url;
+    if (!current || !pollingUrl || !isPlanningActive(current)) return;
+    const runId = planningRunId.current + 1;
+    planningRunId.current = runId;
+    setLoading(true);
+    setError("");
+    setObservationState("OBSERVING");
+    try {
+      const latest = await pollPlanningJob(pollingUrl);
+      if (runId !== planningRunId.current) return;
+      applyPlanningSnapshot(latest);
+      if (isPlanningActive(latest)) {
+        await pollUntilSettled(latest, runId);
+      } else {
+        setObservationState("IDLE");
+        trackPlanningTerminal(latest);
+      }
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "获取规划进度失败");
+      setPlanningResponse(current);
+      setObservationState("PAUSED");
+    } finally {
+      if (runId === planningRunId.current) setLoading(false);
+    }
   }
 
   async function startPlanning(input: string | TravelRequest, metadata: Record<string, unknown> = {}, preserveCurrentResults = false) {
     setLoading(true);
     setError("");
-    if (!preserveCurrentResults) setResponse(null);
+    setObservationState("OBSERVING");
+    setPlanningResponse(null);
+    if (!preserveCurrentResults) {
+      setResponse(null);
+      setSelectedPlanId(null);
+      setSelectedTransportMode(null);
+    }
     setResultsPane("overview");
     setActiveTab("results");
     const runId = planningRunId.current + 1;
@@ -566,15 +685,18 @@ export default function App() {
     try {
       void trackEvent({ eventType: "INPUT_SUBMITTED", metadata }).catch(() => undefined);
       const result = await planTripAsync(input);
-      if (!preserveCurrentResults || result.plans.length > 0 || result.planning_status === "NO_MATCH") {
-        setResponse(result);
-        syncSelection(result);
+      applyPlanningSnapshot(result);
+      if (isPlanningActive(result)) {
+        await pollUntilSettled(result, runId);
+      } else {
+        setObservationState("IDLE");
+        trackPlanningTerminal(result);
       }
-      await pollUntilSettled(result, runId, preserveCurrentResults);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "请求失败");
+      setObservationState("IDLE");
     } finally {
-      setLoading(false);
+      if (runId === planningRunId.current) setLoading(false);
     }
   }
 
@@ -691,32 +813,37 @@ export default function App() {
     if (!jobId) return;
     setLoading(true);
     setError("");
+    setObservationState("OBSERVING");
     setResultsPane("overview");
     try {
       const runId = planningRunId.current + 1;
       planningRunId.current = runId;
       const result = await retryPlanningJob(jobId);
-      if (result.plans.length > 0) {
-        setResponse(result);
-        syncSelection(result);
+      applyPlanningSnapshot(result);
+      if (isPlanningActive(result)) {
+        await pollUntilSettled(result, runId);
+      } else {
+        setObservationState("IDLE");
+        trackPlanningTerminal(result);
       }
-      await pollUntilSettled(result, runId, true);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "重试失败");
+      setPlanningResponse(null);
+      setObservationState("IDLE");
     } finally {
       setLoading(false);
     }
   }
 
   async function cancelCurrentJob() {
-    const jobId = response?.async_job?.job_id;
+    const jobId = authoritativeResponse?.async_job?.job_id;
     if (!jobId) return;
     planningRunId.current += 1;
     setLoading(false);
     try {
       const cancelled = await cancelPlanningJob(jobId);
-      setResponse(cancelled);
-      syncSelection(cancelled);
+      applyPlanningSnapshot(cancelled);
+      setObservationState("IDLE");
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "取消失败");
     }
@@ -823,16 +950,23 @@ export default function App() {
           </ScrollView>
         ) : (
           <ScrollView style={styles.screen} contentContainerStyle={[styles.content, planningFullScreen && styles.planningContent, wideLayout && styles.contentWide]}>
-            {planningFullScreen ? (
+            {pageState === "PLANNING_EMPTY" && authoritativeResponse ? (
               <PlanningProgressScreen
-                destinationText={response?.travel_request.destination_text}
-                onCancel={response?.async_job ? cancelCurrentJob : undefined}
-                originText={response?.travel_request.origin_text}
-                progress={response?.progress ?? 0}
+                destinationText={authoritativeResponse.travel_request.destination_text}
+                onCancel={authoritativeResponse.async_job ? cancelCurrentJob : undefined}
+                originText={authoritativeResponse.travel_request.origin_text}
+                progress={authoritativeResponse.progress}
               />
-            ) : error && !response ? (
+            ) : pageState === "OBSERVATION_PAUSED" && authoritativeResponse ? (
+              <ObservationPausedState
+                busy={loading}
+                onCancel={cancelCurrentJob}
+                onContinue={resumePlanning}
+                response={authoritativeResponse}
+              />
+            ) : pageState === "BLOCKING_ERROR" ? (
               <ErrorState message={error} onRetry={submit} onEdit={() => setActiveTab("input")} />
-            ) : !response ? (
+            ) : pageState === "IDLE" ? (
               <View style={styles.emptyState}>
                 <Text style={styles.emptyTitle}>还没有规划结果</Text>
                 <Text style={styles.secondaryText}>先到云起写下出发地、目的地和时间，提交后会自动切到这里。</Text>
@@ -840,15 +974,23 @@ export default function App() {
                   <Text style={styles.iconButtonText}>去云起</Text>
                 </Pressable>
               </View>
-            ) : response.planning_status === "NO_MATCH" && response.constraint_analysis ? (
+            ) : pageState === "NO_MATCH" && authoritativeResponse?.constraint_analysis ? (
               <ConstraintNoMatchScreen
                 busy={loading}
                 onConfirm={confirmRelaxation}
                 onEdit={() => setActiveTab("input")}
-                response={response}
+                response={authoritativeResponse}
               />
-            ) : response.plans.length === 0 ? (
-              <EmptyResults response={response} onEdit={() => setActiveTab("input")} />
+            ) : pageState === "FAILED" && authoritativeResponse ? (
+              <ErrorState
+                message={error || authoritativeResponse.user_visible_warnings[authoritativeResponse.user_visible_warnings.length - 1] || "规划任务暂时失败，请稍后重试。"}
+                onRetry={authoritativeResponse.async_job ? retrySources : submit}
+                onEdit={() => setActiveTab("input")}
+              />
+            ) : pageState === "EMPTY" ? (
+              <EmptyResults response={authoritativeResponse} onEdit={() => setActiveTab("input")} />
+            ) : !response ? (
+              <EmptyResults response={authoritativeResponse} onEdit={() => setActiveTab("input")} />
             ) : resultsPane === "sources" ? (
               <DataSourcesPage response={response} plan={selectedPlan} onBack={() => setResultsPane("overview")} />
             ) : resultsPane === "details" && selectedPlan ? (
