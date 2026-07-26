@@ -98,11 +98,16 @@ from app.services.rail_planning_engine import RailPlanSpec, TicketEnhancementSpe
 from app.services.recommendation import recommend_with_validation
 from app.services.result_set_preferences import apply_rail_seat_to_result_set
 from app.services.store import get_response_for_plan, update_plan
+from app.services.task_queue import PlanningDeadline
 
 logger = logging.getLogger("app.planner.rail")
 
 
 SHANGHAI_TZ = timezone(timedelta(hours=8))
+
+
+def _deadline_allows(deadline: PlanningDeadline | None, stage: str) -> bool:
+    return deadline is None or deadline.allow_new_branch(stage)
 
 
 def _as_shanghai_datetime(value: datetime) -> datetime:
@@ -1137,6 +1142,7 @@ def _build_dynamic_direct_rail_plans(
     destination_city: str,
     taxi,
     collector: PlanningIssueCollector,
+    deadline: PlanningDeadline | None = None,
     max_station_pairs: int = 4,
     max_plans: int = 4,
 ) -> list[TravelPlan]:
@@ -1166,6 +1172,8 @@ def _build_dynamic_direct_rail_plans(
     station_pairs = [(origin_station, destination_station) for origin_station in origin_stations for destination_station in destination_stations][:max_station_pairs]
     logger.info("rail_direct_station_pairs request_id=%s pair_count=%s station_pairs=%s", travel_request.request_id, len(station_pairs), station_pairs)
     for pair_index, (origin_station, destination_station) in enumerate(station_pairs, start=1):
+        if not _deadline_allows(deadline, "RAIL_PROVIDER_QUERY"):
+            break
         logger.info(
             "rail_direct_provider_query request_id=%s pair_index=%s origin_station=%s destination_station=%s",
             travel_request.request_id,
@@ -1263,6 +1271,7 @@ def _build_dynamic_flight_plans(
     destination_city: str,
     taxi,
     collector: PlanningIssueCollector,
+    deadline: PlanningDeadline | None = None,
     max_airport_pairs: int = 2,
     max_plans: int = 2,
 ) -> list[TravelPlan]:
@@ -1284,6 +1293,8 @@ def _build_dynamic_flight_plans(
     )
     if scope is None:
         collector.add_missing("flight_airport_candidates")
+        return []
+    if not _deadline_allows(deadline, "FLIGHT_PROVIDER_QUERY"):
         return []
     result = search_flight_offers_with_enabled_provider_result(scope)
     provider_outcomes = _legacy_flight_outcomes(result)
@@ -1373,6 +1384,7 @@ def _build_dynamic_transfer_rail_plans(
     destination_city: str,
     taxi,
     collector: PlanningIssueCollector,
+    deadline: PlanningDeadline | None = None,
     max_hubs: int = 6,
     max_plans: int = 3,
 ) -> list[TravelPlan]:
@@ -1421,9 +1433,13 @@ def _build_dynamic_transfer_rail_plans(
         return cached_transfer(first_offer.destination_station, second_offer.origin_station)
 
     for origin_station in origin_stations:
+        if not _deadline_allows(deadline, "TRANSFER_RAIL_PROVIDER_QUERY"):
+            break
         if rail_rate_limited:
             break
         for transfer_station in transfer_stations:
+            if not _deadline_allows(deadline, "TRANSFER_RAIL_PROVIDER_QUERY"):
+                break
             if transfer_station.station_name == origin_station:
                 continue
             logger.info(
@@ -1454,6 +1470,8 @@ def _build_dynamic_transfer_rail_plans(
                     break
                 continue
             for destination_station in destination_stations:
+                if not _deadline_allows(deadline, "TRANSFER_RAIL_PROVIDER_QUERY"):
+                    break
                 if rail_rate_limited:
                     break
                 if transfer_station.station_name == destination_station:
@@ -1648,6 +1666,7 @@ def _build_dynamic_flight_rail_mixed_plans(
     destination_city: str,
     taxi,
     collector: PlanningIssueCollector,
+    deadline: PlanningDeadline | None = None,
     max_hubs: int = 4,
     max_plans: int = 2,
 ) -> list[TravelPlan]:
@@ -1669,6 +1688,12 @@ def _build_dynamic_flight_rail_mixed_plans(
     ) -> FlightProviderSearchResult:
         cache_key = (search_origin_city, search_destination_city)
         if cache_key not in flight_search_cache:
+            if not _deadline_allows(deadline, "MIXED_FLIGHT_PROVIDER_QUERY"):
+                return FlightProviderSearchResult(
+                    offers=[],
+                    attempted_source_ids=[],
+                    failure_message="planning deadline exceeded before flight provider query",
+                )
             scope = _flight_search_scope(
                 origin_city=search_origin_city,
                 destination_city=search_destination_city,
@@ -1699,6 +1724,8 @@ def _build_dynamic_flight_rail_mixed_plans(
     )
 
     for transfer_station in transfer_stations:
+        if not _deadline_allows(deadline, "MIXED_PROVIDER_QUERY"):
+            break
         if rail_rate_limited:
             break
         hub_airports = airport_candidates_for_city(transfer_station.city_name, limit=2)
@@ -1719,6 +1746,8 @@ def _build_dynamic_flight_rail_mixed_plans(
                         origin_airports,
                         hub_airports,
                     )
+                    if not _deadline_allows(deadline, "MIXED_RAIL_PROVIDER_QUERY"):
+                        break
                     _record_flight_provider_outcomes(
                         collector,
                         _legacy_flight_outcomes(flight_result),
@@ -1818,6 +1847,8 @@ def _build_dynamic_flight_rail_mixed_plans(
                     destination_iata = airport_iata_for_candidate(destination_airport)
                     if not hub_iata or not destination_iata:
                         continue
+                    if not _deadline_allows(deadline, "MIXED_RAIL_PROVIDER_QUERY"):
+                        break
                     rail_result = search_rail_offers_with_enabled_provider_result(
                         RailSearchRequest(train_number="", origin_station=origin_station, destination_station=transfer_station.station_name, departure_date=day)
                     )
@@ -2099,6 +2130,7 @@ def build_plans(
     travel_request: TravelRequest,
     progress_sink: PlanningProgressSink | None = None,
     execution_metrics: PlanningExecutionMetrics | None = None,
+    deadline: PlanningDeadline | None = None,
 ) -> tuple[list[TravelPlan], list[SourceFailure], list[str], list[PlanType], list[MissingPlanExplanation], list[str]]:
     progress_sink = progress_sink or NoOpPlanningProgressSink()
     day = travel_request.travel_date
@@ -2108,7 +2140,24 @@ def build_plans(
     route_estimator_cache = PlanningRouteEstimatorCache(estimate_route_with_enabled_provider_result)
     location_resolver_cache = PlanningLocationResolverCache()
 
+    def allow_new_branch(stage: str) -> bool:
+        if deadline is None:
+            return True
+        allowed = deadline.allow_new_branch(stage)
+        logger.info(
+            "planning_deadline_check request_id=%s stage=%s mode=%s remaining_seconds=%.3f allowed=%s",
+            travel_request.request_id,
+            stage,
+            deadline.mode,
+            deadline.remaining_seconds(),
+            allowed,
+        )
+        return allowed
+
     def taxi(segment_id: str, origin: str, destination: str, minutes: int, cost_minor: int, option_id: str = "transfer_taxi") -> LocalTransferSegment:
+        if not allow_new_branch("LOCAL_TRANSFER"):
+            collector.add_warning("服务端规划期限已到，未再启动新的接驳路线查询。")
+            raise LocalTransferUnavailable(origin, destination, "PLANNING_DEADLINE_EXCEEDED")
         return _taxi(
             segment_id,
             origin,
@@ -2152,6 +2201,7 @@ def build_plans(
             destination_city=destination_city,
             taxi=taxi,
             collector=collector,
+            deadline=deadline,
         )
 
     def build_direct_flight() -> list[TravelPlan]:
@@ -2165,6 +2215,7 @@ def build_plans(
             destination_city=destination_city,
             taxi=taxi,
             collector=collector,
+            deadline=deadline,
         )
 
     dynamic_rail_plans: list[TravelPlan] = []
@@ -2177,7 +2228,11 @@ def build_plans(
     parallel_enabled = os.getenv("TRAVEL_PROVIDER_FAMILY_PARALLEL_ENABLED", "true").strip().lower() not in {"0", "false", "no", "off"}
     if parallel_enabled and len(direct_builders) > 1:
         with ThreadPoolExecutor(max_workers=2, thread_name_prefix="planning-provider-family") as executor:
-            futures = {executor.submit(builder): mode for mode, builder in direct_builders.items()}
+            futures = {
+                executor.submit(builder): mode
+                for mode, builder in direct_builders.items()
+                if allow_new_branch(f"DIRECT_{mode}")
+            }
             completed_count = 0
             for future in as_completed(futures):
                 mode = futures[future]
@@ -2195,10 +2250,10 @@ def build_plans(
                     f"{mode}_READY",
                 )
     else:
-        if "RAIL" in direct_builders:
+        if "RAIL" in direct_builders and allow_new_branch("DIRECT_RAIL"):
             dynamic_rail_plans = build_direct_rail()
             _publish_safe_progress(progress_sink, dynamic_rail_plans, travel_request, 65, "RAIL_READY")
-        if "FLIGHT" in direct_builders:
+        if "FLIGHT" in direct_builders and allow_new_branch("DIRECT_FLIGHT"):
             dynamic_flight_plans = build_direct_flight()
             _publish_safe_progress(
                 progress_sink,
@@ -2208,7 +2263,12 @@ def build_plans(
                 "DIRECT_MODES_READY",
             )
     dynamic_transfer_rail_plans = []
-    if TransportMode.RAIL in generation_modes and not dynamic_rail_plans and not collector.has_rail_rate_limit():
+    if (
+        TransportMode.RAIL in generation_modes
+        and not dynamic_rail_plans
+        and not collector.has_rail_rate_limit()
+        and allow_new_branch("TRANSFER_RAIL")
+    ):
         dynamic_transfer_rail_plans = _build_dynamic_transfer_rail_plans(
             travel_request=travel_request,
             route_nodes=route_nodes,
@@ -2219,6 +2279,7 @@ def build_plans(
             destination_city=destination_city,
             taxi=taxi,
             collector=collector,
+            deadline=deadline,
             max_hubs=3,
         )
         _publish_safe_progress(
@@ -2234,6 +2295,7 @@ def build_plans(
         and not dynamic_rail_plans
         and not dynamic_flight_plans
         and not collector.has_rail_rate_limit()
+        and allow_new_branch("FLIGHT_RAIL_MIXED")
     ):
         dynamic_mixed_plans = _build_dynamic_flight_rail_mixed_plans(
             travel_request=travel_request,
@@ -2245,6 +2307,7 @@ def build_plans(
             destination_city=destination_city,
             taxi=taxi,
             collector=collector,
+            deadline=deadline,
             max_hubs=2,
         )
         _publish_safe_progress(
@@ -2327,12 +2390,14 @@ def plan_trip(
     *,
     progress_sink: PlanningProgressSink | None = None,
     execution_metrics: PlanningExecutionMetrics | None = None,
+    deadline: PlanningDeadline | None = None,
 ) -> TravelPlanResponse:
     travel_request = parse_travel_request(raw_or_request, ctx) if isinstance(raw_or_request, str) else raw_or_request
     plans, failures, missing, blocked_types, explanations, warnings = build_plans(
         travel_request,
         progress_sink=progress_sink,
         execution_metrics=execution_metrics,
+        deadline=deadline,
     )
     for failure in failures:
         failure.trace_id = ctx.trace_id
@@ -2354,7 +2419,10 @@ def plan_trip(
             missing_components=missing,
             blocked_plan_types=blocked_types,
             missing_plan_explanations=explanations,
-            user_visible_warnings=[*warnings, "核心事实缺失，当前无法生成可用方案。"],
+            user_visible_warnings=[
+                *warnings,
+                "服务端规划期限已到，当前没有形成完整可验证方案。" if deadline and deadline.enforced else "核心事实缺失，当前无法生成可用方案。",
+            ],
             async_job=None,
             generated_at=now_timepoint(),
         )
@@ -2362,6 +2430,27 @@ def plan_trip(
     candidate_plans = candidate_pool.llm_candidate_plans
     explanations = candidate_pool.missing_plan_explanations
     warnings = [*warnings, *candidate_pool.user_visible_warnings]
+    if not candidate_plans and deadline and deadline.enforced:
+        missing = [*missing, "travel_plan"] if "travel_plan" not in missing else missing
+        return TravelPlanResponse(
+            request_id=ctx.request_id,
+            trace_id=ctx.trace_id,
+            correlation_id=ctx.correlation_id,
+            idempotency_key=ctx.idempotency_key,
+            planning_status=PlanningStatus.FAILED,
+            progress=100,
+            travel_request=travel_request,
+            destination_presentation=resolve_destination_presentation(travel_request),
+            plans=[],
+            recommendation_result=None,
+            source_failures=failures,
+            missing_components=missing,
+            blocked_plan_types=blocked_types,
+            missing_plan_explanations=explanations,
+            user_visible_warnings=[*warnings, "服务端规划期限已到，当前没有形成满足约束的完整方案。"],
+            async_job=None,
+            generated_at=now_timepoint(),
+        )
     constraint_analysis_enabled = os.getenv("TRAVEL_CONSTRAINT_ANALYSIS_ENABLED", "true").strip().lower() not in {"0", "false", "no", "off"}
     if not candidate_plans and constraint_analysis_enabled and candidate_pool.constraint_evaluations:
         constraint_analysis = build_constraint_analysis(candidate_pool.constraint_evaluations, failures)
@@ -2464,6 +2553,9 @@ def plan_trip(
         planning_status = PlanningStatus.PARTIAL
     elif _has_unconfirmed_in_scope_transport(travel_request, candidate_plans, failures, missing):
         planning_status = PlanningStatus.PARTIAL
+    if deadline and deadline.enforced:
+        planning_status = PlanningStatus.PARTIAL
+        warnings = [*warnings, "服务端规划期限已到，已保留当前完整可验证方案；部分交通方式可能仍未完成。"]
     return TravelPlanResponse(
         request_id=ctx.request_id,
         trace_id=ctx.trace_id,

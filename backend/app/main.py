@@ -47,7 +47,7 @@ from app.services.persistence import init_persistence
 from app.services.planner import plan_trip, recalculate_plan
 from app.services.planning_progress import NoOpPlanningProgressSink, PlanningExecutionMetrics, PlanningProgressUpdate
 from app.services.store import begin_async_job, get_async_job_by_idempotency, get_async_job_response, get_plan, get_recalculate_response, invalidate_async_job_generation, replace_response_snapshot, save_async_job_response, save_async_job_response_if_current, save_feedback, save_recalculate_response, save_response
-from app.services.task_queue import progressive_results_enabled
+from app.services.task_queue import create_planning_deadline, progressive_results_enabled
 
 configure_logging()
 logger = logging.getLogger("app.api")
@@ -440,6 +440,7 @@ class _AsyncJobProgressSink:
 def _complete_plan_job(job_id: str, travel_request: TravelRequest, ctx, created_at, generation: int) -> None:
     started_at = perf_counter()
     execution_metrics = PlanningExecutionMetrics()
+    deadline = create_planning_deadline()
     progress_sink = _AsyncJobProgressSink(job_id, generation, started_at) if progressive_results_enabled() else NoOpPlanningProgressSink()
     current = get_async_job_response(job_id)
     if current and current.async_job and current.async_job.job_status == AsyncJobStatus.CANCELLED:
@@ -464,6 +465,7 @@ def _complete_plan_job(job_id: str, travel_request: TravelRequest, ctx, created_
             ctx,
             progress_sink=progress_sink,
             execution_metrics=execution_metrics,
+            deadline=deadline,
         )
         if final.planning_status in {PlanningStatus.COMPLETE, PlanningStatus.NO_MATCH}:
             job_status = AsyncJobStatus.COMPLETE
@@ -483,7 +485,10 @@ def _complete_plan_job(job_id: str, travel_request: TravelRequest, ctx, created_
             first_usable_plan_latency_ms=getattr(progress_sink, "first_usable_plan_latency_ms", None),
             final_result_latency_ms=(perf_counter() - started_at) * 1000,
             progressive_snapshot_count=getattr(progress_sink, "snapshot_count", 0),
-            deadline_outcome="NOT_CONFIGURED",
+            deadline_outcome=deadline.outcome(
+                has_plans=bool(final.plans),
+                failed=final.planning_status == PlanningStatus.FAILED and not deadline.enforced,
+            ),
             route_cache_hits=execution_metrics.route_cache_hits,
             route_cache_misses=execution_metrics.route_cache_misses,
             location_cache_hits=execution_metrics.location_cache_hits,
@@ -513,7 +518,7 @@ def _complete_plan_job(job_id: str, travel_request: TravelRequest, ctx, created_
             first_usable_plan_latency_ms=getattr(progress_sink, "first_usable_plan_latency_ms", None),
             final_result_latency_ms=(perf_counter() - started_at) * 1000,
             progressive_snapshot_count=getattr(progress_sink, "snapshot_count", 0),
-            deadline_outcome="ERROR",
+            deadline_outcome=deadline.outcome(has_plans=False, failed=True),
             route_cache_hits=execution_metrics.route_cache_hits,
             route_cache_misses=execution_metrics.route_cache_misses,
             location_cache_hits=execution_metrics.location_cache_hits,
