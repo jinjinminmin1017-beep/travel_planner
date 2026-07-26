@@ -76,6 +76,7 @@ from app.services.location_resolver import (
     transfer_station_candidates_between,
 )
 from app.services.planning_rules import assert_option_available
+from app.services.planning_progress import NoOpPlanningProgressSink, PlanningProgressSink, PlanningProgressUpdate
 from app.services.rail_connection_matcher import (
     RailConnectionCandidate,
     RailConnectionMetrics,
@@ -2047,7 +2048,32 @@ def _transport_catalog_missing_result(
     return [], collector.failures, collector.missing_components, impacted_types, explanations, collector.warnings
 
 
-def build_plans(travel_request: TravelRequest) -> tuple[list[TravelPlan], list[SourceFailure], list[str], list[PlanType], list[MissingPlanExplanation], list[str]]:
+def _publish_safe_progress(
+    progress_sink: PlanningProgressSink,
+    plans: list[TravelPlan],
+    travel_request: TravelRequest,
+    progress: int,
+    stage: str,
+) -> None:
+    if not plans:
+        return
+    candidate_pool = generate_candidate_plan_pool(plans, travel_request)
+    if not candidate_pool.llm_candidate_plans:
+        return
+    progress_sink.publish(
+        PlanningProgressUpdate(
+            plans=[plan.model_copy(deep=True) for plan in candidate_pool.llm_candidate_plans],
+            progress=progress,
+            stage=stage,
+        )
+    )
+
+
+def build_plans(
+    travel_request: TravelRequest,
+    progress_sink: PlanningProgressSink | None = None,
+) -> tuple[list[TravelPlan], list[SourceFailure], list[str], list[PlanType], list[MissingPlanExplanation], list[str]]:
+    progress_sink = progress_sink or NoOpPlanningProgressSink()
     day = travel_request.travel_date
     origin = travel_request.origin_text
     destination = travel_request.destination_text
@@ -2091,6 +2117,7 @@ def build_plans(travel_request: TravelRequest) -> tuple[list[TravelPlan], list[S
         if TransportMode.RAIL in generation_modes
         else []
     )
+    _publish_safe_progress(progress_sink, dynamic_rail_plans, travel_request, 65, "RAIL_READY")
     dynamic_flight_plans = (
         _build_dynamic_flight_plans(
             travel_request=travel_request,
@@ -2106,6 +2133,7 @@ def build_plans(travel_request: TravelRequest) -> tuple[list[TravelPlan], list[S
         if TransportMode.FLIGHT in generation_modes
         else []
     )
+    _publish_safe_progress(progress_sink, [*dynamic_rail_plans, *dynamic_flight_plans], travel_request, 78, "DIRECT_MODES_READY")
     dynamic_transfer_rail_plans = []
     if TransportMode.RAIL in generation_modes and not dynamic_rail_plans and not collector.has_rail_rate_limit():
         dynamic_transfer_rail_plans = _build_dynamic_transfer_rail_plans(
@@ -2119,6 +2147,13 @@ def build_plans(travel_request: TravelRequest) -> tuple[list[TravelPlan], list[S
             taxi=taxi,
             collector=collector,
             max_hubs=3,
+        )
+        _publish_safe_progress(
+            progress_sink,
+            [*dynamic_rail_plans, *dynamic_flight_plans, *dynamic_transfer_rail_plans],
+            travel_request,
+            87,
+            "TRANSFER_RAIL_READY",
         )
     dynamic_mixed_plans = []
     if (
@@ -2138,6 +2173,13 @@ def build_plans(travel_request: TravelRequest) -> tuple[list[TravelPlan], list[S
             taxi=taxi,
             collector=collector,
             max_hubs=2,
+        )
+        _publish_safe_progress(
+            progress_sink,
+            [*dynamic_rail_plans, *dynamic_flight_plans, *dynamic_transfer_rail_plans, *dynamic_mixed_plans],
+            travel_request,
+            93,
+            "MIXED_READY",
         )
     plans = [*dynamic_rail_plans, *dynamic_flight_plans, *dynamic_transfer_rail_plans, *dynamic_mixed_plans]
     logger.info(
@@ -2201,9 +2243,14 @@ def build_plans(travel_request: TravelRequest) -> tuple[list[TravelPlan], list[S
     ]
     return plans, collector.failures, collector.missing_components, blocked_types, explanations, warnings
 
-def plan_trip(raw_or_request: str | TravelRequest, ctx: RequestContext) -> TravelPlanResponse:
+def plan_trip(
+    raw_or_request: str | TravelRequest,
+    ctx: RequestContext,
+    *,
+    progress_sink: PlanningProgressSink | None = None,
+) -> TravelPlanResponse:
     travel_request = parse_travel_request(raw_or_request, ctx) if isinstance(raw_or_request, str) else raw_or_request
-    plans, failures, missing, blocked_types, explanations, warnings = build_plans(travel_request)
+    plans, failures, missing, blocked_types, explanations, warnings = build_plans(travel_request, progress_sink=progress_sink)
     for failure in failures:
         failure.trace_id = ctx.trace_id
         failure.correlation_id = ctx.correlation_id

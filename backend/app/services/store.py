@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from threading import RLock
+
 from app.models.schemas import FeedbackResponse, RecalculateResponse, TravelPlan, TravelPlanResponse
 from app.services.cache_store import async_job_ttl_seconds, get_json, recalculate_ttl_seconds, set_json
 from app.services.observability import record_travel_response
@@ -11,8 +13,11 @@ PLAN_RESPONSES: dict[str, TravelPlanResponse] = {}
 RECALCULATIONS: dict[tuple[str, str], RecalculateResponse] = {}
 ASYNC_JOB_RESPONSES: dict[str, TravelPlanResponse] = {}
 ASYNC_JOB_BY_IDEMPOTENCY: dict[str, str] = {}
+ASYNC_JOB_GENERATIONS: dict[str, int] = {}
 FEEDBACKS: list[FeedbackResponse] = []
 FEEDBACK_COUNTS: dict[tuple[str, str | None], int] = {}
+_ASYNC_JOB_LOCK = RLock()
+_TERMINAL_JOB_STATUSES = {"PARTIAL_READY", "COMPLETE", "FAILED", "CANCELLED"}
 
 
 def _index_response(response: TravelPlanResponse) -> None:
@@ -40,6 +45,12 @@ def replace_response_snapshot(response: TravelPlanResponse) -> None:
 def save_async_job_response(response: TravelPlanResponse) -> None:
     if response.async_job is None:
         raise ValueError("async_job is required to save async job response")
+    with _ASYNC_JOB_LOCK:
+        _save_async_job_response_unlocked(response)
+
+
+def _save_async_job_response_unlocked(response: TravelPlanResponse) -> None:
+    assert response.async_job is not None
     ASYNC_JOB_RESPONSES[response.async_job.job_id] = response
     ASYNC_JOB_BY_IDEMPOTENCY[response.idempotency_key] = response.async_job.job_id
     set_json(f"async_job:{response.async_job.job_id}", response.model_dump_json(), async_job_ttl_seconds())
@@ -47,6 +58,43 @@ def save_async_job_response(response: TravelPlanResponse) -> None:
     save_travel_response(response)
     if response.planning_status not in {"PENDING", "RUNNING"}:
         record_travel_response(response)
+
+
+def begin_async_job(response: TravelPlanResponse) -> int:
+    if response.async_job is None:
+        raise ValueError("async_job is required to begin async job")
+    with _ASYNC_JOB_LOCK:
+        job_id = response.async_job.job_id
+        generation = ASYNC_JOB_GENERATIONS.get(job_id, 0) + 1
+        ASYNC_JOB_GENERATIONS[job_id] = generation
+        _save_async_job_response_unlocked(response)
+        return generation
+
+
+def invalidate_async_job_generation(job_id: str) -> int:
+    with _ASYNC_JOB_LOCK:
+        generation = ASYNC_JOB_GENERATIONS.get(job_id, 0) + 1
+        ASYNC_JOB_GENERATIONS[job_id] = generation
+        return generation
+
+
+def save_async_job_response_if_current(response: TravelPlanResponse, generation: int) -> bool:
+    """Compare-and-save a snapshot without allowing stale workers to revive a job."""
+    if response.async_job is None:
+        raise ValueError("async_job is required to save async job response")
+    with _ASYNC_JOB_LOCK:
+        job_id = response.async_job.job_id
+        if ASYNC_JOB_GENERATIONS.get(job_id) != generation:
+            return False
+        current = ASYNC_JOB_RESPONSES.get(job_id)
+        if current is not None and current.async_job is not None:
+            current_status = current.async_job.job_status
+            if current_status in _TERMINAL_JOB_STATUSES:
+                return False
+            if response.progress < current.progress:
+                return False
+        _save_async_job_response_unlocked(response)
+        return True
 
 
 def get_async_job_response(job_id: str) -> TravelPlanResponse | None:

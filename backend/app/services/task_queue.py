@@ -22,3 +22,7 @@ def provider_retry_count() -> int:
 
 def max_concurrent_jobs() -> int:
     return int(os.getenv("TRAVEL_MAX_CONCURRENT_JOBS", str(DEFAULT_MAX_CONCURRENT_JOBS)))
+
+
+def progressive_results_enabled() -> bool:
+    return os.getenv("TRAVEL_PROGRESSIVE_RESULTS_ENABLED", "true").strip().lower() not in {"0", "false", "no", "off"}
