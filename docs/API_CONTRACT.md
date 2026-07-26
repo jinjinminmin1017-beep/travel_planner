@@ -1,6 +1,6 @@
 # API Contract
 
-更新日期：2026-07-22
+更新日期：2026-07-26
 
 本文只记录已在 `backend/app/main.py` 或 `frontend/src/api/client.ts` 中发现的接口。统一错误结构见 `backend/app/models/schemas.py` 的 `ErrorResponse`。
 
@@ -93,6 +93,16 @@
 - Error Response：通用 `ErrorResponse`；任务不存在或过期返回 404。
 - 前端调用位置：`frontend/src/api/client.ts` `pollPlanningJob()`；`frontend/src/App.tsx` 轮询异步任务。
 - 后端实现位置：`backend/app/main.py` `get_planning_job()`
+
+### 异步观察与渐进结果契约（V1.17，无字段变更，已实现）
+
+- `planning_status=PENDING/RUNNING` 且 `async_job.job_status=QUEUED/RUNNING/WAITING_SOURCE` 表示服务端任务仍在活动。此时 `plans=[]` 是 loading 快照，不是“没有方案”。
+- 活动态允许返回非空 `plans`，但每个计划都必须是已通过安全门禁的完整门到门方案；前端可以立即展示，同时继续轮询。活动态的 `recommendation_result` 可以为 `null`，前端不得自行补推荐结论。
+- 每次新快照的 `progress` 不得下降，`async_job.updated_at` 必须反映最近一次有效状态或结果更新。
+- 服务端终态由 `planning_status=COMPLETE/PARTIAL/NO_MATCH/FAILED` 与对应终态 `async_job.job_status` 表达。客户端轮询次数耗尽、App 进入后台或单次 GET 失败都不得被解释为服务端终态。
+- 客户端本地观察窗口耗尽时必须保留 `job_id`、`polling_url` 和最后响应，展示“仍在规划/继续获取”；恢复时先 GET 同一个 job。不得仅因 `plans.length === 0` 展示普通空态，也不得创建重复规划任务。
+- `NO_MATCH` 继续使用独立约束无匹配页面；`FAILED` 使用失败与重试页面。普通“暂无可用方案”不能承载任何活动态响应。
+- 本规则复用现有 `TravelPlanResponse`、`AsyncJob` 和 GET endpoint，不提升 schema version，不增加数据库迁移。
 
 ## POST /api/travel/jobs/{job_id}/retry
 

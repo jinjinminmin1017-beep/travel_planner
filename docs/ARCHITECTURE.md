@@ -1,6 +1,6 @@
 # Architecture
 
-更新日期：2026-07-24
+更新日期：2026-07-26
 
 本文记录当前代码中已确认的架构；尚未落地的内容会明确标注为“目标设计，待实现”。
 
@@ -995,3 +995,106 @@ TravelRequest
 - 回滚城市范围解析时，春秋该类响应必须降级为“暂不可确认/解析失败”，不得恢复为错误的“没有航班”。
 - 回滚不得保留“接受 PVG offer 但连接虹桥接驳”的中间状态；查询和建计划必须作为同一安全发布单元启用。
 - 机场目录为可再生数据；回滚通过恢复生成器规则并重新生成，不执行破坏性数据库迁移。
+
+## 异步规划假空态与渐进结果架构（2026-07-26，已实现）
+
+### 当前实现状态
+
+- 前端已使用 `frontend/src/planning/planningState.ts` 统一推导活动态、观察暂停和服务端终态；elapsed-time 观察窗口耗尽不再进入普通空态。
+- Planner 已通过 `PlanningProgressSink` 发布完整安全计划；异步 store 使用 generation 比较写入，取消或终态不可被旧 worker 覆盖。
+- 同一规划内地点解析和地图路线按规范化键复用；铁路与航班直达 Provider 家族最多 2 worker 有界并行。
+- `TRAVEL_ASYNC_JOB_TIMEOUT_SECONDS` 已接入单调时钟 deadline，默认 180 秒且处于 `observe`；强制模式必须显式配置。
+- 观测指标已覆盖首个可用计划、最终结果、渐进快照、路线缓存和 deadline outcome。
+
+### 修复前问题与现场证据
+
+- 2026-07-26 的真实请求 `req_7e9e98fb9995` 于 08:00:48 创建异步任务，前端从 08:00:49 到 08:02:52 共轮询 100 次；修复前常量为 `MAX_POLL_ATTEMPTS=100`、`POLL_INTERVAL_MS=1200`，客户端观察窗口约 120 秒。
+- 后端在 08:03:12 完成，端到端耗时约 144 秒，最终持久化响应为 `planning_status=COMPLETE`，包含 6 个完整门到门方案（2 个航班、4 个铁路）及有效推荐结果。
+- 客户端观察窗口先于服务端完成约 20 秒耗尽。`pollUntilSettled()` 随后停止轮询并清除 loading，但保留的响应仍是 `planning_status=RUNNING`、`plans=[]`。
+- 修复前渲染分支只判断 `response.plans.length === 0`，因此把仍在运行的中间快照送入“暂无可用方案”页面。该页面属于终态语义，却被非终态复用，形成“后端有 6 个方案、用户看到 0 个方案”的假空态。
+- 修复前 `backend/app/services/task_queue.py` 声明了 `TRAVEL_ASYNC_JOB_TIMEOUT_SECONDS`，但没有调用方。服务端没有真正的端到端任务期限；客户端固定轮询次数反而成为了事实上的、但无权决定任务终态的超时器。
+
+### 架构不变量
+
+1. 只有服务端业务状态可以宣告规划终态。客户端轮询预算耗尽、App 进入后台或单次网络失败都只是“观察暂停”，不得改写成 `FAILED`、`NO_MATCH` 或普通空结果。
+2. `PENDING/RUNNING + QUEUED/RUNNING/WAITING_SOURCE` 始终是活动态；其中 `plans=[]` 显示规划进度，`plans` 非空时显示已验证的渐进结果并继续更新。
+3. “暂无可用方案”只能由服务端终态驱动：约束无匹配使用 `NO_MATCH` 专页；系统或核心事实失败使用 `FAILED` 专页；不得通过 `plans.length === 0` 单独推导业务结论。
+4. 渐进快照中的每一个 `TravelPlan` 必须已经具备完整、可验证的门到门事实并通过安全门禁。渐进发布不允许生成骨架计划、占位价格、估算接驳或尚未通过过滤的候选。
+5. 客户端观察预算与服务端执行期限是两个独立概念。前者只控制请求频率和前台等待体验；后者由后端统一配置、执行并产生可解释终态。
+
+### 实现方案
+
+#### P0：修正前端状态机，立即消除假空态
+
+- 抽出单一的 `isPlanningActive()`、`isPlanningTerminal()` 与结果页状态推导器，渲染、轮询、AppState 恢复和重试共同使用，禁止各处分散判断 `plans.length`。
+- 轮询达到本地观察预算时进入 `OBSERVATION_PAUSED` 本地 UI 状态，保留当前 `TravelPlanResponse`、`job_id` 和 `polling_url`；显示“仍在规划，可继续等待”及继续获取/取消入口，不设置“暂无可用方案”。
+- App 回到前台或用户点击继续获取时，先对原 `polling_url` 请求一次最新快照，再决定是否继续轮询；不得创建重复任务。
+- 轮询从固定次数改为基于 elapsed time 的可配置观察窗口，并采用有上限的退避与抖动。观察窗口即使仍设置为有限值，也不能承担终态判定。
+- 将 `RUNNING-empty`、`RUNNING-with-plans`、`NO_MATCH`、`FAILED` 和终态有计划结果拆成互斥页面状态。错误提示不能让活动态响应落入空态页面。
+
+#### P1：后端发布渐进可用方案
+
+- 在规划服务与异步存储之间引入内部 `PlanningProgressSink`（或等价回调接口）。`planner.py` 只发布领域进度和已经验证的计划，不直接依赖 HTTP、SQLite 或全局 job store。
+- 异步编排器提供 sink 实现：当首个完整铁路或航班计划通过安全门禁后，保存 `planning_status=RUNNING` 的新快照，`plans` 包含当前已验证方案，`recommendation_result=null`，`progress` 和 `async_job.updated_at` 单调前进。
+- 后续交通方式完成后可覆盖同一 job 快照并扩充计划集合；最终一次仍由完整候选筛选和推荐流程生成 `COMPLETE/PARTIAL/NO_MATCH/FAILED` 终态。
+- 同步 `POST /api/travel/plan` 使用 no-op sink，保持现有同步语义。渐进发布不改变外部字段或 schema version。
+- 快照更新必须检查取消状态和 job generation，避免旧后台任务在取消/重试后覆盖新状态。
+
+#### P1：建立服务端统一期限
+
+- 真正接入 `TRAVEL_ASYNC_JOB_TIMEOUT_SECONDS`，或删除该配置后以新的明确配置替代；禁止继续保留未生效的超时配置。
+- 使用单调时钟计算统一 deadline，并把剩余预算传入 Provider 家族查询和接驳扩展。在启动新的高成本分支前检查预算，单次 Provider 超时不得超过剩余总预算。
+- 达到期限时：若已有完整安全方案，则停止扩展并返回 `PARTIAL`；若没有任何可验证方案，则返回带稳定失败原因的 `FAILED`。不得让后台任务无限运行，也不得由客户端代替服务端宣告失败。
+- 第一阶段先以观测到的 P95/P99 设定期限，不能直接沿用当前未生效的 30 秒默认值；否则会把当前约 144 秒但能成功的请求错误截断。
+
+#### P2：缩短首个方案和最终结果延迟
+
+- 将指标拆为 `first_usable_plan_latency_ms` 与 `final_result_latency_ms`，同时记录 provider family、查询对数量、接驳缓存命中数和渐进快照次数。
+- 优先消除同一地点与地点对的重复地理编码/路线调用；复用规划内坐标和路线结果，再评估受 Provider QPS 约束的有界并发。
+- 铁路、航班等互不依赖的 Provider 家族可并行执行，但必须继续经过各自共享 QPS 门控、缓存、熔断和总 deadline；不得用无界并发换取表面延迟。
+
+### 数据流
+
+```text
+POST /api/travel/plan/async
+  -> 创建 RUNNING-empty job 快照
+  -> Planner(deadline, progress_sink)
+       -> 完整铁路计划通过门禁
+       -> progress_sink 发布 RUNNING-with-plans
+       -> 完整航班计划通过门禁
+       -> progress_sink 扩充 RUNNING-with-plans
+       -> 候选过滤与最终推荐
+  -> 发布 COMPLETE / PARTIAL / NO_MATCH / FAILED 终态
+
+客户端
+  -> 轮询活动态
+  -> 有 plans：立即显示已验证方案并保留局部 loading
+  -> 本地观察预算耗尽：OBSERVATION_PAUSED，不改变服务端语义
+  -> 前台恢复/用户继续：读取同一 polling_url 的最新快照
+  -> 仅按服务端终态进入结果、NO_MATCH 或 FAILED 页面
+```
+
+### 影响范围与文件修改范围
+
+- 前端状态机与页面：`frontend/src/App.tsx`；建议抽出 `frontend/src/planning/planningState.ts`，避免继续在聚合入口增加分支。
+- 前端 API：`frontend/src/api/client.ts`，复用现有 job GET，不新增 endpoint。
+- 后端编排：`backend/app/main.py`、`backend/app/services/planner.py`、`backend/app/services/task_queue.py`。
+- 运行时快照：`backend/app/services/store.py`；现有 `TravelPlanResponse` JSON 持久化结构可继续使用。
+- 候选与安全复用：`backend/app/services/candidate_generator.py`、`backend/app/services/constraints/`。
+- 观测与测试：`backend/app/services/observability.py`、`backend/app/tests/`、前端 helper tests。
+- 外部 schema 保持 `1.17`，不增加数据库迁移；只补充现有异步响应的状态语义。
+
+### 风险与控制
+
+- 渐进计划随后被最终筛选移除：渐进发布前必须复用与最终候选池一致的可推荐性和安全门禁；UI 标明“仍在查找更多方案”，不提前声称全局最优。
+- 多次快照造成选择跳动：若当前 plan 仍存在则保持选择；只有被最终结果移除时才切到稳定排序后的首个方案并给出非阻断提示。
+- 旧任务覆盖取消或重试：每次写入校验 job 状态与 generation；终态和取消态不可被活动态覆盖。
+- 轮询增加服务压力：退避、抖动、前后台暂停和 `updated_at` 无变化时降低频率；不能通过提前显示假空态降低压力。
+- 总期限过短降低覆盖：先发布指标并按生产分位数校准；达到期限时保留已验证方案并使用 `PARTIAL`，不丢弃成功结果。
+
+### 回滚方式
+
+- P0 前端状态机可独立发布和回滚；即使 P1 未上线，也必须保持“观察暂停不等于无方案”的不变量。
+- 渐进发布通过内部功能开关启用；关闭后恢复“只发布最终快照”，不影响终态响应结构。
+- 服务端 deadline 先以观测模式记录“本应超时”但不截断，再灰度启用强制模式；出现误截断时回到观测模式。
+- 回滚不得恢复 `RUNNING + plans=[] -> 暂无可用方案` 的错误映射，也不得把客户端超时上报为业务 `NO_MATCH`。

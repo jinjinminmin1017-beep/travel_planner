@@ -450,3 +450,22 @@
   - `npm --prefix frontend test`：项目未配置该脚本；已执行实际存在的 `test:helpers`。
   - Ruff：虚拟环境未安装 `ruff`，项目当前无法执行该检查。
 - 兼容性：外部 API schema 继续为 V1.17；无数据库迁移、无前端字段变更、未启用东航或 Phase 2 航司。
+
+## 2026-07-26 09:30:00 +08:00
+
+- 任务：完成 ARC-DEV-20260726-01 异步规划假空态、渐进结果、延迟治理与服务端期限。
+- 代码提交：`92d7e08`、`e2043c9`、`0e66dd2`、`17c3748`。
+- 修改内容：
+  - 前端抽出纯规划状态机，使用 elapsed-time 观察窗口、有上限退避与抖动；观察耗尽进入 `OBSERVATION_PAUSED`，继续获取和前台恢复读取同一个 job。
+  - 后端新增领域 `PlanningProgressSink`；首个完整安全方案产生后即可保存 `RUNNING + plans非空 + recommendation_result=null` 快照。
+  - 异步 store 增加 generation 比较写入和单调进度保护，取消或终态不能被旧 worker 覆盖。
+  - 规划内复用地点解析和地图路线；路线键覆盖规范化坐标、方式、Provider 链与环境；铁路/航班直达族最多 2 worker 有界并行。
+  - 可观测性增加首个可用方案、最终结果、渐进快照、路线/地点缓存和 deadline 结果。
+  - 接入单调时钟服务端期限；默认 180 秒 `observe`，显式 `enforce` 时有完整方案返回 `PARTIAL`、无完整方案返回 `FAILED`。
+- 验证：
+  - `.\.venv\Scripts\python -m pytest backend\app\tests -q`：246 passed。
+  - `npm --prefix frontend run typecheck`：通过。
+  - `npm --prefix frontend run test:helpers`：19 passed。
+  - `npm --prefix frontend run build`：Web、iOS、Android 导出通过。
+  - Python compileall 与 schema export 无差异检查通过。
+- 兼容性：外部 API schema 保持 V1.17；不需要数据库迁移；渐进结果与强制 deadline 有独立开关；未修改或越过航司许可门禁。
