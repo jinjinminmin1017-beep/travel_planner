@@ -12,8 +12,8 @@ function inferApiBaseFromDevServer() {
   return `http://${host}:8000`;
 }
 
-const LOCAL_EXPO_GO_API_BASE = "http://192.168.1.17:8000";
-const DEFAULT_API_BASE = inferApiBaseFromDevServer() ?? LOCAL_EXPO_GO_API_BASE ?? (Platform.OS === "android" ? "http://10.0.2.2:8000" : "http://127.0.0.1:8000");
+const DEFAULT_API_BASE = inferApiBaseFromDevServer()
+  ?? (Platform.OS === "android" ? "http://10.0.2.2:8000" : "http://127.0.0.1:8000");
 const API_BASE = configuredApiBase || DEFAULT_API_BASE;
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {

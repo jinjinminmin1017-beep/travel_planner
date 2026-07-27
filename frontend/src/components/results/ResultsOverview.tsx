@@ -60,10 +60,11 @@ export function ResultsOverview({ response, plan, recommendations, candidatePlan
   const visiblePlans = selectedTransportMode
     ? response.plans.filter((candidate) => planUsesTransportMode(candidate, selectedTransportMode))
     : response.plans;
+  const selectedReason = recommendations.find((slot) => slot.plan_id === plan.plan_id && slot.status === "AVAILABLE")?.reason;
   return (
     <View style={styles.page}>
-      <ResultsHeader request={response.travel_request} plan={plan} onSources={onSources} />
-      <RouteSummaryHero destinationName={response.destination_presentation?.display_name} imageSource={imageSource} plan={plan} request={response.travel_request} />
+      <ResultsHeader request={response.travel_request} plan={plan} planCount={visiblePlans.length} onSources={onSources} />
+      <RouteSummaryHero destinationName={response.destination_presentation?.display_name} imageSource={imageSource} plan={plan} recommendationHeading={selectedReason} request={response.travel_request} />
       <View style={styles.sectionHead}>
         <Text accessibilityRole="header" style={styles.heading}>{transportModeSelectorEnabled ? "交通方式" : "选择方案"}</Text>
         <Pressable accessibilityRole="button" accessibilityLabel="查看数据来源" hitSlop={ui.hitSlop} onPress={onSources} style={({ pressed }) => pressed && styles.pressed}><Text style={styles.sectionLink}>数据来源</Text></Pressable>

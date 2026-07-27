@@ -1,4 +1,5 @@
 import type {
+  CostBreakdown,
   IntercityTransportMode,
   Money,
   RecommendationSlot,
@@ -33,6 +34,166 @@ export type TransportModeAvailability = {
   availablePlanCount: number;
   retryable: boolean;
 };
+
+export type PlanningStageStatus = "COMPLETE" | "ACTIVE" | "PENDING";
+
+export type PlanningStagePresentation = {
+  currentTask: string;
+  activeIndex: number;
+  stages: Array<{ label: string; status: PlanningStageStatus }>;
+};
+
+export type SegmentPricePresentation = {
+  money: Money;
+  label: string;
+  estimated: boolean;
+} | null;
+
+export type RouteCostPresentation = {
+  segmentPrices: Record<string, SegmentPricePresentation>;
+  otherCosts: Array<{ label: string; amount: Money }>;
+  total: Money;
+};
+
+export type OfficialRedirectPresentation = {
+  helperText: string;
+  buttonLabel: string;
+  redirectType: "RAIL_12306" | "AIRLINE";
+  segmentId: string | null;
+};
+
+const PLANNING_STAGES = [
+  { label: "理解行程需求", threshold: 0, task: "正在理解行程需求" },
+  { label: "确认地点和时间", threshold: 21, task: "正在确认地点和出行时间" },
+  { label: "比对车次与接驳", threshold: 41, task: "正在比对车次、航班和接驳" },
+  { label: "评估并生成方案", threshold: 76, task: "正在评估并生成可行方案" }
+] as const;
+
+const AIRLINE_NAMES: Record<string, string> = {
+  airline_9c_public_query: "春秋航空",
+  airline_hu_public_query: "海南航空",
+  airline_qw_public_query: "青岛航空",
+  airline_mu_browser_query: "中国东方航空"
+};
+
+export function buildPlanningStagePresentation(progress: number): PlanningStagePresentation {
+  const normalizedProgress = Math.max(0, Math.min(100, Math.round(progress)));
+  const activeIndex = normalizedProgress >= 100
+    ? PLANNING_STAGES.length - 1
+    : PLANNING_STAGES.reduce(
+        (latest, stage, index) => normalizedProgress >= stage.threshold ? index : latest,
+        0
+      );
+  return {
+    currentTask: normalizedProgress >= 100 ? "规划完成" : PLANNING_STAGES[activeIndex].task,
+    activeIndex,
+    stages: PLANNING_STAGES.map((stage, index) => ({
+      label: stage.label,
+      status: normalizedProgress >= 100 || index < activeIndex
+        ? "COMPLETE"
+        : index === activeIndex ? "ACTIVE" : "PENDING"
+    }))
+  };
+}
+
+export function selectedSegmentPrice(segment: Segment): SegmentPricePresentation {
+  if (segment.segment_type === "RAIL") {
+    const option = segment.seat_options?.find((item) => item.option_id === segment.selected_seat_option_id);
+    if (option) return { money: option.price, label: `${option.seat_type}票价`, estimated: Boolean(option.price.is_estimated) };
+  }
+  if (segment.segment_type === "FLIGHT") {
+    const option = segment.cabin_options?.find((item) => item.option_id === segment.selected_cabin_option_id);
+    if (option) return { money: option.price, label: `${option.cabin_type}票价`, estimated: Boolean(option.price.is_estimated) };
+  }
+  if (segment.segment_type === "LOCAL_TRANSFER") {
+    const option = segment.transfer_options?.find((item) => item.option_id === segment.option_id);
+    if (option) return { money: option.estimated_cost, label: `${option.label}费用`, estimated: true };
+  }
+  return segment.estimated_cost
+    ? { money: segment.estimated_cost, label: "本段费用", estimated: Boolean(segment.estimated_cost.is_estimated) }
+    : null;
+}
+
+function moneyWithAmount(reference: Money, amountMinor: number): Money {
+  return {
+    amount_minor: amountMinor,
+    currency: reference.currency,
+    scale: reference.scale,
+    is_estimated: true,
+    display_text: null
+  };
+}
+
+export function buildRouteCostPresentation(
+  segments: Segment[],
+  costBreakdown: CostBreakdown
+): RouteCostPresentation {
+  const segmentPrices = Object.fromEntries(
+    segments.map((segment) => [segment.segment_id, selectedSegmentPrice(segment)])
+  );
+  const attributedMinor = Object.values(segmentPrices).reduce(
+    (sum, presentation) => sum + (presentation?.money.amount_minor ?? 0),
+    0
+  );
+  const remainingMinor = Math.max(0, costBreakdown.total_cost.amount_minor - attributedMinor);
+  return {
+    segmentPrices,
+    otherCosts: remainingMinor > 0
+      ? [{ label: "其他费用", amount: moneyWithAmount(costBreakdown.total_cost, remainingMinor) }]
+      : [],
+    total: costBreakdown.total_cost
+  };
+}
+
+export function buildOfficialRedirectPresentation(plan: TravelPlan): OfficialRedirectPresentation {
+  const primarySegment = plan.segments.find(
+    (segment) => segment.segment_type === "RAIL" || segment.segment_type === "FLIGHT"
+  );
+  if (primarySegment?.segment_type === "FLIGHT") {
+    const airlineName = AIRLINE_NAMES[primarySegment.data_source.source_id] ?? null;
+    return {
+      helperText: airlineName
+        ? `点击后将打开${airlineName}官网，仅确认实时班次、余票和价格，不会自动下单或支付。`
+        : "点击后将打开航空公司官网，仅确认实时班次、余票和价格，不会自动下单或支付。",
+      buttonLabel: airlineName ? `前往${airlineName}官网确认` : "前往航空公司官网确认",
+      redirectType: "AIRLINE",
+      segmentId: primarySegment.segment_id
+    };
+  }
+  return {
+    helperText: "点击后将打开铁路12306官方渠道，仅确认实时班次、余票和价格，不会自动下单或支付。",
+    buttonLabel: "前往铁路12306确认",
+    redirectType: "RAIL_12306",
+    segmentId: primarySegment?.segment_id ?? null
+  };
+}
+
+export function latestPlanUpdatedAt(plan: TravelPlan): string | null {
+  const timestamps = [
+    ...plan.data_sources,
+    ...plan.segments.map((segment) => segment.data_source)
+  ]
+    .map((source) => Date.parse(source.fetched_at.datetime))
+    .filter((value) => Number.isFinite(value));
+  if (!timestamps.length) return null;
+  return new Date(Math.max(...timestamps)).toISOString();
+}
+
+export function compactLocationLabel(value: string): string {
+  const normalized = value.trim();
+  const municipality = normalized.match(/^(北京|上海|天津|重庆)/)?.[1];
+  if (municipality) return municipality;
+  const city = normalized.match(/([\u4e00-\u9fff]{2,8}?)(?:市|自治州|地区|盟)/)?.[1];
+  if (city) return city;
+  const knownCity = normalized.match(/^(青岛|大连|广州|深圳|杭州|西安|武汉|成都|温州|南京|苏州|厦门|长沙|郑州|济南|福州|昆明|海口|三亚)/)?.[1];
+  return knownCity ?? normalized;
+}
+
+export function buildCompactRouteTitle(
+  request: Pick<TravelRequest, "origin_text" | "destination_text">
+) {
+  return `${compactLocationLabel(request.origin_text) || "起点"} → ${compactLocationLabel(request.destination_text) || "终点"}`;
+}
 
 const MODE_LABELS: Record<IntercityTransportMode, string> = { RAIL: "铁路", FLIGHT: "航班" };
 const MODE_PLAN_TYPE_MARKERS: Record<IntercityTransportMode, string[]> = {

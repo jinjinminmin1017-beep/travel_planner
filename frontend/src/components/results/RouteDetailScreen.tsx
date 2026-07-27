@@ -4,9 +4,10 @@ import { bookingRedirect, recalculate, submitFeedback, trackEvent } from "../../
 import { ui } from "../../designSystem";
 import { copyPlanSummary, openExternalUrl, sharePlan } from "../../nativeCapabilities";
 import type { FeedbackCategory, RecalculateChangeType, RecalculateResponse, Segment, TravelPlan, TravelPlanResponse } from "../../types";
-import { formatMoney, riskLabel } from "../../utils/format";
+import { formatMoney, minutesToText } from "../../utils/format";
+import { buildOfficialRedirectPresentation, buildRouteCostPresentation } from "../../utils/routePlanning";
+import { JourneyCostSummary } from "./JourneyCostSummary";
 import { JourneyLegCard } from "./JourneyLegCard";
-import { PlanRiskNotice } from "./PlanRiskNotice";
 import { formatClockTime } from "./presentation";
 
 type Props = {
@@ -30,6 +31,8 @@ export function RouteDetailScreen({ response, plan, favorite, onBack, onSources,
   const [busy, setBusy] = useState(false);
   const [busyFeedback, setBusyFeedback] = useState<FeedbackCategory | null>(null);
   const [expandedSegmentId, setExpandedSegmentId] = useState<string | null>(null);
+  const costPresentation = buildRouteCostPresentation(plan.segments, plan.cost_breakdown);
+  const redirectPresentation = buildOfficialRedirectPresentation(plan);
 
   async function applyOption(segment: Segment, changeType: RecalculateChangeType, optionId: string, label: string) {
     setBusy(true);
@@ -53,12 +56,10 @@ export function RouteDetailScreen({ response, plan, favorite, onBack, onSources,
   }
 
   async function openRedirect() {
-    const primarySegment = plan.segments.find((segment) => segment.segment_type === "RAIL" || segment.segment_type === "FLIGHT");
-    const redirectType = primarySegment?.segment_type === "FLIGHT" ? "AIRLINE" : "RAIL_12306";
     setBusy(true);
     try {
-      const result = await bookingRedirect(plan.plan_id, primarySegment?.segment_id ?? null, redirectType);
-      void trackEvent({ eventType: "REDIRECT_CLICK", requestId: response.request_id, traceId: response.trace_id, planId: plan.plan_id, metadata: { redirectType } }).catch(() => undefined);
+      const result = await bookingRedirect(plan.plan_id, redirectPresentation.segmentId, redirectPresentation.redirectType);
+      void trackEvent({ eventType: "REDIRECT_CLICK", requestId: response.request_id, traceId: response.trace_id, planId: plan.plan_id, metadata: { redirectType: redirectPresentation.redirectType } }).catch(() => undefined);
       if (result.redirect.url_available && result.redirect.url) {
         const opened = await openExternalUrl(result.redirect.url);
         if (!opened.opened) Alert.alert("请手动确认", result.redirect.fallback_instruction ?? opened.message ?? "请打开对应官方平台确认。");
@@ -101,7 +102,7 @@ export function RouteDetailScreen({ response, plan, favorite, onBack, onSources,
     <View style={styles.page}>
       <View style={styles.header}>
         <Pressable accessibilityRole="button" accessibilityLabel="返回方案总览" onPress={onBack} style={({ pressed }) => [styles.headerAction, pressed && styles.pressed]}><Text style={styles.headerActionText}>‹</Text></Pressable>
-        <View style={styles.headerCopy}><Text accessibilityRole="header" style={styles.title}>路线详情</Text><Text style={styles.risk}>综合推荐 · {riskLabel(plan.risk_assessment.overall_risk_level)}</Text></View>
+        <View style={styles.headerCopy}><Text accessibilityRole="header" style={styles.title}>路线详情</Text><Text style={styles.subtitle}>综合推荐</Text></View>
         <Pressable accessibilityRole="button" accessibilityLabel="分享当前路线" disabled={busy} onPress={shareCurrentPlan} style={({ pressed }) => [styles.headerAction, pressed && styles.pressed]}><Text style={styles.headerActionText}>↗</Text></Pressable>
       </View>
 
@@ -114,20 +115,28 @@ export function RouteDetailScreen({ response, plan, favorite, onBack, onSources,
         <View style={styles.metrics}>
           <View style={styles.metric}><Text style={styles.metricLabel}>出发</Text><Text style={styles.metricValue}>{departure}</Text></View>
           <View style={styles.metric}><Text style={styles.metricLabel}>抵达</Text><Text style={styles.metricValue}>{arrival}</Text></View>
-          <View style={styles.metric}><Text style={styles.metricLabel}>总价</Text><Text style={styles.metricValue}>{formatMoney(plan.cost_breakdown.total_cost)}</Text></View>
+          <View style={styles.metric}><Text style={styles.metricLabel}>预计总价</Text><Text numberOfLines={1} style={styles.metricValue}>{formatMoney(plan.cost_breakdown.total_cost)}</Text></View>
         </View>
       </View>
 
-      <PlanRiskNotice plan={plan} />
-
       <View style={styles.section}>
-        <View style={styles.sectionHead}><Text accessibilityRole="header" style={styles.sectionTitle}>分段路线</Text><Text style={styles.sectionLink}>票价明细见下方</Text></View>
-        {plan.segments.map((segment) => <JourneyLegCard busy={busy} expanded={expandedSegmentId === segment.segment_id} key={segment.segment_id} onApply={applyOption} onToggle={() => setExpandedSegmentId((current) => current === segment.segment_id ? null : segment.segment_id)} segment={segment} />)}
-      </View>
-
-      <View style={styles.costCard}>
-        <Text accessibilityRole="header" style={styles.sectionTitle}>费用明细</Text>
-        {plan.cost_breakdown.items.map((item) => <View key={`${item.label}-${item.amount.amount_minor}`} style={styles.costRow}><Text style={styles.body}>{item.label}</Text><Text style={styles.cost}>{formatMoney(item.amount)}{item.amount.is_estimated ? " · 估算" : ""}</Text></View>)}
+        <View style={styles.sectionHead}><Text accessibilityRole="header" style={styles.sectionTitle}>分段路线</Text><Text style={styles.sectionMeta}>{plan.segments.length} 段 · {minutesToText(plan.total_duration_minutes)}</Text></View>
+        <View style={styles.journey}>
+          {plan.segments.map((segment, index) => (
+            <JourneyLegCard
+              busy={busy}
+              expanded={expandedSegmentId === segment.segment_id}
+              key={segment.segment_id}
+              last={index === plan.segments.length - 1}
+              onApply={applyOption}
+              onToggle={() => setExpandedSegmentId((current) => current === segment.segment_id ? null : segment.segment_id)}
+              price={costPresentation.segmentPrices[segment.segment_id] ?? null}
+              segment={segment}
+            />
+          ))}
+          <JourneyCostSummary presentation={costPresentation} />
+        </View>
+        <Text style={styles.sourceNote}>票价与班次以对应官方渠道最终确认结果为准。</Text>
       </View>
 
       {plan.ticket_enhancement ? <View style={styles.ticket}><Text style={styles.ticketTitle}>票源增强 · {plan.ticket_enhancement.grade}</Text><Text style={styles.body}>{plan.ticket_enhancement.recommendation_message}</Text><Text style={styles.meta}>额外成本 {formatMoney(plan.ticket_enhancement.extra_cost)}，跳转后请按官方规则确认。</Text></View> : null}
@@ -136,13 +145,26 @@ export function RouteDetailScreen({ response, plan, favorite, onBack, onSources,
         <Pressable accessibilityRole="button" accessibilityLabel={favorite ? "取消收藏当前方案" : "收藏当前方案"} disabled={busy} onPress={() => onFavoriteToggle(plan)} style={({ pressed }) => [styles.secondaryAction, pressed && styles.pressed]}><Text style={styles.secondaryActionText}>{favorite ? "已收藏" : "收藏"}</Text></Pressable>
         <Pressable accessibilityRole="button" accessibilityLabel="复制行程摘要" disabled={busy} onPress={copyCurrentPlan} style={({ pressed }) => [styles.secondaryAction, pressed && styles.pressed]}><Text style={styles.secondaryActionText}>复制摘要</Text></Pressable>
         <Pressable accessibilityRole="button" accessibilityLabel="查看数据来源" disabled={busy} onPress={onSources} style={({ pressed }) => [styles.secondaryAction, pressed && styles.pressed]}><Text style={styles.secondaryActionText}>数据来源</Text></Pressable>
-        <Pressable accessibilityRole="button" accessibilityLabel="跳转到外部官方平台确认" disabled={busy} onPress={openRedirect} style={({ pressed }) => [styles.primaryAction, pressed && styles.pressed, busy && styles.disabled]}><Text style={styles.primaryActionText}>{busy ? "处理中" : "前往官方平台"}</Text></Pressable>
       </View>
 
       <View>
         <Text accessibilityRole="header" style={styles.sectionTitle}>问题反馈</Text>
         <View style={styles.feedbackRow}>{FEEDBACK_OPTIONS.map((option) => <Pressable accessibilityRole="button" accessibilityLabel={`反馈${option.label}`} accessibilityState={{ disabled: busyFeedback !== null }} disabled={busyFeedback !== null} key={option.category} onPress={() => sendFeedback(option.category)} style={({ pressed }) => [styles.feedback, pressed && styles.pressed, busyFeedback !== null && styles.disabled]}><Text style={styles.feedbackText}>{busyFeedback === option.category ? "提交中" : option.label}</Text></Pressable>)}</View>
         <Text style={styles.meta}>反馈会关联当前方案和请求标识，不需要填写账号或支付信息。</Text>
+      </View>
+
+      <View style={styles.bottomAction}>
+        <Text style={styles.redirectHelper}>{redirectPresentation.helperText}</Text>
+        <Pressable
+          accessibilityLabel={redirectPresentation.buttonLabel}
+          accessibilityRole="button"
+          accessibilityState={{ disabled: busy }}
+          disabled={busy}
+          onPress={openRedirect}
+          style={({ pressed }) => [styles.primaryAction, pressed && !busy && styles.pressed, busy && styles.disabled]}
+        >
+          <Text style={styles.primaryActionText}>{busy ? "处理中" : redirectPresentation.buttonLabel}</Text>
+        </Pressable>
       </View>
     </View>
   );
@@ -155,7 +177,7 @@ const styles = StyleSheet.create({
   headerAction: { alignItems: "center", backgroundColor: ui.colors.surface, borderRadius: ui.radius.control, justifyContent: "center", minHeight: ui.touchTarget, minWidth: ui.touchTarget },
   headerActionText: { color: ui.colors.primaryDeep, fontSize: 22, fontWeight: "700" },
   title: { color: ui.colors.text, fontSize: 20, fontWeight: "800", lineHeight: 24 },
-  risk: { color: ui.colors.textSecondary, fontSize: 11, marginTop: 2 },
+  subtitle: { color: ui.colors.textSecondary, fontSize: 11, marginTop: 2 },
   summary: { backgroundColor: ui.colors.surface, borderRadius: ui.radius.card, padding: ui.spacing.lg },
   routeLineRow: { alignItems: "center", flexDirection: "row", gap: ui.spacing.sm },
   routeEnd: { color: ui.colors.text, flexShrink: 1, fontSize: 16, fontWeight: "800", lineHeight: 21, maxWidth: "36%" },
@@ -169,10 +191,10 @@ const styles = StyleSheet.create({
   metricValue: { color: ui.colors.text, fontSize: 15, fontWeight: "800", lineHeight: 20, marginTop: 2 },
   section: { gap: 0 },
   sectionHead: { alignItems: "center", flexDirection: "row", justifyContent: "space-between", marginBottom: ui.spacing.sm },
-  sectionLink: { color: ui.colors.primary, fontSize: 11, fontWeight: "700" },
+  sectionMeta: { color: ui.colors.textSecondary, fontSize: 11, lineHeight: 16 },
   sectionTitle: { color: ui.colors.text, fontSize: 16, fontWeight: "800", lineHeight: 21, marginBottom: ui.spacing.sm },
-  costCard: { backgroundColor: ui.colors.surface, borderRadius: ui.radius.card, padding: ui.spacing.md },
-  costRow: { alignItems: "center", borderBottomColor: ui.colors.line, borderBottomWidth: StyleSheet.hairlineWidth, flexDirection: "row", justifyContent: "space-between", minHeight: ui.touchTarget },
+  journey: { backgroundColor: ui.colors.surface, borderRadius: ui.radius.card, overflow: "hidden" },
+  sourceNote: { color: ui.colors.textSecondary, fontSize: 10, lineHeight: 15, marginHorizontal: 2, marginTop: 10 },
   body: { color: ui.colors.text, flex: 1, fontSize: 13, lineHeight: 19 },
   cost: { color: ui.colors.text, fontSize: 13, fontWeight: "800", paddingLeft: ui.spacing.md },
   ticket: { backgroundColor: ui.colors.warningSurface, borderRadius: ui.radius.card, gap: ui.spacing.xs, padding: ui.spacing.md },
@@ -181,7 +203,9 @@ const styles = StyleSheet.create({
   actionGrid: { flexDirection: "row", flexWrap: "wrap", gap: ui.spacing.sm },
   secondaryAction: { alignItems: "center", backgroundColor: ui.colors.primarySoft, borderRadius: ui.radius.control, justifyContent: "center", minHeight: ui.touchTarget, minWidth: 96, paddingHorizontal: ui.spacing.md },
   secondaryActionText: { color: ui.colors.primaryDeep, fontSize: 13, fontWeight: "800" },
-  primaryAction: { alignItems: "center", backgroundColor: ui.colors.primary, borderRadius: ui.radius.control, flexGrow: 1, justifyContent: "center", minHeight: ui.touchTarget, paddingHorizontal: ui.spacing.lg },
+  bottomAction: { borderTopColor: ui.colors.line, borderTopWidth: StyleSheet.hairlineWidth, marginHorizontal: -ui.spacing.lg, paddingHorizontal: ui.spacing.lg, paddingTop: ui.spacing.md },
+  redirectHelper: { color: ui.colors.textSecondary, fontSize: 10, lineHeight: 15, marginBottom: ui.spacing.sm, textAlign: "center" },
+  primaryAction: { alignItems: "center", backgroundColor: ui.colors.primary, borderRadius: ui.radius.control, justifyContent: "center", minHeight: ui.touchTarget, paddingHorizontal: ui.spacing.lg },
   primaryActionText: { color: ui.colors.surface, fontSize: 14, fontWeight: "800" },
   feedbackRow: { flexDirection: "row", flexWrap: "wrap", gap: ui.spacing.sm },
   feedback: { alignItems: "center", backgroundColor: ui.colors.primarySoft, borderRadius: ui.radius.control, justifyContent: "center", minHeight: ui.touchTarget, paddingHorizontal: ui.spacing.md },

@@ -1,25 +1,20 @@
 import { StyleSheet, Text, View } from "react-native";
 import { ui } from "../../designSystem";
-
-const STAGES = [
-  { label: "需求解析", threshold: 0 },
-  { label: "地点确认", threshold: 21 },
-  { label: "车次比对", threshold: 41 },
-  { label: "方案评分", threshold: 76 }
-] as const;
+import { buildPlanningStagePresentation } from "../../utils/routePlanning";
 
 export function PlanningStageList({ progress }: { progress: number }) {
-  const activeIndex = progress >= 100 ? STAGES.length : STAGES.reduce((latest, stage, index) => progress >= stage.threshold ? index : latest, 0);
+  const presentation = buildPlanningStagePresentation(progress);
 
   return (
-    <View accessibilityRole="list" style={styles.list}>
-      {STAGES.map((stage, index) => {
-        const complete = progress >= 100 || index < activeIndex;
-        const active = progress < 100 && index === activeIndex;
+    <View accessibilityLabel={`规划进度${Math.round(progress)}%，${presentation.currentTask}`} accessibilityRole="list" style={styles.list}>
+      {presentation.stages.map((stage) => {
+        const complete = stage.status === "COMPLETE";
+        const active = stage.status === "ACTIVE";
         return (
-          <View accessibilityRole="summary" key={stage.label} style={[styles.stage, active && styles.stageActive]}>
-            <Text style={styles.status}>{complete ? "完成" : active ? "进行中" : "待处理"}</Text>
-            <Text numberOfLines={1} style={[styles.label, active && styles.labelActive]}>{stage.label}</Text>
+          <View accessibilityRole="summary" key={stage.label} style={styles.stage}>
+            <View style={[styles.node, complete && styles.nodeComplete, active && styles.nodeActive]} />
+            <Text style={[styles.label, active && styles.labelActive]}>{stage.label}</Text>
+            <Text style={[styles.status, active && styles.statusActive]}>{complete ? "已完成" : active ? "进行中" : "待处理"}</Text>
           </View>
         );
       })}
@@ -28,10 +23,13 @@ export function PlanningStageList({ progress }: { progress: number }) {
 }
 
 const styles = StyleSheet.create({
-  list: { flexDirection: "row", gap: ui.spacing.xs, marginTop: 14 },
-  stage: { backgroundColor: "rgba(255,255,255,0.72)", borderRadius: ui.radius.control, flex: 1, minWidth: 0, paddingHorizontal: ui.spacing.sm, paddingVertical: 10 },
-  stageActive: { backgroundColor: ui.colors.primarySoft },
-  status: { color: ui.colors.planningStageText, fontSize: 10, lineHeight: 13.5 },
-  label: { color: ui.colors.planningStageStrong, fontSize: 11, fontWeight: "700", lineHeight: 14.85, marginTop: 4 },
+  list: { backgroundColor: ui.colors.surface, borderRadius: ui.radius.card, marginTop: 14, paddingHorizontal: ui.spacing.md },
+  stage: { alignItems: "center", borderBottomColor: ui.colors.line, borderBottomWidth: StyleSheet.hairlineWidth, flexDirection: "row", gap: 10, minHeight: 52 },
+  node: { backgroundColor: ui.colors.surface, borderColor: ui.colors.line, borderRadius: ui.radius.pill, borderWidth: 2, height: 16, width: 16 },
+  nodeComplete: { backgroundColor: ui.colors.surface, borderColor: ui.colors.primary, borderWidth: 5 },
+  nodeActive: { backgroundColor: ui.colors.connection, borderColor: ui.colors.primary },
+  status: { color: ui.colors.planningStageText, fontSize: 10, lineHeight: 15 },
+  statusActive: { color: ui.colors.primaryDeep, fontWeight: "800" },
+  label: { color: ui.colors.planningStageStrong, flex: 1, fontSize: 12, fontWeight: "700", lineHeight: 18 },
   labelActive: { color: ui.colors.primaryDeep, fontWeight: "800" }
 });

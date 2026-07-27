@@ -10,7 +10,6 @@ import {
   ScrollView,
   StyleSheet,
   Text,
-  TextInput,
   useWindowDimensions,
   View
 } from "react-native";
@@ -26,6 +25,7 @@ import {
   type PlanningObservationState
 } from "./planning/planningState";
 import { PlanningProgressScreen } from "./components/planning/PlanningProgressScreen";
+import { TravelInputScreen } from "./components/input/TravelInputScreen";
 import { ConstraintNoMatchScreen } from "./components/constraints/ConstraintNoMatchScreen";
 import { ResultsBottomAction } from "./components/results/ResultsBottomAction";
 import { ResultsOverview } from "./components/results/ResultsOverview";
@@ -445,39 +445,6 @@ function DataSourcesPage({ response, plan, onBack }: { response: TravelPlanRespo
   );
 }
 
-function RetentionPlanList({
-  title,
-  plans,
-  emptyText,
-  onOpen
-}: {
-  title: string;
-  plans: RecentPlanSnapshot[];
-  emptyText: string;
-  onOpen: (plan: RecentPlanSnapshot) => void;
-}) {
-  return (
-    <View style={styles.retentionPanel}>
-      <Text style={styles.subheadingCompact}>{title}</Text>
-      {plans.length === 0 ? (
-        <Text style={styles.secondaryText}>{emptyText}</Text>
-      ) : (
-        plans.slice(0, 3).map((plan) => (
-          <Pressable accessibilityRole="button" accessibilityLabel={`查看${title}：${plan.plan_name}`} hitSlop={ui.hitSlop} style={styles.retentionRow} key={`${title}-${plan.plan_id}`} onPress={() => onOpen(plan)}>
-            <View style={styles.flex}>
-              <Text style={styles.optionTitle}>{plan.origin_text} 到 {plan.destination_text}</Text>
-              <Text style={styles.secondaryText}>
-                {plan.total_cost_text} · {minutesToText(plan.total_duration_minutes)} · {plan.travel_date}
-              </Text>
-            </View>
-            <Text style={styles.statusPill}>{planTypeLabel(plan.plan_type)}</Text>
-          </Pressable>
-        ))
-      )}
-    </View>
-  );
-}
-
 export default function App() {
   const { width } = useWindowDimensions();
   const wideLayout = width >= ui.contentMaxWidth;
@@ -517,7 +484,6 @@ export default function App() {
   const recommendedPlanIds = useMemo(() => new Set(recommendations.map((slot) => slot.plan_id).filter(Boolean)), [recommendations]);
   const candidatePlans = useMemo(() => visiblePlans.filter((plan) => !recommendedPlanIds.has(plan.plan_id)), [visiblePlans, recommendedPlanIds]);
   const selectedPlanFavorite = selectedPlan ? favoritePlans.some((plan) => plan.plan_id === selectedPlan.plan_id) : false;
-  const recentPlan = recentPlans[0] ?? null;
   const authoritativeResponse = planningResponse ?? response;
   const pageState = derivePlanningPageState({
     response: authoritativeResponse,
@@ -717,6 +683,15 @@ export default function App() {
     await startPlanning(trimmedInput, { input_length: trimmedInput.length });
   }
 
+  function appendInputPhrase(phrase: string, duplicatePattern: RegExp) {
+    setRawInput((current) => {
+      if (duplicatePattern.test(current)) return current;
+      const trimmed = current.trim();
+      return trimmed ? `${trimmed}，${phrase}` : phrase;
+    });
+    setError("");
+  }
+
   async function replanWithTime(anchor: TimeAnchor, value: string) {
     if (!response) return;
     const point = timePointForTravelDate(response.travel_request.travel_date, value);
@@ -886,79 +861,38 @@ export default function App() {
     <SafeAreaView style={styles.safeArea}>
       <View style={styles.appShell}>
         {activeTab === "input" ? (
-          <ScrollView style={styles.screen} contentContainerStyle={[styles.content, styles.inputContent, wideLayout && styles.contentWide]} keyboardShouldPersistTaps="handled">
-            <View style={styles.topbar}>
-              <Text style={styles.appTitle}>出行搭子</Text>
-              <Text style={styles.appSubtitle}>一念云起，把出行需求说给搭子听。</Text>
-            </View>
-
-            <View style={styles.promptStage}>
-              <View style={styles.promptPanel}>
-                <Text style={styles.promptLabel}>你想怎么走？</Text>
-                <TextInput
-                  style={styles.input}
-                  value={rawInput}
-                  onChangeText={setRawInput}
-                  multiline
-                  placeholder="说说你从哪里出发、到哪里、什么时候走。"
-                  textAlignVertical="top"
-                />
-                <View style={styles.inputActions}>
-                  <Pressable accessibilityRole="button" accessibilityLabel="请求系统定位权限" hitSlop={ui.hitSlop} style={styles.secondarySmallButton} onPress={requestLocation}>
-                    <Text style={styles.iconButtonText}>使用定位</Text>
-                  </Pressable>
-                  {recentPlan && (
-                    <View style={styles.recentPlanPill}>
-                      <Text style={styles.kicker}>最近方案</Text>
-                      <Text style={styles.secondaryText}>{recentPlan.total_cost_text} · {minutesToText(recentPlan.total_duration_minutes)}</Text>
-                    </View>
-                  )}
-                </View>
-                <Pressable accessibilityRole="button" accessibilityLabel="开始规划出行方案" hitSlop={ui.hitSlop} style={[styles.submitButton, loading && styles.submitButtonDisabled]} onPress={submit} disabled={loading}>
-                  {loading ? <ActivityIndicator color="#ffffff" /> : <Text style={styles.submitButtonText}>开始规划</Text>}
-                </Pressable>
-              </View>
-              <RetentionPlanList title="最近规划" plans={recentPlans} emptyText="完成一次规划后，会在这里保存脱敏摘要。" onOpen={openStoredPlan} />
-              <RetentionPlanList title="收藏方案" plans={favoritePlans} emptyText="在方案详情里点收藏，之后会显示在这里。" onOpen={openStoredPlan} />
-              <View style={styles.retentionPanel}>
-                <Text style={styles.subheadingCompact}>偏好记忆</Text>
-                <Text style={styles.secondaryText}>只有你开启后才会保存常用出发地和目的地偏好；关闭会清空对应内容。</Text>
-                <TextInput
-                  style={styles.compactInput}
-                  value={commonOriginDraft}
-                  onChangeText={setCommonOriginDraft}
-                  placeholder="常用出发地，例如 上海虹桥"
-                />
-                <View style={styles.actionRowWrap}>
-                  <Pressable accessibilityRole="switch" accessibilityLabel="常用出发地记忆开关" accessibilityState={{ checked: retentionPreferences.common_origin_enabled }} hitSlop={ui.hitSlop} style={[styles.feedbackButton, retentionPreferences.common_origin_enabled && styles.toggleButtonActive]} onPress={() => savePreferenceSettings({ common_origin_enabled: !retentionPreferences.common_origin_enabled })}>
-                    <Text style={styles.iconButtonText}>{retentionPreferences.common_origin_enabled ? "关闭出发地" : "记住出发地"}</Text>
-                  </Pressable>
-                  {retentionPreferences.common_origin_enabled && retentionPreferences.common_origin_text ? (
-                    <Pressable accessibilityRole="button" accessibilityLabel="套用常用出发地" hitSlop={ui.hitSlop} style={styles.feedbackButton} onPress={() => setRawInput((current) => (current ? `${retentionPreferences.common_origin_text} 出发，${current}` : `从${retentionPreferences.common_origin_text}出发，`))}>
-                      <Text style={styles.iconButtonText}>套用</Text>
-                    </Pressable>
-                  ) : null}
-                </View>
-                <TextInput
-                  style={styles.compactInput}
-                  value={destinationPreferenceDraft}
-                  onChangeText={setDestinationPreferenceDraft}
-                  placeholder="目的地偏好，用顿号或逗号分隔"
-                />
-                <Pressable accessibilityRole="switch" accessibilityLabel="目的地偏好记忆开关" accessibilityState={{ checked: retentionPreferences.destination_preferences_enabled }} hitSlop={ui.hitSlop} style={[styles.feedbackButton, retentionPreferences.destination_preferences_enabled && styles.toggleButtonActive]} onPress={() => savePreferenceSettings({ destination_preferences_enabled: !retentionPreferences.destination_preferences_enabled })}>
-                  <Text style={styles.iconButtonText}>{retentionPreferences.destination_preferences_enabled ? "关闭目的地偏好" : "记住目的地偏好"}</Text>
-                </Pressable>
-                <Pressable accessibilityRole="button" accessibilityLabel="保存当前偏好设置" hitSlop={ui.hitSlop} style={styles.secondarySmallButton} onPress={() => savePreferenceSettings({})}>
-                  <Text style={styles.iconButtonText}>保存偏好</Text>
-                </Pressable>
-              </View>
-              {error ? <Text style={styles.errorPanel}>{error}</Text> : null}
-            </View>
-          </ScrollView>
+          <TravelInputScreen
+            commonOriginDraft={commonOriginDraft}
+            destinationPreferenceDraft={destinationPreferenceDraft}
+            error={error}
+            favoritePlans={favoritePlans}
+            loading={loading}
+            onAppendLessTransfers={() => appendInputPhrase("希望少换乘", /少换乘/)}
+            onAppendTomorrow={() => appendInputPhrase("明天出发", /明天(?:出发)?/)}
+            onApplyCommonOrigin={() => setRawInput((current) => (
+              current ? `从${retentionPreferences.common_origin_text}出发，${current}` : `从${retentionPreferences.common_origin_text}出发`
+            ))}
+            onChangeCommonOrigin={setCommonOriginDraft}
+            onChangeDestinationPreference={setDestinationPreferenceDraft}
+            onChangeInput={(value) => {
+              setRawInput(value);
+              if (error) setError("");
+            }}
+            onLocation={requestLocation}
+            onOpenStoredPlan={openStoredPlan}
+            onSavePreferences={savePreferenceSettings}
+            onSubmit={submit}
+            rawInput={rawInput}
+            recentPlans={recentPlans}
+            retentionPreferences={retentionPreferences}
+            wideLayout={wideLayout}
+          />
         ) : (
           <ScrollView style={styles.screen} contentContainerStyle={[styles.content, planningFullScreen && styles.planningContent, wideLayout && styles.contentWide]}>
             {pageState === "PLANNING_EMPTY" && authoritativeResponse ? (
               <PlanningProgressScreen
+                cancelBusy={false}
+                candidateCount={authoritativeResponse.plans.length}
                 destinationText={authoritativeResponse.travel_request.destination_text}
                 onCancel={authoritativeResponse.async_job ? cancelCurrentJob : undefined}
                 originText={authoritativeResponse.travel_request.origin_text}

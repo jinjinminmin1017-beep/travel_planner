@@ -4,13 +4,16 @@ import Svg, { Defs, LinearGradient as SvgLinearGradient, RadialGradient, Rect, S
 import worldMapFlowImage from "../../../assets/maps/world-map-flow.png";
 import worldMapImage from "../../../assets/maps/world-map.png";
 import { ui } from "../../designSystem";
+import { buildPlanningStagePresentation } from "../../utils/routePlanning";
 import { PlanningStageList } from "./PlanningStageList";
 
 type Props = {
   progress: number;
+  candidateCount?: number;
   originText?: string;
   destinationText?: string;
   onCancel?: () => void;
+  cancelBusy?: boolean;
 };
 
 function PlanningBackground() {
@@ -49,8 +52,9 @@ function MapSweep() {
   );
 }
 
-export function PlanningProgressScreen({ progress, originText, destinationText, onCancel }: Props) {
+export function PlanningProgressScreen({ progress, candidateCount = 0, originText, destinationText, onCancel, cancelBusy = false }: Props) {
   const normalizedProgress = Math.max(0, Math.min(100, Math.round(progress)));
+  const stagePresentation = buildPlanningStagePresentation(normalizedProgress);
   const [reduceMotion, setReduceMotion] = useState(false);
   const [mapWidth, setMapWidth] = useState(0);
   const animatedProgress = useRef(new Animated.Value(normalizedProgress)).current;
@@ -77,22 +81,20 @@ export function PlanningProgressScreen({ progress, originText, destinationText, 
   }, [animatedProgress, normalizedProgress, reduceMotion]);
 
   const mapClipWidth = animatedProgress.interpolate({ inputRange: [0, 100], outputRange: ["32%", "92%"], extrapolate: "clamp" });
-  const routeDescription = originText && destinationText ? `已理解${originText}到${destinationText}的行程需求` : "正在理解你的行程需求";
-
   return (
     <View style={styles.page}>
       <PlanningBackground />
       <View style={styles.header}>
         <Text style={styles.brand}>路明</Text>
         {onCancel ? (
-          <Pressable accessibilityRole="button" accessibilityLabel="取消当前规划" hitSlop={ui.hitSlop} onPress={onCancel} style={({ pressed }) => [styles.cancel, pressed && styles.pressed]}>
-            <Text style={styles.cancelText}>取消规划</Text>
+          <Pressable accessibilityRole="button" accessibilityLabel="取消当前规划" accessibilityState={{ disabled: cancelBusy }} disabled={cancelBusy} hitSlop={ui.hitSlop} onPress={onCancel} style={({ pressed }) => [styles.cancel, pressed && styles.pressed, cancelBusy && styles.disabled]}>
+            <Text style={styles.cancelText}>{cancelBusy ? "取消中" : "取消规划"}</Text>
           </Pressable>
         ) : null}
       </View>
       <View style={styles.main}>
-        <Text accessibilityRole="header" style={styles.title}>正在为你拼出{`\n`}更稳妥的路线</Text>
-        <Text style={styles.description}>{routeDescription}，正在核对车次、接驳与到达时间。</Text>
+        <Text accessibilityRole="header" style={styles.title}>{candidateCount > 0 ? `正在核对 ${candidateCount} 个候选方案` : "正在为你规划路线"}</Text>
+        <Text style={styles.description}>{originText || "起点"} → {destinationText || "终点"}</Text>
         <View accessible accessibilityLabel="规划数据正在汇聚的世界地图" onLayout={(event) => setMapWidth(Math.round(event.nativeEvent.layout.width))} style={styles.mapFrame}>
           <Image source={worldMapImage} resizeMode="contain" style={[styles.mapImage, styles.mapBase]} />
           <Animated.View pointerEvents="none" style={[styles.flowClip, { width: mapClipWidth }] }>
@@ -102,7 +104,15 @@ export function PlanningProgressScreen({ progress, originText, destinationText, 
             <MapSweep />
           </Animated.View>
         </View>
+        <View style={styles.progressCopy}>
+          <Text style={styles.progressTask}>{stagePresentation.currentTask}</Text>
+          <Text style={styles.progressValue}>{normalizedProgress}%</Text>
+        </View>
+        <View accessibilityLabel={`规划进度${normalizedProgress}%`} accessibilityRole="progressbar" style={styles.progressTrack}>
+          <View style={[styles.progressFill, { width: `${normalizedProgress}%` }]} />
+        </View>
         <PlanningStageList progress={normalizedProgress} />
+        <Text style={styles.note}>可以离开此页面，规划完成后会保留结果。</Text>
       </View>
     </View>
   );
@@ -116,12 +126,19 @@ const styles = StyleSheet.create({
   cancelText: { color: ui.colors.planningCancelText, fontSize: 12, fontWeight: "700" },
   pressed: { opacity: 0.72, transform: [{ scale: 0.98 }] },
   main: { flex: 1, justifyContent: "center" },
-  title: { color: ui.colors.text, fontSize: 31, fontWeight: "800", letterSpacing: -0.775, lineHeight: 37.2, maxWidth: 300 },
+  title: { color: ui.colors.text, fontSize: 30, fontWeight: "800", letterSpacing: -0.75, lineHeight: 36, maxWidth: 340 },
   description: { color: ui.colors.textSecondary, fontSize: 13, lineHeight: 20.8, marginTop: 10 },
-  mapFrame: { backgroundColor: ui.colors.planningMap, borderRadius: ui.radius.card, height: 214, marginTop: ui.spacing.xl, overflow: "hidden", position: "relative" },
+  mapFrame: { backgroundColor: ui.colors.planningMap, borderRadius: ui.radius.card, height: 204, marginTop: ui.spacing.xl, overflow: "hidden", position: "relative" },
   mapImage: { height: "100%", left: 0, position: "absolute", top: 0, width: "100%" },
   mapBase: { opacity: 0.94 },
   flowClip: { bottom: 0, left: 0, overflow: "hidden", position: "absolute", top: 0 },
   flowImage: { height: "100%", left: 0, position: "absolute", top: 0, width: "100%" },
-  glowSweep: { bottom: 0, marginLeft: -21, position: "absolute", top: 0, width: 42 }
+  glowSweep: { bottom: 0, marginLeft: -21, position: "absolute", top: 0, width: 42 },
+  progressCopy: { alignItems: "center", flexDirection: "row", justifyContent: "space-between", marginBottom: ui.spacing.sm, marginTop: 14 },
+  progressTask: { color: ui.colors.text, flex: 1, fontSize: 14, fontWeight: "800", lineHeight: 20 },
+  progressValue: { color: ui.colors.primaryDeep, fontSize: 13, fontWeight: "800", marginLeft: ui.spacing.md },
+  progressTrack: { backgroundColor: ui.colors.disabled, borderRadius: ui.radius.pill, height: 4, overflow: "hidden" },
+  progressFill: { backgroundColor: ui.colors.primary, borderRadius: ui.radius.pill, height: "100%" },
+  note: { color: ui.colors.textSecondary, fontSize: 10, lineHeight: 16, marginTop: ui.spacing.md, textAlign: "center" },
+  disabled: { backgroundColor: ui.colors.disabled }
 });

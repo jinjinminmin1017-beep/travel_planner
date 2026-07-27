@@ -42,11 +42,24 @@ test("existing analytics event names remain wired after component extraction", a
   }
 });
 
-test("plan risks stay at plan level without text-based segment matching", async () => {
+test("approved V2 removes the plan risk card and embeds route costs", async () => {
   const detail = await read("../src/components/results/RouteDetailScreen.tsx");
-  const riskNotice = await read("../src/components/results/PlanRiskNotice.tsx");
-  assert.match(detail, /<PlanRiskNotice plan=\{plan\}/);
-  assert.doesNotMatch(riskNotice, /segment_id|segmentTitle|includes\(/);
+  assert.doesNotMatch(detail, /PlanRiskNotice|riskLabel/);
+  assert.match(detail, /<JourneyCostSummary presentation=\{costPresentation\}/);
+  assert.match(detail, /buildOfficialRedirectPresentation\(plan\)/);
+  assert.match(detail, /redirectPresentation\.buttonLabel/);
+});
+
+test("approved V2 extracts the input flow and keeps retention actions", async () => {
+  const app = await read("../src/App.tsx");
+  const input = await read("../src/components/input/TravelInputScreen.tsx");
+  assert.match(app, /<TravelInputScreen/);
+  assert.match(input, /今天，想去哪里？/);
+  assert.match(input, /明天出发/);
+  assert.match(input, /少换乘/);
+  assert.match(input, /脱敏摘要/);
+  assert.match(input, /收藏方案/);
+  assert.match(input, /出行偏好/);
 });
 
 test("rail seat recalculation replaces the full result set while transfers stay plan-scoped", async () => {
@@ -74,5 +87,6 @@ test("planning map keeps the approved progress glow aligned to the reveal edge",
   assert.match(app, /!planningFullScreen \? <View style=\{styles\.bottomTabs\}>/);
   assert.match(app, /planningFullScreen && styles\.planningContent/);
   assert.doesNotMatch(planning, /glowOuter|glowMiddle|glowCore/);
-  assert.doesNotMatch(planning, /当前进度|progressHeader|styles\.track|statusText/);
+  assert.match(planning, /stagePresentation\.currentTask/);
+  assert.match(planning, /规划完成后会保留结果/);
 });

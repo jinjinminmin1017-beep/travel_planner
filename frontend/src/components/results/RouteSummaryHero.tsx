@@ -5,15 +5,21 @@ import type { TravelPlan, TravelRequest } from "../../types";
 import { formatMoney, minutesToText } from "../../utils/format";
 import { countTransfers } from "../../utils/routePlanning";
 
-type Props = { request: TravelRequest; plan: TravelPlan; imageSource?: ImageSourcePropType; destinationName?: string };
+type Props = {
+  request: TravelRequest;
+  plan: TravelPlan;
+  imageSource?: ImageSourcePropType;
+  destinationName?: string;
+  recommendationHeading?: string;
+};
 
-export function RouteSummaryHero({ request, plan, imageSource, destinationName }: Props) {
+export function RouteSummaryHero({ request, plan, imageSource, destinationName, recommendationHeading }: Props) {
   const resolvedDestinationName = destinationName && destinationName !== "目的地" ? destinationName : request.destination_text;
   const heading = (
     <View style={styles.imageOverlay}>
       <View style={styles.routeHeading}>
         <Text style={styles.eyebrow}>综合推荐 · {resolvedDestinationName || "目的地"}</Text>
-        <Text numberOfLines={2} style={styles.route}>{request.origin_text || "起点"} <Text style={styles.arrow}>→</Text> {request.destination_text || "终点"}</Text>
+        <Text numberOfLines={2} style={styles.route}>{recommendationHeading || plan.plan_name || "当前可行路线"}</Text>
       </View>
     </View>
   );
@@ -38,7 +44,6 @@ const styles = StyleSheet.create({
   routeHeading: { maxWidth: "96%" },
   eyebrow: { color: ui.colors.onPrimaryMuted, fontSize: 11, fontWeight: "700", lineHeight: 16 },
   route: { color: ui.colors.surface, fontSize: 24, fontWeight: "800", letterSpacing: -0.5, lineHeight: 29, marginTop: 2 },
-  arrow: { color: ui.colors.connection },
   metrics: { alignItems: "stretch", backgroundColor: "rgba(255,255,255,0.12)", flexDirection: "row", gap: 1 },
   metric: { backgroundColor: ui.colors.primaryDeep, flex: 1, minHeight: 64, minWidth: 0, paddingHorizontal: 10, paddingVertical: ui.spacing.md },
   durationMetric: { flex: 1.25 },

@@ -2,6 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  buildCompactRouteTitle,
+  buildOfficialRedirectPresentation,
+  buildPlanningStagePresentation,
+  buildRouteCostPresentation,
   buildRouteTimeline,
   buildRouteTitle,
   applyRelaxationToRequest,
@@ -68,6 +72,41 @@ test("countTransfers counts transitions between valid door-to-door segments", ()
     segment({ segment_id: "local-b", origin: "青岛北", destination: "酒店" })
   ];
   assert.equal(countTransfers(segments), 2);
+});
+
+test("approved V2 planning stages use a vertical state presentation", () => {
+  const result = buildPlanningStagePresentation(64);
+  assert.equal(result.currentTask, "正在比对车次、航班和接驳");
+  assert.deepEqual(result.stages.map((item) => item.status), ["COMPLETE", "COMPLETE", "ACTIVE", "PENDING"]);
+  assert.equal(buildPlanningStagePresentation(100).currentTask, "规划完成");
+});
+
+test("compact route title keeps city-level labels", () => {
+  assert.equal(buildCompactRouteTitle({ origin_text: "上海嘉定南翔格林公馆", destination_text: "青岛栈桥" }), "上海 → 青岛");
+});
+
+test("route costs use selected options and only expose the residual as other cost", () => {
+  const rail = segment({
+    segment_id: "rail",
+    segment_type: "RAIL",
+    train_number: "G900",
+    origin_station: "上海虹桥",
+    destination_station: "青岛北",
+    selected_seat_option_id: "seat-2",
+    seat_options: [{ option_id: "seat-2", seat_type: "二等座", price: money(55300), availability: "AVAILABLE", source_option_version: "v1" }]
+  });
+  const transfer = segment({ segment_id: "transfer", option_id: "taxi", transfer_options: [{ option_id: "taxi", transfer_mode: "TAXI", label: "打车", estimated_cost: money(3400), duration_minutes: 38, access_station: null, egress_station: null, access_instruction: "", ride_instruction: "", egress_instruction: "", walking_distance_meters: 120, data_source: source, route_status: "PRIMARY_VERIFIED", route_error_code: null }] });
+  const result = buildRouteCostPresentation([transfer, rail], { total_cost: money(60800), items: [] });
+  assert.equal(result.segmentPrices.rail.money.amount_minor, 55300);
+  assert.equal(result.segmentPrices.transfer.money.amount_minor, 3400);
+  assert.equal(result.otherCosts[0].amount.amount_minor, 2100);
+});
+
+test("official redirect presentation names the real provider channel", () => {
+  const railPlan = plan({ segments: [segment({ segment_id: "rail", segment_type: "RAIL", train_number: "G900" })] });
+  assert.equal(buildOfficialRedirectPresentation(railPlan).buttonLabel, "前往铁路12306确认");
+  const flightPlan = plan({ segments: [segment({ segment_id: "flight", segment_type: "FLIGHT", flight_number: "9C1234", data_source: { ...source, source_id: "airline_9c_public_query" } })] });
+  assert.equal(buildOfficialRedirectPresentation(flightPlan).buttonLabel, "前往春秋航空官网确认");
 });
 
 test("buildRouteTimeline marks only inferred times as estimated", () => {
