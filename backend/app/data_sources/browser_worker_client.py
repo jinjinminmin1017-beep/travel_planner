@@ -7,10 +7,6 @@ from urllib.parse import urlparse
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from app.data_sources.flight_evidence_store import (
-    FlightEvidenceConfig,
-    FlightEvidenceStore,
-)
 
 class BrowserWorkerClientError(RuntimeError):
     pass
@@ -101,13 +97,9 @@ class BrowserWorkerClient:
         allowed_hosts: tuple[str, ...],
         timeout_seconds: float,
         client: _HttpClient | None = None,
-        evidence_store: FlightEvidenceStore | None = None,
     ) -> None:
         self.worker_url = _validated_worker_url(worker_url, allowed_hosts)
         self.timeout_seconds = timeout_seconds
-        self.evidence_store = evidence_store or FlightEvidenceStore(
-            FlightEvidenceConfig(backend="disabled")
-        )
         self.client = client or httpx.Client(
             timeout=httpx.Timeout(timeout_seconds, connect=min(2.0, timeout_seconds)),
             follow_redirects=False,
@@ -125,68 +117,26 @@ class BrowserWorkerClient:
         currency_code: str,
         max_results: int,
     ) -> BrowserWorkerSearchResponse:
-        endpoint = f"{self.worker_url}/v1/flight-search"
-        request_body = {
-            "request_id": request_id,
-            "source_id": source_id,
-            "origin_iata": origin_iata,
-            "destination_iata": destination_iata,
-            "departure_date": departure_date,
-            "adults": adults,
-            "currency_code": currency_code,
-            "max_results": max_results,
-        }
-        exchange_id = self.evidence_store.begin_exchange(
-            source_id=source_id,
-            stage="BROWSER_WORKER_SEARCH",
-            method="POST",
-            url=endpoint,
-            headers={"Content-Type": "application/json"},
-            body=request_body,
-            content_type="application/json",
-            correlation_id=request_id,
-        )
         try:
             response = self.client.post(
-                endpoint,
-                json=request_body,
-            )
-            response_body = getattr(response, "text", None)
-            payload_object = response.json() if response_body is None else None
-            self.evidence_store.record_response(
-                exchange_id,
-                status_code=int(getattr(response, "status_code", 200)),
-                headers=getattr(response, "headers", {}),
-                body=response_body if response_body is not None else payload_object,
-                content_type=str(getattr(response, "headers", {}).get("content-type", "application/json")),
+                f"{self.worker_url}/v1/flight-search",
+                json={
+                    "request_id": request_id,
+                    "source_id": source_id,
+                    "origin_iata": origin_iata,
+                    "destination_iata": destination_iata,
+                    "departure_date": departure_date,
+                    "adults": adults,
+                    "currency_code": currency_code,
+                    "max_results": max_results,
+                },
             )
             response.raise_for_status()
-            payload = BrowserWorkerSearchResponse.model_validate(
-                payload_object if payload_object is not None else response.json()
-            )
+            payload = BrowserWorkerSearchResponse.model_validate(response.json())
         except (httpx.HTTPError, ValueError, TypeError) as exc:
-            outcome = "TIMEOUT" if isinstance(exc, httpx.TimeoutException) else (
-                "CONNECT_ERROR" if isinstance(exc, httpx.TransportError) else "PARSE_ERROR"
-            )
-            self.evidence_store.finish_exchange(
-                exchange_id,
-                outcome=outcome,
-                error_code="BROWSER_WORKER_INVALID_RESPONSE",
-            )
             raise BrowserWorkerClientError("browser worker unavailable or returned an invalid response") from exc
         if payload.source_id != source_id:
-            self.evidence_store.finish_exchange(
-                exchange_id,
-                outcome="PARSE_ERROR",
-                error_code="BROWSER_WORKER_SOURCE_MISMATCH",
-            )
             raise BrowserWorkerClientError("browser worker source_id mismatch")
-        self.evidence_store.finish_exchange(
-            exchange_id,
-            outcome="SUCCESS" if payload.success else "BUSINESS_ERROR",
-            error_code=payload.error_code,
-            message=payload.message,
-        )
         return payload
 
 

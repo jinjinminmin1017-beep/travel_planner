@@ -155,8 +155,6 @@ def _opensky_factory(settings: DataSourceSettings) -> object:
 
 
 def _spring_airlines_factory(settings: DataSourceSettings) -> object:
-    from app.data_sources.config_loader import load_flight_evidence_config
-    from app.data_sources.flight_evidence_store import FlightEvidenceStore
     from app.data_sources.flight_providers import SpringAirlinesPublicQueryProvider
 
     typed = _require_type(settings, FlightSourceSettings)
@@ -167,13 +165,10 @@ def _spring_airlines_factory(settings: DataSourceSettings) -> object:
         cache_ttl_seconds=typed.cache_ttl_seconds,
         allowed_hosts=typed.allowed_hosts,
         timeout_seconds=typed.timeout_seconds,
-        evidence_store=FlightEvidenceStore(load_flight_evidence_config(typed.environment)),
     )
 
 
 def _hainan_airlines_factory(settings: DataSourceSettings) -> object:
-    from app.data_sources.config_loader import load_flight_evidence_config
-    from app.data_sources.flight_evidence_store import FlightEvidenceStore
     from app.data_sources.flight_providers import HainanAirlinesPublicQueryProvider
 
     typed = _require_type(settings, FlightSourceSettings)
@@ -184,13 +179,10 @@ def _hainan_airlines_factory(settings: DataSourceSettings) -> object:
         cache_ttl_seconds=typed.cache_ttl_seconds,
         allowed_hosts=typed.allowed_hosts,
         timeout_seconds=typed.timeout_seconds,
-        evidence_store=FlightEvidenceStore(load_flight_evidence_config(typed.environment)),
     )
 
 
 def _qingdao_airlines_factory(settings: DataSourceSettings) -> object:
-    from app.data_sources.config_loader import load_flight_evidence_config
-    from app.data_sources.flight_evidence_store import FlightEvidenceStore
     from app.data_sources.flight_providers import QingdaoAirlinesPublicQueryProvider
 
     typed = _require_type(settings, FlightSourceSettings)
@@ -201,13 +193,10 @@ def _qingdao_airlines_factory(settings: DataSourceSettings) -> object:
         cache_ttl_seconds=typed.cache_ttl_seconds,
         allowed_hosts=typed.allowed_hosts,
         timeout_seconds=typed.timeout_seconds,
-        evidence_store=FlightEvidenceStore(load_flight_evidence_config(typed.environment)),
     )
 
 
 def _browser_airline_factory(settings: DataSourceSettings) -> object:
-    from app.data_sources.config_loader import load_flight_evidence_config
-    from app.data_sources.flight_evidence_store import FlightEvidenceStore
     from app.data_sources.browser_flight_providers import BrowserAirlineFlightProvider
     from app.data_sources.browser_worker_client import BrowserWorkerClient
 
@@ -218,7 +207,6 @@ def _browser_airline_factory(settings: DataSourceSettings) -> object:
             worker_url=typed.worker_url or "",
             allowed_hosts=typed.worker_allowed_hosts,
             timeout_seconds=typed.timeout_seconds,
-            evidence_store=FlightEvidenceStore(load_flight_evidence_config(typed.environment)),
         ),
         cache_ttl_seconds=typed.cache_ttl_seconds,
     )
