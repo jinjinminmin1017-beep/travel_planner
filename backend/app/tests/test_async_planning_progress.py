@@ -110,6 +110,11 @@ def test_planner_publishes_only_complete_candidate_safe_plans_before_final_recom
     assert execution_metrics.route_cache_hits > 0
     assert execution_metrics.location_cache_misses > 0
     assert execution_metrics.location_cache_hits > 0
+    summary = execution_metrics.safe_summary()
+    assert summary["stage_elapsed_ms"]["first_plan_built"] >= 0
+    assert summary["stage_elapsed_ms"]["candidate_finalize"] >= summary["stage_elapsed_ms"]["first_plan_built"]
+    assert summary["provider_request_count"] > 0
+    assert "raw_user_input" not in str(summary)
 
 
 def test_generation_guard_rejects_lower_progress_and_cancelled_job_overwrite():

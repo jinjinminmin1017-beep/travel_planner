@@ -2111,12 +2111,15 @@ def _publish_safe_progress(
     travel_request: TravelRequest,
     progress: int,
     stage: str,
+    execution_metrics: PlanningExecutionMetrics | None = None,
 ) -> None:
     if not plans:
         return
     candidate_pool = generate_candidate_plan_pool(plans, travel_request)
     if not candidate_pool.llm_candidate_plans:
         return
+    if execution_metrics is not None:
+        execution_metrics.mark_stage("first_plan_built")
     progress_sink.publish(
         PlanningProgressUpdate(
             plans=[plan.model_copy(deep=True) for plan in candidate_pool.llm_candidate_plans],
@@ -2248,11 +2251,12 @@ def build_plans(
                     travel_request,
                     65 if completed_count == 1 else 78,
                     f"{mode}_READY",
+                    execution_metrics,
                 )
     else:
         if "RAIL" in direct_builders and allow_new_branch("DIRECT_RAIL"):
             dynamic_rail_plans = build_direct_rail()
-            _publish_safe_progress(progress_sink, dynamic_rail_plans, travel_request, 65, "RAIL_READY")
+            _publish_safe_progress(progress_sink, dynamic_rail_plans, travel_request, 65, "RAIL_READY", execution_metrics)
         if "FLIGHT" in direct_builders and allow_new_branch("DIRECT_FLIGHT"):
             dynamic_flight_plans = build_direct_flight()
             _publish_safe_progress(
@@ -2261,6 +2265,7 @@ def build_plans(
                 travel_request,
                 78,
                 "DIRECT_MODES_READY",
+                execution_metrics,
             )
     dynamic_transfer_rail_plans = []
     if (
@@ -2288,6 +2293,7 @@ def build_plans(
             travel_request,
             87,
             "TRANSFER_RAIL_READY",
+            execution_metrics,
         )
     dynamic_mixed_plans = []
     if (
@@ -2316,13 +2322,20 @@ def build_plans(
             travel_request,
             93,
             "MIXED_READY",
+            execution_metrics,
         )
     plans = [*dynamic_rail_plans, *dynamic_flight_plans, *dynamic_transfer_rail_plans, *dynamic_mixed_plans]
     if execution_metrics is not None:
+        execution_metrics.mark_stage("rail_flight_core_facts")
         execution_metrics.route_cache_hits = route_estimator_cache.hits
         execution_metrics.route_cache_misses = route_estimator_cache.misses
         execution_metrics.location_cache_hits = location_resolver_cache.hits
         execution_metrics.location_cache_misses = location_resolver_cache.misses
+        execution_metrics.provider_request_count = route_estimator_cache.misses + location_resolver_cache.misses
+        execution_metrics.provider_failure_count = len(collector.failures)
+        execution_metrics.provider_challenge_count = sum(
+            1 for failure in collector.failures if "CHALLENGE" in failure.error_code
+        )
     logger.info(
         "rail_planning_flow_candidates request_id=%s direct_rail_count=%s transfer_rail_count=%s mixed_count=%s total_plan_count=%s rail_rate_limited=%s",
         travel_request.request_id,
@@ -2427,6 +2440,8 @@ def plan_trip(
             generated_at=now_timepoint(),
         )
     candidate_pool = generate_candidate_plan_pool(plans, travel_request, explanations)
+    if execution_metrics is not None:
+        execution_metrics.mark_stage("candidate_finalize")
     candidate_plans = candidate_pool.llm_candidate_plans
     explanations = candidate_pool.missing_plan_explanations
     warnings = [*warnings, *candidate_pool.user_visible_warnings]
@@ -2514,6 +2529,8 @@ def plan_trip(
                 candidate_plans=candidate_plans,
             )
         )
+        if execution_metrics is not None:
+            execution_metrics.mark_stage("recommendation")
     else:
         missing = [*missing, "recommendation_candidates"]
         warnings = [*warnings, "当前约束过滤后没有可进入 LLM 推荐的候选方案。"]
