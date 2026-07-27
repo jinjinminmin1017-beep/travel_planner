@@ -1,13 +1,10 @@
 from __future__ import annotations
 
 import logging
-import os
-from concurrent.futures import Future
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from math import ceil
-from threading import RLock
-from typing import Any, Callable, Literal, Protocol, cast
+from typing import Any, Literal, Protocol, cast
 
 import httpx
 
@@ -107,51 +104,15 @@ class AmapRouteProvider:
         self.api_key = api_key
         self.client = client or httpx.Client(timeout=timeout_seconds)
         self.base_url = base_url.rstrip("/")
-        self._transit_payload_futures: dict[tuple[str, ...], Future[dict[str, Any]]] = {}
-        self._transit_lock = RLock()
 
     def estimate_route(self, request: MapRouteRequest) -> MapRouteEstimate:
         endpoint, params = self._endpoint_and_params(request)
-        if request.mode in {TransportMode.SUBWAY, TransportMode.BUS} and _transit_single_flight_enabled():
-            payload = self._shared_transit_payload(request, endpoint, params)
-        else:
-            payload = self._fetch_payload(endpoint, params)
+        response = self.client.get(f"{self.base_url}{endpoint}", params=params)
+        response.raise_for_status()
+        payload = response.json()
         if str(payload.get("status")) != "1":
             raise MapProviderError(f"AMap route failed: {payload.get('info') or payload.get('infocode')}")
         return self._parse_payload(request, payload)
-
-    def _fetch_payload(self, endpoint: str, params: dict[str, str]) -> dict[str, Any]:
-        response = self.client.get(f"{self.base_url}{endpoint}", params=params)
-        response.raise_for_status()
-        return cast(dict[str, Any], response.json())
-
-    def _shared_transit_payload(
-        self,
-        request: MapRouteRequest,
-        endpoint: str,
-        params: dict[str, str],
-    ) -> dict[str, Any]:
-        key = (
-            _amap_coord(request.origin),
-            _amap_coord(request.destination),
-            request.origin_city or "",
-            request.destination_city or "",
-            self.base_url,
-        )
-        with self._transit_lock:
-            future = self._transit_payload_futures.get(key)
-            owner = future is None
-            if owner:
-                future = Future()
-                self._transit_payload_futures[key] = future
-        assert future is not None
-        if owner:
-            try:
-                future.set_result(self._fetch_payload(endpoint, params))
-            except BaseException as exc:
-                future.set_exception(exc)
-                raise
-        return future.result()
 
     def _endpoint_and_params(self, request: MapRouteRequest) -> tuple[str, dict[str, str]]:
         origin = _amap_coord(request.origin)
@@ -176,12 +137,7 @@ class AmapRouteProvider:
             transits = route.get("transits") or []
             if not transits:
                 raise MapProviderError("AMap transit response has no transits", "MAP_ROUTE_EMPTY")
-            first = next((item for item in transits if _transit_matches_mode(item, request.mode)), None)
-            if first is None:
-                raise MapProviderError(
-                    f"AMap transit response has no verified {request.mode.value.lower()} route",
-                    "MAP_ROUTE_EMPTY",
-                )
+            first = transits[0]
             distance = _to_int(first.get("distance"))
             duration = ceil(_to_int(first.get("duration")) / 60)
             cost = _yuan_to_money(first.get("cost"), field_path="route.transits[0].cost")
@@ -212,29 +168,6 @@ class AmapRouteProvider:
             data_source_metadata(self.source_id, "AMap Route Planning API"),
             walking_distance_meters=distance if request.mode == TransportMode.WALK else 0,
         )
-
-
-def _transit_single_flight_enabled() -> bool:
-    return os.getenv("TRAVEL_MAP_TRANSIT_SINGLE_FLIGHT_ENABLED", "false").strip().lower() not in {"0", "false", "no", "off"}
-
-
-def _transit_matches_mode(transit: dict[str, Any], mode: TransportMode) -> bool:
-    segments = transit.get("segments") or []
-    if not segments:
-        return True
-    line_labels: list[str] = []
-    for segment in segments:
-        bus = segment.get("bus") or {}
-        for line in bus.get("buslines") or []:
-            line_labels.extend([str(line.get("type") or ""), str(line.get("name") or "")])
-    normalized = " ".join(line_labels).casefold()
-    has_subway = any(marker in normalized for marker in ("地铁", "轨道", "subway", "metro"))
-    has_surface_bus = bool(line_labels) and not has_subway
-    if mode == TransportMode.SUBWAY:
-        return has_subway
-    if mode == TransportMode.BUS:
-        return has_surface_bus
-    return True
 
 
 class BaiduDirectionLiteProvider:
@@ -349,30 +282,10 @@ def estimate_route_with_enabled_provider(request: MapRouteRequest, environment: 
 
 
 def estimate_route_with_enabled_provider_result(request: MapRouteRequest, environment: str | None = None) -> MapRouteProviderResult:
-    return _estimate_route_with_providers(request, build_enabled_map_providers(environment))
-
-
-def build_planning_route_estimator(
-    environment: str | None = None,
-) -> Callable[[MapRouteRequest, str | None], MapRouteProviderResult]:
-    """Build one provider set per planning job so query-family caches are scoped."""
-
-    providers = build_enabled_map_providers(environment)
-
-    def estimate(request: MapRouteRequest, ignored_environment: str | None = None) -> MapRouteProviderResult:
-        del ignored_environment
-        return _estimate_route_with_providers(request, providers)
-
-    return estimate
-
-
-def _estimate_route_with_providers(
-    request: MapRouteRequest,
-    enabled_providers: list[MapRouteProvider],
-) -> MapRouteProviderResult:
     attempted_source_ids: list[str] = []
     failure_messages: list[str] = []
     failure_codes: list[str] = []
+    enabled_providers = build_enabled_map_providers(environment)
     compatible_providers = [
         provider
         for provider in enabled_providers
