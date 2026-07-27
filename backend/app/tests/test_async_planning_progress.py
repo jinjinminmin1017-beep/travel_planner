@@ -147,3 +147,32 @@ def test_generation_guard_rejects_lower_progress_and_cancelled_job_overwrite():
     )
     assert not save_async_job_response_if_current(stale_completed, generation)
     assert get_async_job_response(job_id).async_job.job_status == AsyncJobStatus.CANCELLED
+
+
+def test_two_phase_single_plan_progress_is_monotonic_and_enriches_same_ids(monkeypatch):
+    monkeypatch.setenv("TRAVEL_TWO_PHASE_TRANSFER_ENABLED", "true")
+    monkeypatch.setenv("TRAVEL_SINGLE_PLAN_PROGRESS_ENABLED", "true")
+    request_id = f"req_two_phase_{uuid4().hex[:8]}"
+    context = RequestContext(
+        request_id=request_id,
+        trace_id=f"trace_{request_id}",
+        correlation_id=f"corr_{request_id}",
+        idempotency_key=f"idem_{request_id}",
+    )
+    sink = _CollectingProgressSink()
+    metrics = PlanningExecutionMetrics()
+
+    final = plan_trip(_request(request_id), context, progress_sink=sink, execution_metrics=metrics)
+
+    assert sink.updates
+    assert len(sink.updates[0].plans) == 1
+    assert [update.progress for update in sink.updates] == sorted(update.progress for update in sink.updates)
+    assert [len(update.plans) for update in sink.updates] == sorted(len(update.plans) for update in sink.updates)
+    first_plan = sink.updates[0].plans[0]
+    final_plan = next(plan for plan in final.plans if plan.plan_id == first_plan.plan_id)
+    first_transfer = next(segment for segment in first_plan.segments if segment.segment_type == "LOCAL_TRANSFER")
+    final_transfer = next(segment for segment in final_plan.segments if segment.segment_id == first_transfer.segment_id)
+    assert first_transfer.available_options == [first_transfer.option_id]
+    assert final_transfer.option_id == first_transfer.option_id
+    assert len(final_transfer.available_options) >= len(first_transfer.available_options)
+    assert metrics.stage_elapsed_ms["selected_transfer_hydration"] <= metrics.stage_elapsed_ms["alternative_transfer_hydration"]

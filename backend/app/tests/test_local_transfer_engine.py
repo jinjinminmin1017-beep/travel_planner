@@ -9,6 +9,7 @@ from app.services.local_transfer_engine import (
     PlanningLocationResolverCache,
     PlanningRouteEstimatorCache,
     build_local_transfer_segment,
+    enrich_local_transfer_segment,
 )
 
 
@@ -53,6 +54,34 @@ def _estimate_for_mode(request, environment=None):
         ),
         attempted_source_ids=["amap_route"],
     )
+
+
+def test_two_phase_transfer_publishes_selected_fact_before_alternatives(monkeypatch):
+    monkeypatch.setenv("TRAVEL_TWO_PHASE_TRANSFER_ENABLED", "true")
+    calls: list[TransportMode] = []
+
+    def tracked_estimate(request, environment=None):
+        calls.append(request.mode)
+        return _estimate_for_mode(request, environment)
+
+    selected = build_local_transfer_segment(
+        segment_id="seg_two_phase",
+        origin="上海虹桥站",
+        destination="上海站",
+        default_minutes=15,
+        default_cost_minor=3200,
+        selected_option_id="transfer_taxi",
+        route_estimator=tracked_estimate,
+    )
+
+    assert calls == [TransportMode.TAXI]
+    assert selected.option_id == "transfer_taxi"
+    assert selected.available_options == ["transfer_taxi"]
+
+    enriched = enrich_local_transfer_segment(selected, route_estimator=tracked_estimate)
+    assert enriched.segment_id == selected.segment_id
+    assert enriched.option_id == selected.option_id
+    assert len(enriched.transfer_options) == 4
 
 
 def test_local_transfer_engine_exposes_walk_for_short_non_airport_routes():

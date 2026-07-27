@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from concurrent.futures import Future
 from dataclasses import dataclass
+import os
 from threading import RLock
 from typing import Callable, Protocol
 
@@ -163,6 +164,12 @@ def build_local_transfer_segment(
     # intentionally not used: new responses may contain only provider facts.
     del default_minutes, default_cost_minor
     context = TransferContext(origin, destination, route_estimator, location_resolver or resolve_location_point, issue_sink)
+    if _two_phase_transfer_enabled():
+        return build_selected_local_transfer_segment(
+            segment_id=segment_id,
+            context=context,
+            selected_option_id=selected_option_id,
+        )
     options = build_local_transfer_options(context)
     if not options:
         error_code = "MAP_TRANSFER_UNAVAILABLE"
@@ -188,6 +195,111 @@ def build_local_transfer_segment(
         route_error_code=selected.route_error_code,
         redirect_info=None,
     )
+
+
+def build_selected_local_transfer_segment(
+    *,
+    segment_id: str,
+    context: TransferContext,
+    selected_option_id: str = "transfer_taxi",
+) -> LocalTransferSegment:
+    origin = _coerce_location_resolution(context.location_resolver(context.origin), context.origin)
+    destination = _coerce_location_resolution(context.location_resolver(context.destination), context.destination)
+    if not origin.point or not destination.point:
+        _record_location_failure(context, origin, destination)
+        raise LocalTransferUnavailable(context.origin, context.destination, "MAP_COORDINATES_MISSING")
+    mode = _mode_for_option_id(selected_option_id)
+    resolution = _estimate_route(context, origin, destination, mode)
+    selected = _option_from_resolution(context, mode, resolution)
+    if selected is None:
+        error_code = resolution.error_code or "MAP_TRANSFER_SELECTED_UNAVAILABLE"
+        _record_transfer_unavailable(context, error_code)
+        raise LocalTransferUnavailable(context.origin, context.destination, error_code)
+    return _segment_from_options(segment_id, context, selected, [selected])
+
+
+def enrich_local_transfer_segment(
+    segment: LocalTransferSegment,
+    *,
+    route_estimator: RouteEstimator,
+    location_resolver: LocationPointResolver | None = None,
+    issue_sink: LocalTransferIssueSink | None = None,
+) -> LocalTransferSegment:
+    context = TransferContext(
+        segment.origin,
+        segment.destination,
+        route_estimator,
+        location_resolver or resolve_location_point,
+        issue_sink,
+    )
+    options = build_local_transfer_options(context)
+    selected = next((option for option in options if option.option_id == segment.option_id), None)
+    if selected is None:
+        # Enrichment may not invalidate a previously verified selected fact.
+        selected = next(
+            (option for option in segment.transfer_options if option.option_id == segment.option_id),
+            None,
+        )
+    if selected is None:
+        raise LocalTransferUnavailable(segment.origin, segment.destination, "MAP_TRANSFER_SELECTED_UNAVAILABLE")
+    merged = {option.option_id: option for option in segment.transfer_options}
+    merged.update({option.option_id: option for option in options})
+    ordered = [
+        merged[option_id]
+        for option_id in ("transfer_taxi", "transfer_subway", "transfer_bus", "transfer_walk")
+        if option_id in merged
+    ]
+    enriched = _segment_from_options(segment.segment_id, context, selected, ordered)
+    return enriched.model_copy(
+        update={
+            "departure_time": segment.departure_time,
+            "arrival_time": segment.arrival_time,
+            "redirect_info": segment.redirect_info,
+        }
+    )
+
+
+def _segment_from_options(
+    segment_id: str,
+    context: TransferContext,
+    selected: LocalTransferOption,
+    options: list[LocalTransferOption],
+) -> LocalTransferSegment:
+    return LocalTransferSegment(
+        segment_id=segment_id,
+        origin=context.origin,
+        destination=context.destination,
+        transfer_mode=selected.transfer_mode,
+        distance_meters=selected.distance_meters,
+        duration_minutes=selected.duration_minutes,
+        estimated_cost=selected.estimated_cost,
+        traffic_risk=_traffic_risk(selected),
+        walking_distance_meters=selected.walking_distance_meters,
+        option_id=selected.option_id,
+        available_options=[option.option_id for option in options],
+        transfer_options=options,
+        data_source=selected.data_source,
+        route_status=selected.route_status,
+        route_error_code=selected.route_error_code,
+        redirect_info=None,
+    )
+
+
+def _mode_for_option_id(option_id: str) -> TransportMode:
+    mapping = {
+        "transfer_taxi": TransportMode.TAXI,
+        "transfer_subway": TransportMode.SUBWAY,
+        "transfer_bus": TransportMode.BUS,
+        "transfer_walk": TransportMode.WALK,
+    }
+    try:
+        return mapping[option_id]
+    except KeyError as exc:
+        raise ValueError(f"unknown local transfer option_id: {option_id}") from exc
+
+
+def _two_phase_transfer_enabled() -> bool:
+    return os.getenv("TRAVEL_TWO_PHASE_TRANSFER_ENABLED", "false").strip().lower() not in {"0", "false", "no", "off"}
 
 
 def build_local_transfer_options(context: TransferContext) -> list[LocalTransferOption]:
