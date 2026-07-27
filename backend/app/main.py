@@ -2,8 +2,6 @@
 from __future__ import annotations
 
 import logging
-import json
-import os
 from time import perf_counter
 from contextlib import asynccontextmanager
 from uuid import uuid4
@@ -68,7 +66,7 @@ app = FastAPI(title="AI Travel Planner", version="0.1.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
-    allow_origin_regex=r"http://(localhost|127\.0\.0\.1):\d{1,5}",
+    allow_origin_regex=r"http://(localhost|127\.0\.0\.1):517\d",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -261,7 +259,6 @@ def plan_travel_async(body: PlanRequest, request: Request, background_tasks: Bac
     cached_job = get_async_job_by_idempotency(ctx.idempotency_key)
     if cached_job is not None:
         return cached_job
-    intent_started_at = perf_counter()
     try:
         travel_request = body.travel_request or parse_travel_request_with_validation(body.raw_user_input or "", ctx).travel_request
     except IntentParserError as exc:
@@ -280,15 +277,7 @@ def plan_travel_async(body: PlanRequest, request: Request, background_tasks: Bac
         created_at=None,
     )
     generation = begin_async_job(response)
-    background_tasks.add_task(
-        _complete_plan_job,
-        job_id,
-        travel_request,
-        ctx,
-        response.async_job.created_at,
-        generation,
-        (perf_counter() - intent_started_at) * 1000,
-    )
+    background_tasks.add_task(_complete_plan_job, job_id, travel_request, ctx, response.async_job.created_at, generation)
     return response
 
 
@@ -390,13 +379,12 @@ def _planning_job_response(
 
 
 class _AsyncJobProgressSink:
-    def __init__(self, job_id: str, generation: int, started_at: float, execution_metrics: PlanningExecutionMetrics) -> None:
+    def __init__(self, job_id: str, generation: int, started_at: float) -> None:
         self.job_id = job_id
         self.generation = generation
         self.started_at = started_at
         self.first_usable_plan_latency_ms: float | None = None
         self.snapshot_count = 0
-        self.execution_metrics = execution_metrics
 
     def publish(self, update: PlanningProgressUpdate) -> None:
         current = get_async_job_response(self.job_id)
@@ -439,7 +427,6 @@ class _AsyncJobProgressSink:
             self.snapshot_count += 1
             if self.first_usable_plan_latency_ms is None and snapshot.plans:
                 self.first_usable_plan_latency_ms = (perf_counter() - self.started_at) * 1000
-                self.execution_metrics.mark_stage("first_snapshot")
             logger.info(
                 "planning_progress_snapshot job_id=%s request_id=%s stage=%s progress=%s plan_count=%s",
                 self.job_id,
@@ -450,19 +437,11 @@ class _AsyncJobProgressSink:
             )
 
 
-def _complete_plan_job(
-    job_id: str,
-    travel_request: TravelRequest,
-    ctx,
-    created_at,
-    generation: int,
-    intent_parse_ms: float = 0.0,
-) -> None:
+def _complete_plan_job(job_id: str, travel_request: TravelRequest, ctx, created_at, generation: int) -> None:
     started_at = perf_counter()
     execution_metrics = PlanningExecutionMetrics()
-    execution_metrics.stage_elapsed_ms["intent_parse"] = round(max(0.0, intent_parse_ms), 1)
     deadline = create_planning_deadline()
-    progress_sink = _AsyncJobProgressSink(job_id, generation, started_at, execution_metrics) if progressive_results_enabled() else NoOpPlanningProgressSink()
+    progress_sink = _AsyncJobProgressSink(job_id, generation, started_at) if progressive_results_enabled() else NoOpPlanningProgressSink()
     current = get_async_job_response(job_id)
     if current and current.async_job and current.async_job.job_status == AsyncJobStatus.CANCELLED:
         return
@@ -502,7 +481,6 @@ def _complete_plan_job(
             polling_url=f"/api/travel/jobs/{job_id}",
         )
         save_async_job_response_if_current(final.model_copy(update={"async_job": final_job}), generation)
-        execution_metrics.mark_stage("final_result")
         record_async_planning_metrics(
             first_usable_plan_latency_ms=getattr(progress_sink, "first_usable_plan_latency_ms", None),
             final_result_latency_ms=(perf_counter() - started_at) * 1000,
@@ -516,23 +494,6 @@ def _complete_plan_job(
             location_cache_hits=execution_metrics.location_cache_hits,
             location_cache_misses=execution_metrics.location_cache_misses,
         )
-        if os.getenv("TRAVEL_PLANNING_STAGE_SUMMARY_ENABLED", "true").strip().lower() not in {"0", "false", "no", "off"}:
-            logger.info(
-                "planning_job_summary %s",
-                json.dumps(
-                {
-                    "request_id": ctx.request_id,
-                    "job_id": job_id,
-                    "trace_id": ctx.trace_id,
-                    "correlation_id": ctx.correlation_id,
-                    "outcome": final.planning_status,
-                    "plan_count": len(final.plans),
-                    **execution_metrics.safe_summary(),
-                },
-                ensure_ascii=True,
-                separators=(",", ":"),
-                ),
-            )
     except Exception:  # Background errors must become pollable business state.
         logger.exception(
             "planning_job_error job_id=%s request_id=%s trace_id=%s correlation_id=%s",
@@ -553,7 +514,6 @@ def _complete_plan_job(
         failed.missing_components.append("travel_plan")
         failed.user_visible_warnings = ["规划任务暂时失败，请稍后重试。"]
         save_async_job_response_if_current(failed, generation)
-        execution_metrics.mark_stage("final_result")
         record_async_planning_metrics(
             first_usable_plan_latency_ms=getattr(progress_sink, "first_usable_plan_latency_ms", None),
             final_result_latency_ms=(perf_counter() - started_at) * 1000,
@@ -564,23 +524,6 @@ def _complete_plan_job(
             location_cache_hits=execution_metrics.location_cache_hits,
             location_cache_misses=execution_metrics.location_cache_misses,
         )
-        if os.getenv("TRAVEL_PLANNING_STAGE_SUMMARY_ENABLED", "true").strip().lower() not in {"0", "false", "no", "off"}:
-            logger.info(
-                "planning_job_summary %s",
-                json.dumps(
-                {
-                    "request_id": ctx.request_id,
-                    "job_id": job_id,
-                    "trace_id": ctx.trace_id,
-                    "correlation_id": ctx.correlation_id,
-                    "outcome": "FAILED",
-                    "plan_count": 0,
-                    **execution_metrics.safe_summary(),
-                },
-                ensure_ascii=True,
-                separators=(",", ":"),
-                ),
-            )
 
 
 def _intent_parser_error_response(request: Request, exc: IntentParserError) -> JSONResponse:

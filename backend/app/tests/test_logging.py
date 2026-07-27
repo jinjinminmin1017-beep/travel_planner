@@ -56,11 +56,3 @@ def test_configure_logging_uses_env_file_settings(monkeypatch, tmp_path):
     finally:
         monkeypatch.setenv("TRAVEL_LOG_FILE_ENABLED", "false")
         configure_logging(force=True)
-
-
-def test_http_transport_loggers_do_not_emit_complete_credential_urls(monkeypatch):
-    monkeypatch.setenv("TRAVEL_LOG_FILE_ENABLED", "false")
-    configure_logging(force=True)
-
-    assert logging.getLogger("httpx").level == logging.WARNING
-    assert logging.getLogger("httpcore").level == logging.WARNING

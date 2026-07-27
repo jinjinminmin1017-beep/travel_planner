@@ -136,11 +136,6 @@ def configure_logging(*, force: bool = False) -> LoggingSettings:
 
     _CONFIGURED = True
     logging.getLogger("app").setLevel(level)
-    # httpx logs the complete request URL at INFO, including query credentials
-    # used by some providers. Application logs emit redacted provider metadata
-    # instead, so keep transport internals at WARNING.
-    logging.getLogger("httpx").setLevel(logging.WARNING)
-    logging.getLogger("httpcore").setLevel(logging.WARNING)
     logging.getLogger("app.core.logging").info(
         "logging_configured file_enabled=%s log_file=%s max_bytes=%s level=%s",
         file_handler is not None,
