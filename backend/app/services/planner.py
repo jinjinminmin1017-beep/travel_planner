@@ -13,6 +13,7 @@ from uuid import uuid4
 from app.core.context import RequestContext
 from app.data_sources.flight_providers import (
     FlightOffer,
+    FlightProviderJobCircuitBreaker,
     FlightProviderOutcome,
     FlightProviderOutcomeStatus,
     FlightProviderSearchResult,
@@ -1279,6 +1280,7 @@ def _build_dynamic_flight_plans(
     max_airport_pairs: int = 2,
     max_plans: int = 2,
     on_plan_ready: Callable[[TravelPlan, str], None] | None = None,
+    flight_job_circuit: FlightProviderJobCircuitBreaker | None = None,
 ) -> list[TravelPlan]:
     del max_airport_pairs
     origin_airports = _dynamic_airport_candidates(route_nodes, origin_city)
@@ -1301,7 +1303,11 @@ def _build_dynamic_flight_plans(
         return []
     if not _deadline_allows(deadline, "FLIGHT_PROVIDER_QUERY"):
         return []
-    result = search_flight_offers_with_enabled_provider_result(scope)
+    result = (
+        search_flight_offers_with_enabled_provider_result(scope, job_circuit=flight_job_circuit)
+        if flight_job_circuit is not None
+        else search_flight_offers_with_enabled_provider_result(scope)
+    )
     provider_outcomes = _legacy_flight_outcomes(result)
     _record_flight_provider_outcomes(
         collector,
@@ -1676,6 +1682,7 @@ def _build_dynamic_flight_rail_mixed_plans(
     deadline: PlanningDeadline | None = None,
     max_hubs: int = 4,
     max_plans: int = 2,
+    flight_job_circuit: FlightProviderJobCircuitBreaker | None = None,
 ) -> list[TravelPlan]:
     origin_stations = _dynamic_station_names(route_nodes, origin_city, limit=2)
     destination_stations = _dynamic_station_names(route_nodes, destination_city, limit=2)
@@ -1710,7 +1717,11 @@ def _build_dynamic_flight_rail_mixed_plans(
                 max_results=2,
             )
             flight_search_cache[cache_key] = (
-                search_flight_offers_with_enabled_provider_result(scope)
+                (
+                    search_flight_offers_with_enabled_provider_result(scope, job_circuit=flight_job_circuit)
+                    if flight_job_circuit is not None
+                    else search_flight_offers_with_enabled_provider_result(scope)
+                )
                 if scope is not None
                 else FlightProviderSearchResult(
                     offers=[],
@@ -2147,6 +2158,11 @@ def build_plans(
     origin = travel_request.origin_text
     destination = travel_request.destination_text
     collector = PlanningIssueCollector(travel_request)
+    flight_circuit_enabled = os.getenv(
+        "TRAVEL_FLIGHT_JOB_CHALLENGE_CIRCUIT_BREAKER_ENABLED",
+        "false",
+    ).strip().lower() not in {"0", "false", "no", "off"}
+    flight_job_circuit = FlightProviderJobCircuitBreaker() if flight_circuit_enabled else None
     transit_single_flight_enabled = os.getenv("TRAVEL_MAP_TRANSIT_SINGLE_FLIGHT_ENABLED", "false").strip().lower() not in {"0", "false", "no", "off"}
     route_estimator = build_planning_route_estimator() if transit_single_flight_enabled else estimate_route_with_enabled_provider_result
     route_estimator_cache = PlanningRouteEstimatorCache(route_estimator)
@@ -2230,6 +2246,7 @@ def build_plans(
             collector=collector,
             deadline=deadline,
             on_plan_ready=report_single_plan if single_plan_progress_enabled else None,
+            flight_job_circuit=flight_job_circuit,
         )
 
     dynamic_rail_plans: list[TravelPlan] = []
@@ -2350,6 +2367,7 @@ def build_plans(
             collector=collector,
             deadline=deadline,
             max_hubs=2,
+            flight_job_circuit=flight_job_circuit,
         )
         _publish_safe_progress(
             progress_sink,

@@ -4,6 +4,7 @@ import html
 import hashlib
 import json
 import logging
+import os
 import re
 import sqlite3
 import threading
@@ -192,6 +193,22 @@ class FlightProviderSearchResult:
     attempted_source_ids: list[str]
     failure_message: str | None = None
     outcomes: list[FlightProviderOutcome] = field(default_factory=list)
+
+
+@dataclass
+class FlightProviderJobCircuitBreaker:
+    """Per-planning-job circuit state; never persists across jobs."""
+
+    challenged_source_ids: set[str] = field(default_factory=set)
+    _lock: threading.RLock = field(default_factory=threading.RLock, init=False, repr=False)
+
+    def is_open(self, source_id: str) -> bool:
+        with self._lock:
+            return source_id in self.challenged_source_ids
+
+    def trip(self, source_id: str) -> None:
+        with self._lock:
+            self.challenged_source_ids.add(source_id)
 
 
 @dataclass(frozen=True)
@@ -1023,6 +1040,8 @@ def search_flight_offers_with_enabled_provider(
 def search_flight_offers_with_enabled_provider_result(
     request: FlightSearchRequest | FlightSearchScope,
     environment: str | None = None,
+    *,
+    job_circuit: FlightProviderJobCircuitBreaker | None = None,
 ) -> FlightProviderSearchResult:
     attempted_source_ids: list[str] = []
     offers: list[FlightOffer] = []
@@ -1046,6 +1065,22 @@ def search_flight_offers_with_enabled_provider_result(
         )
     for provider in providers:
         attempted_source_ids.append(provider.source_id)
+        circuit_enabled = os.getenv(
+            "TRAVEL_FLIGHT_JOB_CHALLENGE_CIRCUIT_BREAKER_ENABLED",
+            "false",
+        ).strip().lower() not in {"0", "false", "no", "off"}
+        if circuit_enabled and job_circuit is not None and job_circuit.is_open(provider.source_id):
+            outcomes.append(
+                FlightProviderOutcome(
+                    source_id=provider.source_id,
+                    status="FAILED",
+                    error_code="FLIGHT_PROVIDER_CHALLENGE",
+                    retryable=True,
+                    offer_count=0,
+                    message="provider query scope skipped after challenge in current job",
+                )
+            )
+            continue
         provider_offers: list[FlightOffer] = []
         provider_failures: list[FlightProviderOutcome] = []
         provider_requests = _provider_search_requests(provider, request)
@@ -1064,7 +1099,8 @@ def search_flight_offers_with_enabled_provider_result(
             try:
                 provider_offers.extend(provider.search_offers(provider_request))
             except (httpx.HTTPError, FlightProviderError, ValueError, KeyError) as exc:
-                provider_failures.append(_flight_provider_failure_outcome(provider.source_id, exc))
+                failure = _flight_provider_failure_outcome(provider.source_id, exc)
+                provider_failures.append(failure)
                 logger.warning(
                     "flight_provider_search_failure source_id=%s query_scope=%s route=%s->%s error=%s",
                     provider.source_id,
@@ -1073,9 +1109,22 @@ def search_flight_offers_with_enabled_provider_result(
                     provider_request.destination_iata,
                     exc,
                 )
+                if (
+                    circuit_enabled
+                    and job_circuit is not None
+                    and failure.error_code == "FLIGHT_PROVIDER_CHALLENGE"
+                ):
+                    job_circuit.trip(provider.source_id)
+                    break
         provider_offers = _deduplicate_flight_offers(provider_offers)
         offers.extend(provider_offers)
-        if provider_offers:
+        challenge_failure = next(
+            (failure for failure in provider_failures if failure.error_code == "FLIGHT_PROVIDER_CHALLENGE"),
+            None,
+        )
+        if challenge_failure is not None:
+            outcomes.append(challenge_failure)
+        elif provider_offers:
             outcomes.append(
                 FlightProviderOutcome(
                     source_id=provider.source_id,
