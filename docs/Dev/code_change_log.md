@@ -482,7 +482,7 @@
   - 高德公交/地铁共享一次 integrated transit 响应但分别校验线路事实；机场和直线距离超过 2200 米的 walking 在网络前判定不适用；5 个唯一 OD 的确定性网络预算为 10 次。
   - 航司明确 challenge 后仅在当前 job 内熔断该来源剩余 scope；活动空态前端轮询上限为 2 秒，出现首计划后恢复既有退避。
 - 验证：
-  - 后端全量：251 passed。
+  - 后端全量：260 passed。
   - 前端：TypeScript 通过，25 个 helper/UI 测试通过，Expo Web/iOS/Android 导出通过。
   - browser worker：16 passed，TypeScript build 通过。
   - 视觉回归：360、390、393、430px 输入页及 390px 规划、结果、详情页截图完成人工核对。
