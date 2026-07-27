@@ -107,7 +107,7 @@ git diff --check
 - 代码提交：`09c11a9`。
 - 已实现 SQLite/WAL 交换生命周期、gzip 完整脱敏正文、原始/脱敏哈希、HMAC 标记、required fail-closed、导出二次扫描与分级保留清理。
 - 春秋、海航、青岛航空及 loopback browser worker client 均在风险、状态码和解析判断前记录响应证据，多阶段请求按 exchange 独立关联。
-- 验证：证据专项与 Provider 测试通过；后端全量 260 项、browser worker 16 项通过；外部 V1.17 schema 未变化。
+- 验证：证据专项与 Provider 测试通过；后端全量 251 项、browser worker 16 项通过；外部 V1.17 schema 未变化。
 
 ## 10. 非目标
 
