@@ -2,7 +2,7 @@
 
 来源：用户指出 429/业务错误只存摘要、无法事后解释且复现可能不一致。架构设计见 `docs/ARCHITECTURE.md`“航班 Provider 完整交换证据日志”。
 
-状态：待开发。
+状态：已完成（2026-07-27）。
 
 ## 1. 目标
 
@@ -101,6 +101,13 @@ git diff --check
 ```
 
 真实 smoke 只允许一次低频批准来源查询；测试 429/WAF/业务错误优先使用 fixture，不重复触发官网风控。
+
+## 9.1 完成记录
+
+- 代码提交：`09c11a9`。
+- 已实现 SQLite/WAL 交换生命周期、gzip 完整脱敏正文、原始/脱敏哈希、HMAC 标记、required fail-closed、导出二次扫描与分级保留清理。
+- 春秋、海航、青岛航空及 loopback browser worker client 均在风险、状态码和解析判断前记录响应证据，多阶段请求按 exchange 独立关联。
+- 验证：证据专项与 Provider 测试通过；后端全量 251 项、browser worker 16 项通过；外部 V1.17 schema 未变化。
 
 ## 10. 非目标
 

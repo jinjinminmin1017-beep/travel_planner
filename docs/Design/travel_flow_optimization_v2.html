@@ -1,0 +1,975 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>出行规划核心流程 UI 优化 V2</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --ink: #15282b;
+        --muted: #5d7073;
+        --page: #eff4f3;
+        --surface: #ffffff;
+        --line: #d9e3e1;
+        --teal: #126b75;
+        --teal-deep: #0b5159;
+        --teal-soft: #e4f1ef;
+        --mint: #bfe4dc;
+        --map: #183c42;
+        --warning-soft: #fff4de;
+        --warning: #8a5a18;
+        --shell: #102327;
+      }
+
+      * { box-sizing: border-box; }
+
+      html, body { min-height: 100%; }
+
+      body {
+        margin: 0;
+        background: #dfe9e7;
+        color: var(--ink);
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      }
+
+      button, textarea { font: inherit; }
+
+      .board {
+        width: 1450px;
+        min-height: 1040px;
+        margin: 0 auto;
+        padding: 38px 40px 50px;
+      }
+
+      .board-title {
+        margin: 0 0 7px;
+        font-size: 28px;
+        line-height: 34px;
+        letter-spacing: -0.025em;
+      }
+
+      .board-copy {
+        margin: 0 0 26px;
+        color: #415659;
+        font-size: 14px;
+        line-height: 22px;
+      }
+
+      .flow {
+        display: grid;
+        grid-template-columns: repeat(3, 410px);
+        gap: 50px;
+        align-items: start;
+      }
+
+      .concept { display: grid; gap: 10px; }
+
+      .concept-caption {
+        margin: 0;
+        text-align: center;
+        color: #415659;
+        font-size: 12px;
+        line-height: 18px;
+      }
+
+      .concept-caption strong {
+        display: block;
+        color: var(--ink);
+        font-size: 15px;
+        line-height: 21px;
+      }
+
+      .phone {
+        width: 410px;
+        height: 884px;
+        padding: 9px;
+        border-radius: 46px;
+        background: var(--shell);
+        box-shadow: 0 24px 48px rgba(24, 59, 62, .2);
+      }
+
+      .screen {
+        position: relative;
+        height: 100%;
+        overflow: hidden;
+        border-radius: 37px;
+        background: var(--page);
+      }
+
+      .statusbar {
+        height: 32px;
+        padding: 8px 20px 0;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        font-size: 12px;
+        font-weight: 750;
+      }
+
+      .status-icons {
+        display: flex;
+        gap: 5px;
+        font-size: 10px;
+      }
+
+      .page-content {
+        height: calc(100% - 32px);
+        overflow: hidden;
+        padding: 0 16px 82px;
+      }
+
+      .planning-content { padding-bottom: 24px; }
+
+      .app-header {
+        min-height: 64px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+      }
+
+      .brand {
+        color: var(--teal-deep);
+        font-size: 16px;
+        line-height: 22px;
+        font-weight: 850;
+      }
+
+      .header-action {
+        min-width: 48px;
+        min-height: 44px;
+        padding: 0 12px;
+        border: 0;
+        border-radius: 12px;
+        background: var(--surface);
+        color: var(--teal-deep);
+        font-size: 12px;
+        font-weight: 750;
+      }
+
+      .hero-copy { padding: 8px 0 18px; }
+
+      .hero-copy h1 {
+        max-width: 330px;
+        margin: 0;
+        font-size: 29px;
+        line-height: 35px;
+        letter-spacing: -0.035em;
+        text-wrap: balance;
+      }
+
+      .hero-copy p {
+        margin: 7px 0 0;
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 20px;
+      }
+
+      .composer {
+        padding: 15px;
+        border-radius: 16px;
+        background: var(--surface);
+      }
+
+      .field-label {
+        display: block;
+        margin-bottom: 8px;
+        color: var(--teal-deep);
+        font-size: 12px;
+        line-height: 18px;
+        font-weight: 800;
+      }
+
+      .trip-input {
+        width: 100%;
+        height: 118px;
+        resize: none;
+        border: 0;
+        border-radius: 12px;
+        outline: none;
+        background: var(--page);
+        color: var(--ink);
+        padding: 13px;
+        font-size: 14px;
+        line-height: 22px;
+      }
+
+      .quick-actions {
+        margin-top: 10px;
+        display: flex;
+        gap: 8px;
+        overflow: hidden;
+      }
+
+      .quick-action {
+        flex: 1;
+        min-width: 0;
+        min-height: 40px;
+        border: 0;
+        border-radius: 12px;
+        background: var(--teal-soft);
+        color: var(--teal-deep);
+        font-size: 11px;
+        font-weight: 750;
+        white-space: nowrap;
+      }
+
+      .primary {
+        width: 100%;
+        min-height: 48px;
+        margin-top: 12px;
+        border: 0;
+        border-radius: 12px;
+        background: var(--teal);
+        color: var(--surface);
+        font-size: 14px;
+        font-weight: 850;
+        transition: transform 180ms cubic-bezier(.16, 1, .3, 1), background 180ms ease;
+      }
+
+      .primary:active {
+        transform: scale(.985);
+        background: var(--teal-deep);
+      }
+
+      .section-heading {
+        margin: 20px 0 9px;
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 12px;
+      }
+
+      .section-heading h2 {
+        margin: 0;
+        font-size: 16px;
+        line-height: 22px;
+      }
+
+      .text-action {
+        color: var(--teal);
+        font-size: 11px;
+        line-height: 16px;
+        font-weight: 750;
+        white-space: nowrap;
+      }
+
+      .recent-list {
+        overflow: hidden;
+        border-radius: 16px;
+        background: var(--surface);
+      }
+
+      .recent-row {
+        min-height: 72px;
+        padding: 12px 14px;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 12px;
+        align-items: center;
+      }
+
+      .recent-row + .recent-row { border-top: 1px solid var(--line); }
+
+      .recent-route {
+        min-width: 0;
+        font-size: 13px;
+        line-height: 18px;
+        font-weight: 800;
+      }
+
+      .recent-meta {
+        margin-top: 3px;
+        color: var(--muted);
+        font-size: 10px;
+        line-height: 15px;
+      }
+
+      .recent-price {
+        color: var(--teal-deep);
+        font-size: 14px;
+        font-weight: 850;
+        white-space: nowrap;
+      }
+
+      .bottom-tabs {
+        position: absolute;
+        right: 0;
+        bottom: 0;
+        left: 0;
+        height: 72px;
+        padding: 8px 16px 18px;
+        border-top: 1px solid var(--line);
+        background: rgba(239, 244, 243, .97);
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+      }
+
+      .tab {
+        border: 0;
+        border-radius: 12px;
+        background: transparent;
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 800;
+      }
+
+      .tab.active {
+        background: var(--teal-soft);
+        color: var(--teal-deep);
+      }
+
+      .planning-hero { padding: 34px 0 18px; }
+
+      .planning-hero h1 {
+        max-width: 340px;
+        margin: 0;
+        font-size: 30px;
+        line-height: 36px;
+        letter-spacing: -0.035em;
+        text-wrap: balance;
+      }
+
+      .planning-route {
+        margin: 8px 0 0;
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 20px;
+      }
+
+      .map {
+        position: relative;
+        height: 204px;
+        overflow: hidden;
+        border-radius: 16px;
+        background: var(--map);
+      }
+
+      .map img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+      }
+
+      .map::after {
+        content: "";
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        left: 58%;
+        width: 54px;
+        background: linear-gradient(90deg, transparent, rgba(126, 233, 212, .24), transparent);
+        transform: translateX(-50%);
+        animation: map-sweep 3.8s cubic-bezier(.4, 0, .2, 1) infinite alternate;
+      }
+
+      @keyframes map-sweep {
+        from { left: 34%; }
+        to { left: 82%; }
+      }
+
+      .progress-copy {
+        margin: 14px 0 8px;
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 16px;
+      }
+
+      .progress-copy strong {
+        font-size: 14px;
+        line-height: 20px;
+      }
+
+      .progress-copy span {
+        color: var(--teal-deep);
+        font-size: 13px;
+        font-weight: 850;
+      }
+
+      .progress-track {
+        height: 4px;
+        overflow: hidden;
+        border-radius: 999px;
+        background: #d5e0de;
+      }
+
+      .progress-fill {
+        width: 64%;
+        height: 100%;
+        border-radius: inherit;
+        background: var(--teal);
+      }
+
+      .stage-list {
+        margin-top: 14px;
+        padding: 4px 14px;
+        border-radius: 16px;
+        background: var(--surface);
+      }
+
+      .stage {
+        min-height: 52px;
+        display: grid;
+        grid-template-columns: 20px minmax(0, 1fr) auto;
+        gap: 10px;
+        align-items: center;
+      }
+
+      .stage + .stage { border-top: 1px solid var(--line); }
+
+      .stage-node {
+        width: 16px;
+        height: 16px;
+        border: 2px solid var(--line);
+        border-radius: 50%;
+        background: var(--surface);
+      }
+
+      .stage.complete .stage-node {
+        border-color: var(--teal);
+        background: var(--teal);
+        box-shadow: inset 0 0 0 4px var(--surface);
+      }
+
+      .stage.active .stage-node {
+        border-color: var(--teal);
+        background: var(--mint);
+      }
+
+      .stage strong {
+        font-size: 12px;
+        line-height: 18px;
+      }
+
+      .stage span {
+        color: var(--muted);
+        font-size: 10px;
+        line-height: 15px;
+        white-space: nowrap;
+      }
+
+      .stage.active span {
+        color: var(--teal-deep);
+        font-weight: 750;
+      }
+
+      .planning-note {
+        margin: 12px 0 0;
+        color: var(--muted);
+        font-size: 10px;
+        line-height: 16px;
+        text-align: center;
+      }
+
+      .result-header {
+        min-height: 72px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+      }
+
+      .result-header h1 {
+        min-width: 0;
+        margin: 0;
+        font-size: 20px;
+        line-height: 24px;
+        letter-spacing: -0.025em;
+      }
+
+      .result-header p {
+        margin: 3px 0 0;
+        color: var(--muted);
+        font-size: 10px;
+        line-height: 15px;
+      }
+
+      .more {
+        flex: none;
+        width: 44px;
+        height: 44px;
+        border: 0;
+        border-radius: 12px;
+        background: var(--surface);
+        color: var(--teal-deep);
+        font-size: 18px;
+        font-weight: 850;
+      }
+
+      .result-intro {
+        margin: 4px 0 10px;
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 12px;
+      }
+
+      .result-intro strong {
+        font-size: 15px;
+        line-height: 21px;
+      }
+
+      .result-intro span {
+        color: var(--muted);
+        font-size: 10px;
+        line-height: 15px;
+      }
+
+      .result-hero {
+        overflow: hidden;
+        border-radius: 16px;
+        background: var(--teal-deep);
+      }
+
+      .result-image {
+        position: relative;
+        height: 116px;
+        background-image:
+          linear-gradient(180deg, rgba(8, 34, 38, .08), rgba(8, 34, 38, .76)),
+          url("../../frontend/assets/destination-scenes/qingdao-pier.jpg");
+        background-size: cover;
+        background-position: center 58%;
+      }
+
+      .result-image-copy {
+        position: absolute;
+        right: 14px;
+        bottom: 12px;
+        left: 14px;
+        color: var(--surface);
+      }
+
+      .result-image-copy span {
+        color: #d5e9e6;
+        font-size: 10px;
+        font-weight: 750;
+      }
+
+      .result-image-copy h2 {
+        margin: 2px 0 0;
+        font-size: 20px;
+        line-height: 24px;
+        letter-spacing: -0.025em;
+      }
+
+      .result-metrics {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 1px;
+        background: rgba(255, 255, 255, .14);
+      }
+
+      .result-metric {
+        min-width: 0;
+        padding: 10px 12px;
+        background: var(--teal-deep);
+      }
+
+      .result-metric span {
+        display: block;
+        color: #d5e9e6;
+        font-size: 9px;
+        line-height: 14px;
+      }
+
+      .result-metric strong {
+        display: block;
+        margin-top: 2px;
+        color: var(--surface);
+        font-size: 13px;
+        line-height: 18px;
+        white-space: nowrap;
+      }
+
+      .plan-switcher {
+        margin-top: 12px;
+        padding: 4px;
+        border-radius: 14px;
+        background: #dfe9e7;
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 4px;
+      }
+
+      .plan-option {
+        min-width: 0;
+        min-height: 46px;
+        border: 0;
+        border-radius: 11px;
+        background: transparent;
+        color: var(--muted);
+        font-size: 10px;
+        line-height: 14px;
+        font-weight: 750;
+      }
+
+      .plan-option strong {
+        display: block;
+        color: inherit;
+        font-size: 11px;
+      }
+
+      .plan-option.active {
+        background: var(--surface);
+        color: var(--teal-deep);
+      }
+
+      .recommendation {
+        margin-top: 10px;
+        padding: 10px 12px;
+        border-radius: 12px;
+        background: var(--teal-soft);
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr);
+        gap: 8px;
+        align-items: start;
+      }
+
+      .recommendation-badge {
+        min-width: 26px;
+        height: 26px;
+        border-radius: 9px;
+        background: var(--teal);
+        color: var(--surface);
+        display: grid;
+        place-items: center;
+        font-size: 10px;
+        font-weight: 850;
+      }
+
+      .recommendation p {
+        margin: 1px 0 0;
+        font-size: 11px;
+        line-height: 17px;
+      }
+
+      .timeline-title {
+        margin: 14px 0 7px;
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 12px;
+      }
+
+      .timeline-title h2 {
+        margin: 0;
+        font-size: 15px;
+        line-height: 21px;
+      }
+
+      .timeline {
+        padding: 11px 12px 6px;
+        border-radius: 16px;
+        background: var(--surface);
+      }
+
+      .timeline-row {
+        min-height: 54px;
+        display: grid;
+        grid-template-columns: 40px 18px minmax(0, 1fr);
+        gap: 7px;
+      }
+
+      .timeline-time {
+        color: var(--teal-deep);
+        font-size: 11px;
+        line-height: 16px;
+        font-weight: 850;
+      }
+
+      .timeline-rail {
+        position: relative;
+        display: flex;
+        justify-content: center;
+      }
+
+      .timeline-rail::before {
+        content: "";
+        position: relative;
+        z-index: 1;
+        width: 10px;
+        height: 10px;
+        margin-top: 2px;
+        border: 2px solid var(--teal);
+        border-radius: 50%;
+        background: var(--surface);
+      }
+
+      .timeline-row:not(:last-child) .timeline-rail::after {
+        content: "";
+        position: absolute;
+        top: 13px;
+        bottom: 0;
+        width: 2px;
+        background: var(--mint);
+      }
+
+      .timeline-copy strong {
+        display: block;
+        font-size: 11px;
+        line-height: 16px;
+      }
+
+      .timeline-copy span {
+        display: block;
+        margin-top: 2px;
+        color: var(--muted);
+        font-size: 9px;
+        line-height: 14px;
+      }
+
+      .bottom-action {
+        position: absolute;
+        right: 0;
+        bottom: 0;
+        left: 0;
+        min-height: 84px;
+        padding: 12px 16px 22px;
+        border-top: 1px solid var(--line);
+        background: rgba(239, 244, 243, .97);
+        display: grid;
+        grid-template-columns: 92px minmax(0, 1fr);
+        gap: 8px;
+      }
+
+      .secondary {
+        min-height: 48px;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        background: var(--surface);
+        color: var(--teal-deep);
+        font-size: 12px;
+        font-weight: 800;
+      }
+
+      .bottom-action .primary { margin-top: 0; }
+
+      .home-indicator {
+        position: absolute;
+        bottom: 6px;
+        left: 50%;
+        width: 120px;
+        height: 4px;
+        border-radius: 999px;
+        background: #173033;
+        transform: translateX(-50%);
+      }
+
+      @media (max-width: 900px) {
+        .board {
+          width: auto;
+          min-width: 410px;
+          padding: 24px;
+        }
+
+        .flow {
+          grid-template-columns: 410px;
+          justify-content: center;
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        *, *::before, *::after {
+          scroll-behavior: auto !important;
+          transition-duration: 0.01ms !important;
+          animation-duration: 0.01ms !important;
+          animation-iteration-count: 1 !important;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="board">
+      <h1 class="board-title">出行规划核心流程优化</h1>
+      <p class="board-copy">让用户从说出需求，到理解规划进度，再到选择生成方案，始终知道当前任务和下一步。</p>
+
+      <div class="flow">
+        <section class="concept">
+          <p class="concept-caption"><strong>01 路程输入页</strong>聚焦一句话输入，历史记录退到次级</p>
+          <div class="phone" id="input-screen">
+            <div class="screen">
+              <div class="statusbar"><span>9:41</span><span class="status-icons">▮▮▮　⌁　▰</span></div>
+              <div class="page-content">
+                <header class="app-header">
+                  <span class="brand">出行搭子</span>
+                  <button class="header-action">偏好</button>
+                </header>
+
+                <div class="hero-copy">
+                  <h1>今天，想去哪里？</h1>
+                  <p>一句话告诉我出发地、目的地和时间。</p>
+                </div>
+
+                <section class="composer">
+                  <label class="field-label" for="trip">描述你的行程</label>
+                  <textarea class="trip-input" id="trip">明早 8 点从上海嘉定南翔出发，去青岛栈桥，希望少换乘，预算 700 元以内。</textarea>
+                  <div class="quick-actions">
+                    <button class="quick-action">使用定位</button>
+                    <button class="quick-action">明天出发</button>
+                    <button class="quick-action">少换乘</button>
+                  </div>
+                  <button class="primary">开始规划</button>
+                </section>
+
+                <div class="section-heading">
+                  <h2>最近规划</h2>
+                  <span class="text-action">查看全部</span>
+                </div>
+                <section class="recent-list">
+                  <div class="recent-row">
+                    <div>
+                      <div class="recent-route">上海虹桥 → 杭州西湖</div>
+                      <div class="recent-meta">昨天 · 高铁直达 · 2小时08分</div>
+                    </div>
+                    <strong class="recent-price">¥126</strong>
+                  </div>
+                  <div class="recent-row">
+                    <div>
+                      <div class="recent-route">上海嘉定 → 苏州博物馆</div>
+                      <div class="recent-meta">7月24日 · 少换乘 · 1小时36分</div>
+                    </div>
+                    <strong class="recent-price">¥78</strong>
+                  </div>
+                </section>
+              </div>
+
+              <nav class="bottom-tabs" aria-label="主导航">
+                <button class="tab active">云起</button>
+                <button class="tab">路明</button>
+              </nav>
+              <div class="home-indicator" aria-hidden="true"></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="concept">
+          <p class="concept-caption"><strong>02 规划页</strong>显示真实任务进度，当前工作可感知</p>
+          <div class="phone" id="planning-screen">
+            <div class="screen">
+              <div class="statusbar"><span>9:41</span><span class="status-icons">▮▮▮　⌁　▰</span></div>
+              <div class="page-content planning-content">
+                <header class="app-header">
+                  <span class="brand">路明</span>
+                  <button class="header-action">取消规划</button>
+                </header>
+
+                <div class="planning-hero">
+                  <h1>正在核对 6 个候选方案</h1>
+                  <p class="planning-route">上海嘉定南翔 → 青岛栈桥</p>
+                </div>
+
+                <div class="map" aria-label="规划数据汇聚地图">
+                  <img src="../../frontend/assets/maps/world-map-flow.png" alt="世界地图上的路线数据汇聚效果" />
+                </div>
+
+                <div class="progress-copy">
+                  <strong>正在比对高铁班次和接驳</strong>
+                  <span>64%</span>
+                </div>
+                <div class="progress-track" aria-label="规划进度 64%">
+                  <div class="progress-fill"></div>
+                </div>
+
+                <section class="stage-list" aria-label="规划阶段">
+                  <div class="stage complete">
+                    <span class="stage-node"></span><strong>理解行程需求</strong><span>已完成</span>
+                  </div>
+                  <div class="stage complete">
+                    <span class="stage-node"></span><strong>确认地点和时间</strong><span>已完成</span>
+                  </div>
+                  <div class="stage active">
+                    <span class="stage-node"></span><strong>比对车次与接驳</strong><span>进行中</span>
+                  </div>
+                  <div class="stage">
+                    <span class="stage-node"></span><strong>评估并生成方案</strong><span>待处理</span>
+                  </div>
+                </section>
+                <p class="planning-note">可以离开此页面，规划完成后会保留结果。</p>
+              </div>
+              <div class="home-indicator" aria-hidden="true"></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="concept">
+          <p class="concept-caption"><strong>03 规划生成页</strong>先给结论，再展示推荐理由和路线骨架</p>
+          <div class="phone" id="result-screen">
+            <div class="screen">
+              <div class="statusbar"><span>9:41</span><span class="status-icons">▮▮▮　⌁　▰</span></div>
+              <div class="page-content">
+                <header class="result-header">
+                  <div>
+                    <h1>上海 → 青岛</h1>
+                    <p>7月28日 周二 · 08:50 出发</p>
+                  </div>
+                  <button class="more" aria-label="更多操作">•••</button>
+                </header>
+
+                <div class="result-intro">
+                  <strong>已找到 3 种可行路线</strong>
+                  <span>更新于 09:43</span>
+                </div>
+
+                <section class="result-hero">
+                  <div class="result-image">
+                    <div class="result-image-copy">
+                      <span>综合推荐</span>
+                      <h2>少换乘，抵达时间更稳</h2>
+                    </div>
+                  </div>
+                  <div class="result-metrics">
+                    <div class="result-metric"><span>预计总价</span><strong>¥608</strong></div>
+                    <div class="result-metric"><span>全程耗时</span><strong>7小时36分</strong></div>
+                    <div class="result-metric"><span>换乘</span><strong>2 次</strong></div>
+                  </div>
+                </section>
+
+                <div class="plan-switcher" role="tablist" aria-label="选择方案">
+                  <button class="plan-option active"><strong>综合推荐</strong>¥608</button>
+                  <button class="plan-option"><strong>更省时</strong>6小时58分</button>
+                  <button class="plan-option"><strong>更省钱</strong>¥482</button>
+                </div>
+
+                <div class="recommendation">
+                  <span class="recommendation-badge">荐</span>
+                  <p>比最快方案仅慢 38 分钟，但少换乘 1 次，整体衔接更稳。</p>
+                </div>
+
+                <div class="timeline-title">
+                  <h2>路线预览</h2>
+                  <span class="text-action">调整时间</span>
+                </div>
+                <section class="timeline">
+                  <div class="timeline-row">
+                    <strong class="timeline-time">08:50</strong>
+                    <span class="timeline-rail"></span>
+                    <div class="timeline-copy"><strong>从南翔格林公馆出发</strong><span>打车前往上海虹桥站 · 38分钟</span></div>
+                  </div>
+                  <div class="timeline-row">
+                    <strong class="timeline-time">10:12</strong>
+                    <span class="timeline-rail"></span>
+                    <div class="timeline-copy"><strong>上海虹桥站 · G900</strong><span>二等座 · 15:38 到达青岛北站</span></div>
+                  </div>
+                  <div class="timeline-row">
+                    <strong class="timeline-time">16:26</strong>
+                    <span class="timeline-rail"></span>
+                    <div class="timeline-copy"><strong>抵达青岛栈桥</strong><span>地铁 3 号线 · 步行约 360 米</span></div>
+                  </div>
+                </section>
+              </div>
+
+              <div class="bottom-action">
+                <button class="secondary">收藏</button>
+                <button class="primary">查看完整路线</button>
+              </div>
+              <div class="home-indicator" aria-hidden="true"></div>
+            </div>
+          </div>
+        </section>
+      </div>
+    </main>
+  </body>
+</html>

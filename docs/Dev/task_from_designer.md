@@ -1,5 +1,477 @@
 # 路径规划前端落地任务
 
+## 2026-07-27 Approved V2 开发任务（当前有效）
+
+> 本节是当前最新、已由用户确认的 UI 实施任务。若与下方 2026-07-12 的 V1 历史记录冲突，以本节为准。下方已完成记录不得改回未完成状态。
+
+### V2.0 任务状态与设计基准
+
+- 视觉方案：已由用户确认
+- 设计批准状态：Approved
+- 前端实施状态：已完成（2026-07-27）
+- 任务类型：React Native / Expo 前端 UI 重构
+- 技术栈：React Native 0.81 + Expo 54 + TypeScript
+- 主要入口：`frontend/src/App.tsx`
+- 设计 Token：`frontend/src/designSystem.ts`
+- 不修改推荐排序、价格计算、数据源治理和外部跳转的业务语义
+- 不新增购票、支付或站内交易能力
+
+#### 已批准设计总览
+
+- 核心流程原型：[`travel_flow_optimization_v2.html`](../Design/travel_flow_optimization_v2.html)
+- 核心流程效果图：[`travel_flow_optimization_v2.png`](../Design/travel_flow_optimization_v2.png)
+- 绝对路径：`C:\Users\儿儿的爹妈\Documents\travel_planner\docs\Design\travel_flow_optimization_v2.png`
+
+#### 已批准单页效果图
+
+- 路程输入页：[`travel_input_v2.png`](../Design/travel_input_v2.png)
+- 规划页：[`planning_progress_v2.png`](../Design/planning_progress_v2.png)
+- 规划生成页：[`planning_result_v2.png`](../Design/planning_result_v2.png)
+- 路线详情原型：[`route_detail_embedded_cost_concept.html`](../Design/route_detail_embedded_cost_concept.html)
+- 路线详情效果图：[`route_detail_embedded_cost_mobile.png`](../Design/route_detail_embedded_cost_mobile.png)
+- 路线详情说明图：[`route_detail_embedded_cost_concept.png`](../Design/route_detail_embedded_cost_concept.png)
+
+开发必须阅读两份 Approved HTML，并以其中的布局、间距、色彩和信息层级为视觉基准。HTML 仅用于参考，不得直接作为生产页面交付。
+
+### V2.1 页面目标
+
+将“输入需求、等待规划、查看生成方案、核对路线详情”统一为一条连续的移动端任务流：
+
+1. 输入页只突出“描述行程并开始规划”，历史与偏好退到次级。
+2. 规划页告诉用户正在处理什么、已完成什么、下一步是什么。
+3. 生成页先给推荐结论，再给方案差异、推荐理由和路线骨架。
+4. 详情页去除方案风险提示，将费用明细并入路线，并明确席别调整入口和官方跳转去向。
+5. 四页保持同一套青绿色 Token、16px 卡片圆角、12px 控件圆角和 48px 触控目标。
+
+### V2.2 建议代码拆分
+
+不得继续扩大 `App.tsx`。建议按现有目录补充或重构以下组件：
+
+```text
+frontend/src/components/input/
+  TravelInputScreen.tsx
+  TripComposer.tsx
+  QuickPreferenceActions.tsx
+  TripHistorySection.tsx
+  RetentionPreferencesSheet.tsx
+
+frontend/src/components/planning/
+  PlanningProgressScreen.tsx
+  PlanningStageList.tsx
+
+frontend/src/components/results/
+  ResultsOverview.tsx
+  ResultsHeader.tsx
+  RouteSummaryHero.tsx
+  PlanSelector.tsx
+  RecommendationRationale.tsx
+  RouteTimeline.tsx
+  ResultsBottomAction.tsx
+  RouteDetailScreen.tsx
+  JourneyLegCard.tsx
+  JourneyCostSummary.tsx
+```
+
+建议新增或集中以下纯函数，不得把映射散落在 JSX：
+
+```text
+frontend/src/utils/
+  presentation.ts 或继续使用 results/presentation.ts
+  routePlanning.ts
+```
+
+- `buildPlanningStagePresentation(progress)`
+- `selectedSegmentPrice(segment)`
+- `buildRouteCostPresentation(plan)`
+- `buildOfficialRedirectPresentation(plan)`
+- `latestPlanUpdatedAt(plan)`
+
+纯展示组件不得直接发请求。继续通过现有 `src/api/client.ts`、页面回调和 `App.tsx` 状态边界完成请求。
+
+### V2.3 路程输入页
+
+目标文件：
+
+- `frontend/src/App.tsx`
+- 新增 `frontend/src/components/input/*`
+
+#### 页面结构
+
+1. 顶部显示“出行搭子”，右侧“偏好”按钮。
+2. 主标题“今天，想去哪里？”。
+3. 说明“一句话告诉我出发地、目的地和时间。”。
+4. 单一白色输入面板：
+   - 标签“描述你的行程”
+   - 多行自然语言输入
+   - 快捷操作“使用定位”“明天出发”“少换乘”
+   - 主按钮“开始规划”
+5. 最近规划默认展示最多 2 条。
+6. 保留底部“云起 / 路明”主导航。
+
+#### 交互
+
+- “开始规划”复用现有 `submit`，不得改变自然语言解析链路。
+- 空输入点击提交时，保留明确的必填错误提示和输入焦点。
+- 提交中禁用按钮并防止重复提交，按钮内显示局部 loading。
+- “使用定位”复用现有 `requestLocation`。
+- “明天出发”将“明天出发”语义插入当前输入，不覆盖用户已有文本。
+- “少换乘”将“希望少换乘”语义插入当前输入，不重复插入相同偏好。
+- “偏好”打开原有偏好记忆能力的原生底部面板或独立页面：
+  - 常用出发地
+  - 目的地偏好
+  - 开启/关闭记忆
+  - 套用
+  - 保存
+- 不得删除现有偏好清空语义和隐私说明。
+- “查看全部”展开最近规划与收藏方案，或进入同一层级的记录页；不得删除收藏入口。
+- 历史摘要必须继续标记为脱敏摘要，不得把它伪装成实时价格。
+
+#### 视觉
+
+- 首屏不得再次同时平铺“最近规划、收藏方案、偏好记忆”三个大模块。
+- 输入面板为唯一核心卡片，不嵌套额外卡片。
+- 快捷操作为 40-48px 高的次级控件，主按钮为 48px。
+- 输入框至少支持 3 行文本，文本放大时允许增高。
+
+### V2.4 规划页
+
+目标文件：
+
+- `frontend/src/components/planning/PlanningProgressScreen.tsx`
+- `frontend/src/components/planning/PlanningStageList.tsx`
+
+#### 页面结构
+
+1. 顶部“路明”和“取消规划”。
+2. 主标题使用真实候选数量：
+   - 有候选数量时：“正在核对 N 个候选方案”
+   - 暂无候选数量时：“正在为你规划路线”
+3. 显示真实起终点。
+4. 继续复用：
+   - `frontend/assets/maps/world-map.png`
+   - `frontend/assets/maps/world-map-flow.png`
+5. 地图下方显示当前具体任务和真实进度百分比。
+6. 规划阶段改为纵向四行，不再横向排列。
+7. 底部说明“可以离开此页面，规划完成后会保留结果。”
+
+#### 阶段映射
+
+| progress | 阶段文案 | 状态 |
+| ---: | --- | --- |
+| 0-20 | 理解行程需求 | 进行中 |
+| 21-40 | 确认地点和时间 | 进行中 |
+| 41-75 | 比对车次与接驳 | 进行中 |
+| 76-99 | 评估并生成方案 | 进行中 |
+| 100 | 规划完成 | 完成 |
+
+早于当前阶段的行显示“已完成”，晚于当前阶段的行显示“待处理”。
+
+#### 交互和状态
+
+- 进度必须使用服务端 `response.progress`。
+- 服务端进度暂缺时可继续使用现有体验进度，但最大停在 95%。
+- 点击“取消规划”继续调用现有异步任务取消逻辑。
+- 取消中按钮 disabled，禁止重复取消。
+- 轮询暂停时保留现有“继续获取 / 取消规划”能力。
+- 网络中断不能清空已显示阶段和进度。
+- 地图扫光只表达数据汇聚，不表示真实地理线路。
+- 开启系统减少动态效果后，停止循环扫光，仅更新静态进度。
+
+### V2.5 规划生成页
+
+目标文件：
+
+- `frontend/src/components/results/ResultsOverview.tsx`
+- `frontend/src/components/results/ResultsHeader.tsx`
+- `frontend/src/components/results/RouteSummaryHero.tsx`
+- `frontend/src/components/results/PlanSelector.tsx`
+- `frontend/src/components/results/RecommendationRationale.tsx`
+- `frontend/src/components/results/RouteTimeline.tsx`
+- `frontend/src/components/results/ResultsBottomAction.tsx`
+
+#### 页面结构
+
+1. 顶部只显示城市级路线标题，例如“上海 → 青岛”，长门牌地址移入时间轴。
+2. 显示日期和真实出发时间。
+3. 显示“已找到 N 种可行路线”。
+4. 右侧更新时间来自最新 `DataSourceMetadata.fetched_at`；缺失时不显示，不得硬编码“刚刚”。
+5. 目的地图片与三个核心指标：
+   - 预计总价
+   - 全程耗时
+   - 换乘次数
+6. 紧凑方案选择器：
+   - 综合推荐
+   - 更省时或现有真实产品定义
+   - 更省钱
+7. 推荐理由必须来自真实方案差异或推荐结果。
+8. 路线预览展示关键时间、站点、车次和接驳。
+9. 固定底部操作区：收藏、查看完整路线。
+
+#### 业务保持
+
+- 不改变 `RecommendationSlot.recommendation_type` 的既有业务含义。
+- 方案不可用时保留槽位，显示真实不可用原因并 disabled。
+- 切换方案同步更新图片、指标、推荐理由、时间轴和收藏状态。
+- 保留 `RECOMMENDATION_CLICK` 埋点。
+- “调整时间”继续打开现有 `ScheduleAdjustPanel`。
+- “数据来源”移入顶部更多菜单或保持次级文字入口，不得删除。
+- `PARTIAL` 结果继续显示可用路线，并在推荐理由后提供降级提示与“重试来源”。
+- 不把长起终点地址同时重复在标题、图片和时间轴中。
+
+### V2.6 路线详情页
+
+目标文件：
+
+- `frontend/src/components/results/RouteDetailScreen.tsx`
+- `frontend/src/components/results/JourneyLegCard.tsx`
+- 新增 `frontend/src/components/results/JourneyCostSummary.tsx`
+- `frontend/src/components/results/PlanRiskNotice.tsx`
+
+#### 页面结构
+
+1. 顶部返回、标题“路线详情”、副标题“综合推荐”、分享。
+2. 路线摘要显示起点、终点、出发、抵达和预计总价。
+3. 删除页面中的 `PlanRiskNotice` 渲染。
+4. 删除标题下方风险等级文案，不再显示“综合推荐 · 低风险”。
+5. 分段路线使用一个连续白色容器和共享纵向轨迹。
+6. 每段显示：
+   - 时间范围
+   - 交通方式
+   - 起终点
+   - 时长、席别或接驳说明
+   - 该段费用
+   - 估算标记
+7. 所有分段之后紧接“路线费用合计”，不再保留独立 `costCard`。
+8. 底部固定显示官方确认去向和主按钮。
+
+#### 费用映射
+
+总价唯一权威来源：
+
+```ts
+plan.cost_breakdown.total_cost
+```
+
+单段价格按以下优先级读取：
+
+1. `RAIL`：`selected_seat_option_id` 对应 `seat_options[].price`
+2. `FLIGHT`：`selected_cabin_option_id` 对应 `cabin_options[].price`
+3. `LOCAL_TRANSFER`：当前 `option_id` 对应 `transfer_options[].estimated_cost`
+4. 无匹配选项时：`segment.estimated_cost`
+5. 仍无法归属时：不猜测，不在该段显示虚构价格
+
+`cost_breakdown.items` 当前没有 `segment_id`。不得通过 `label` 文案猜测归属。无法可靠归属的费用项以平面“其他费用”行展示在分段之后、总价之前，仍属于路线容器，不新增嵌套卡片。
+
+#### 席别与舱位调整
+
+- 对存在 `seat_options` 的铁路段，将整行“已选席别 / 当前席别与价格 / 更换席别”做成 48px 可点击入口。
+- 对存在 `cabin_options` 的航班段使用同样结构，文案改为“更换舱位”。
+- 点击后在当前交通段内展开候选项。
+- 当前已选项显示 Selected 并 disabled。
+- 选择新席别或舱位继续调用现有 `recalculate`。
+- 重新计算期间只锁定相关选择控件，不清空整页。
+- 成功后更新分段费用、总价和推荐结果；失败时保留原选择并显示明确错误。
+- 不再依赖模糊的“可调整席别”说明文字作为入口。
+
+#### 官方确认
+
+使用 `buildOfficialRedirectPresentation(plan)` 统一返回：
+
+```ts
+type OfficialRedirectPresentation = {
+  helperText: string;
+  buttonLabel: string;
+  redirectType: "RAIL_12306" | "AIRLINE";
+  segmentId: string | null;
+};
+```
+
+规则：
+
+- 首个主要交通段为铁路：
+  - 提示：“点击后将打开铁路12306官方渠道”
+  - 按钮：“前往铁路12306确认”
+  - `redirectType = "RAIL_12306"`
+- 首个主要交通段为航班：
+  - 能从真实数据获得航空公司名称时，按钮显示“前往{航空公司}官网确认”
+  - 无航空公司名称时，按钮显示“前往航空公司官网确认”
+  - `redirectType = "AIRLINE"`
+- 点击后继续调用现有 `bookingRedirect` 和 `openExternalUrl`。
+- URL 不可用或无法打开时，继续显示 `fallback_instruction`。
+- 文案必须明确：仅确认实时班次、余票和价格，不会自动下单或支付。
+
+#### 现有能力不得丢失
+
+- 分享
+- 收藏
+- 复制摘要
+- 查看数据来源
+- 票源增强说明
+- 问题反馈
+- 返回总览并保持当前方案
+
+以上次级能力可以放在正文后部或更多操作中，但不得从产品中删除。
+
+### V2.7 设计 Token 与样式
+
+继续复用 `frontend/src/designSystem.ts`，不得新增近似重复 Token。
+
+| 角色 | 值 |
+| --- | --- |
+| 页面背景 | `#eff4f3` |
+| 卡片表面 | `#ffffff` |
+| 主文字 | `#15282b` |
+| 次文字 | `#5d7073` |
+| 分隔线 | `#d9e3e1` |
+| 主色 | `#126b75` |
+| 深主色 | `#0b5159` |
+| 浅主色 | `#e4f1ef` |
+| 连接线 | `#bfe4dc` |
+| 卡片圆角 | `16` |
+| 控件圆角 | `12` |
+| 小圆角 | `9` |
+| 点击热区 | iOS 至少 44pt，Android / 当前跨平台基准使用 48px |
+| 页面横向边距 | `16` |
+| 卡片内边距 | `12-16` |
+| 模块间距 | `16-24` |
+
+字体继续使用系统字体。数字和金额必须单行，长标签一侧允许收缩或换行，不得把金额推出 390px 屏幕。
+
+### V2.8 状态与无障碍
+
+四页必须覆盖：
+
+- normal
+- loading
+- skeleton
+- empty
+- error
+- network error
+- disabled
+- selected
+- pressed
+- expanded / collapsed
+- partial result
+
+要求：
+
+- 所有 Pressable 提供准确 `accessibilityRole`、`accessibilityLabel` 和 `accessibilityState`。
+- 席别入口读屏示例：“更换高铁席别，当前二等座，票价553元”。
+- 方案选择器读屏包含推荐类型、价格或耗时、选中和不可用状态。
+- 进度读屏包含当前百分比和当前阶段。
+- 底部固定操作区不能遮挡 Home Indicator、系统导航栏或正文末尾。
+- Web 端支持键盘 focus、Tab 顺序和 Enter / Space 激活。
+- 动画遵守 Reduce Motion / Remove Animations。
+
+### V2.9 适配要求
+
+必须完成以下尺寸视觉回归：
+
+- 360×800
+- 390×844
+- 393×852
+- 430×932
+
+验收要求：
+
+- 无横向滚动和右侧裁切。
+- 起终点、总价、耗时、换乘次数完整可读。
+- 金额不得换行。
+- 长地址最多按组件规则换行，不得扩大 flex 子项的 intrinsic width。
+- React Native Web 的 `flex: 1` 文本容器应允许收缩；必要时设置对应最小宽度约束。
+- 文本放大 125% 时，按钮文字不截断，方案选择器和列表行允许增高。
+- 平板与 Web 使用 `ui.contentMaxWidth` 居中，不把手机布局无约束拉满。
+
+### V2.10 开发顺序
+
+#### Phase V2-1：公共 helper 与输入页
+
+- [x] 新增规划阶段、单段费用、费用汇总和官方跳转展示 helper。
+- [x] 为 helper 补充单元测试。
+- [x] 从 `App.tsx` 拆出输入页组件。
+- [x] 落地输入面板、快捷操作、最近规划和偏好入口。
+- [x] 保留收藏、偏好记忆、定位、脱敏摘要和错误处理。
+
+#### Phase V2-2：规划页
+
+- [x] 将规划阶段从横向卡片改为纵向状态行。
+- [x] 显示真实当前任务、候选数量和进度。
+- [x] 保留取消、继续轮询和网络恢复能力。
+- [x] 完成 Reduce Motion 降级。
+
+#### Phase V2-3：规划生成页
+
+- [x] 缩短顶部路线标题，长地址移入时间轴。
+- [x] 实现“已找到 N 种可行路线”和真实更新时间。
+- [x] 按 Approved V2 重排摘要、方案选择、推荐理由和路线预览。
+- [x] 保留数据来源、调整时间、收藏和查看完整路线。
+- [x] 验证 COMPLETE、PARTIAL、不可用推荐槽和重试来源状态。
+
+#### Phase V2-4：路线详情
+
+- [x] 移除 `PlanRiskNotice` 渲染和顶部风险等级文案。
+- [x] 将单段费用与总价合并进连续路线容器。
+- [x] 实现席别 / 舱位整行调整入口和展开状态。
+- [x] 实现动态官方渠道提示与按钮文案。
+- [x] 保留分享、收藏、复制、来源、票源增强和反馈。
+- [x] 验证跳转 URL 可用、不可用和打开失败三种情况。
+
+#### Phase V2-5：测试和视觉回归
+
+- [x] `npm run typecheck`
+- [x] `npm run test:helpers`
+- [x] `npm run build`
+- [x] 更新 `frontend/tests/ui-contract.test.mjs`
+- [x] 更新或新增 `frontend/tests/routePlanning.test.mjs`
+- [x] 在 360、390、393、430px 生成视觉回归图。
+- [x] iOS 与 Android 各验证安全区、系统返回和底部固定操作区。
+- [x] 验证文本放大 125% 和系统减少动态效果。
+- [x] 更新 `docs/Dev/code_change_log.md`。
+- [x] 按 `docs/Dev_expert.md` 要求提交并推送代码。
+
+### V2.11 验收标准
+
+#### 视觉
+
+- [x] 四个页面与 Approved V2 设计稿的信息结构和层级一致。
+- [x] 390px 下不存在横向溢出或右侧裁切。
+- [x] 只使用青绿色作为主强调色，警示色只用于真实警示。
+- [x] 普通卡片圆角不超过 16px，控件圆角统一 12px。
+- [x] 不存在卡片内再嵌套装饰性卡片。
+
+#### 交互
+
+- [x] 输入页主任务在首屏完成，快捷操作不会覆盖用户文本。
+- [x] 规划页阶段、百分比和实际任务保持同步。
+- [x] 方案切换同步更新摘要、推荐理由和时间轴。
+- [x] 席别 / 舱位入口明确，点击后在对应分段内展开。
+- [x] 高铁方案明确跳转铁路12306，航班方案明确跳转航空公司官网。
+- [x] 外部跳转不会自动下单或支付，失败时有手动确认指引。
+- [x] 收藏、分享、复制、来源、反馈和重新规划能力均未回归。
+
+#### 数据
+
+- [x] 页面不使用设计稿中的硬编码价格、时间、车次或候选数量。
+- [x] 费用合计始终来自 `cost_breakdown.total_cost`。
+- [x] 单段费用只使用可可靠归属的数据，不根据 label 猜测。
+- [x] 更新时间来自真实 `fetched_at`，缺失时隐藏。
+- [x] 缺失数据有自然降级，不显示 `undefined`、`null` 或原始英文状态码。
+
+#### 工程质量
+
+- [x] TypeScript 类型检查通过。
+- [x] Expo iOS / Android / Web 导出通过。
+- [x] 新增 helper 有最小单元测试。
+- [x] `App.tsx` 不继续堆积输入页展示逻辑。
+- [x] 不新增不必要的大型依赖。
+- [x] 动画不通过逐帧 React state 驱动，并有 reduced motion 降级。
+
+### V2.12 完成记录
+
+- 代码提交：`b8f3b9f`。
+- 视觉回归：360×800、390×844、393×852、430×932 输入页，以及 390×844 规划、结果、详情页均已生成截图并人工核对。
+- 自动验证：前端 25 个 helper/UI 测试、TypeScript 检查、Expo Web/iOS/Android 导出均通过。
+
 ## 0. 任务状态
 
 - 视觉方案：已由用户确认

@@ -1,0 +1,738 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>路线详情 · 路线内费用设计方案</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --ink: #15282b;
+        --muted: #5d7073;
+        --page: #eff4f3;
+        --surface: #ffffff;
+        --line: #d9e3e1;
+        --teal: #126b75;
+        --teal-deep: #0b5159;
+        --teal-soft: #e4f1ef;
+        --mint: #bfe4dc;
+        --success: #26705a;
+        --shadow: rgba(24, 59, 62, 0.22);
+      }
+
+      * { box-sizing: border-box; }
+
+      html, body { min-height: 100%; }
+
+      body {
+        margin: 0;
+        background: #dfe9e7;
+        color: var(--ink);
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      }
+
+      button { font: inherit; }
+
+      .board {
+        width: 1180px;
+        min-height: 960px;
+        margin: 0 auto;
+        padding: 42px 56px;
+        display: grid;
+        grid-template-columns: 430px 1fr;
+        gap: 68px;
+        align-items: center;
+      }
+
+      .phone {
+        width: 410px;
+        height: 884px;
+        padding: 9px;
+        border-radius: 46px;
+        background: #102327;
+        box-shadow: 0 28px 56px var(--shadow);
+      }
+
+      .screen {
+        position: relative;
+        height: 100%;
+        overflow: hidden;
+        border-radius: 37px;
+        background: var(--page);
+      }
+
+      .statusbar {
+        height: 32px;
+        padding: 9px 20px 0;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        color: #173033;
+        font-size: 12px;
+        font-weight: 750;
+      }
+
+      .status-icons {
+        display: flex;
+        gap: 5px;
+        align-items: center;
+        font-size: 11px;
+      }
+
+      .appbar {
+        height: 68px;
+        padding: 8px 16px;
+        display: grid;
+        grid-template-columns: 48px minmax(0, 1fr) 48px;
+        gap: 8px;
+        align-items: center;
+      }
+
+      .icon-button {
+        width: 48px;
+        height: 48px;
+        border: 0;
+        border-radius: 12px;
+        background: var(--surface);
+        color: var(--teal-deep);
+        display: grid;
+        place-items: center;
+        font-size: 22px;
+        font-weight: 800;
+        cursor: pointer;
+        transition: transform 180ms cubic-bezier(.16, 1, .3, 1), background 180ms ease;
+      }
+
+      .icon-button:active {
+        transform: scale(.97);
+        background: var(--teal-soft);
+      }
+
+      .title-block {
+        min-width: 0;
+        text-align: center;
+      }
+
+      .title-block h1 {
+        margin: 0;
+        font-size: 20px;
+        line-height: 24px;
+        letter-spacing: -0.02em;
+      }
+
+      .title-block p {
+        margin: 3px 0 0;
+        color: var(--muted);
+        font-size: 11px;
+        line-height: 15px;
+      }
+
+      .content {
+        height: calc(100% - 100px);
+        overflow: hidden;
+        padding: 0 16px 112px;
+      }
+
+      .summary {
+        padding: 16px;
+        border-radius: 16px;
+        background: var(--surface);
+      }
+
+      .route-heading {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 72px minmax(0, 1fr);
+        gap: 8px;
+        align-items: center;
+      }
+
+      .route-heading strong {
+        min-width: 0;
+        font-size: 15px;
+        line-height: 20px;
+        font-weight: 800;
+        text-wrap: pretty;
+      }
+
+      .route-heading strong:last-child { text-align: right; }
+
+      .summary-line {
+        position: relative;
+        height: 2px;
+        background: var(--teal);
+      }
+
+      .summary-line::before,
+      .summary-line::after {
+        content: "";
+        position: absolute;
+        top: 50%;
+        width: 9px;
+        height: 9px;
+        border: 2px solid var(--teal);
+        border-radius: 50%;
+        background: var(--surface);
+        transform: translateY(-50%);
+      }
+
+      .summary-line::before { left: 0; }
+      .summary-line::after { right: 0; }
+
+      .metrics {
+        margin-top: 16px;
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 8px;
+      }
+
+      .metric span {
+        display: block;
+        color: var(--muted);
+        font-size: 10px;
+        line-height: 15px;
+      }
+
+      .metric strong {
+        display: block;
+        margin-top: 4px;
+        font-size: 15px;
+        line-height: 20px;
+        font-weight: 800;
+      }
+
+      .metric:last-child { text-align: right; }
+
+      .section-head {
+        margin: 20px 0 10px;
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 12px;
+      }
+
+      .section-head h2 {
+        margin: 0;
+        font-size: 17px;
+        line-height: 22px;
+        letter-spacing: -0.01em;
+      }
+
+      .section-head span {
+        color: var(--muted);
+        font-size: 11px;
+        line-height: 16px;
+        white-space: nowrap;
+      }
+
+      .journey {
+        overflow: hidden;
+        border-radius: 16px;
+        background: var(--surface);
+      }
+
+      .leg {
+        position: relative;
+        display: grid;
+        grid-template-columns: 28px minmax(0, 1fr);
+        gap: 8px;
+        padding: 13px 14px 0;
+      }
+
+      .leg + .leg { padding-top: 12px; }
+
+      .rail {
+        position: relative;
+        display: flex;
+        justify-content: center;
+      }
+
+      .node {
+        position: relative;
+        z-index: 1;
+        width: 13px;
+        height: 13px;
+        margin-top: 2px;
+        border: 3px solid var(--teal);
+        border-radius: 50%;
+        background: var(--surface);
+      }
+
+      .leg:not(.last) .rail::after {
+        content: "";
+        position: absolute;
+        top: 15px;
+        bottom: -12px;
+        width: 2px;
+        background: var(--mint);
+      }
+
+      .leg-copy { min-width: 0; }
+
+      .leg-topline {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+      }
+
+      .time {
+        color: var(--teal-deep);
+        font-size: 13px;
+        line-height: 18px;
+        font-weight: 800;
+      }
+
+      .mode {
+        border-radius: 999px;
+        background: var(--teal-soft);
+        color: var(--teal-deep);
+        padding: 2px 8px;
+        font-size: 10px;
+        line-height: 16px;
+        font-weight: 800;
+        white-space: nowrap;
+      }
+
+      .leg-title {
+        margin: 5px 0 0;
+        font-size: 13px;
+        line-height: 18px;
+        font-weight: 800;
+        text-wrap: pretty;
+      }
+
+      .leg-meta {
+        margin: 3px 0 0;
+        color: var(--muted);
+        font-size: 11px;
+        line-height: 16px;
+      }
+
+      .leg-cost {
+        min-height: 34px;
+        margin-top: 8px;
+        border-top: 1px solid var(--line);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+      }
+
+      .leg-cost span {
+        min-width: 0;
+        color: var(--muted);
+        font-size: 11px;
+        line-height: 16px;
+      }
+
+      .leg-cost strong {
+        flex: none;
+        font-size: 13px;
+        line-height: 18px;
+        white-space: nowrap;
+      }
+
+      .seat-control {
+        width: 100%;
+        min-height: 48px;
+        margin-top: 8px;
+        padding: 0;
+        border: 0;
+        border-top: 1px solid var(--line);
+        background: transparent;
+        color: var(--ink);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        text-align: left;
+        cursor: pointer;
+        transition: color 180ms ease, transform 180ms cubic-bezier(.16, 1, .3, 1);
+      }
+
+      .seat-control:active {
+        color: var(--teal-deep);
+        transform: scale(.99);
+      }
+
+      .seat-copy {
+        min-width: 0;
+        display: flex;
+        align-items: baseline;
+        gap: 6px;
+      }
+
+      .seat-copy span {
+        color: var(--muted);
+        font-size: 10px;
+        line-height: 15px;
+      }
+
+      .seat-copy strong {
+        min-width: 0;
+        font-size: 13px;
+        line-height: 18px;
+        white-space: nowrap;
+      }
+
+      .seat-action {
+        flex: none;
+        color: var(--teal);
+        font-size: 12px;
+        line-height: 18px;
+        font-weight: 800;
+        white-space: nowrap;
+      }
+
+      .estimated {
+        margin-left: 3px;
+        color: var(--muted);
+        font-size: 10px;
+        font-weight: 600;
+      }
+
+      .total {
+        margin-top: 8px;
+        padding: 13px 14px 14px 50px;
+        background: var(--teal-soft);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+      }
+
+      .total-label strong {
+        display: block;
+        font-size: 13px;
+        line-height: 18px;
+      }
+
+      .total-label span {
+        display: block;
+        margin-top: 2px;
+        color: var(--muted);
+        font-size: 10px;
+        line-height: 15px;
+      }
+
+      .total-price {
+        color: var(--teal-deep);
+        font-size: 20px;
+        line-height: 24px;
+        font-weight: 850;
+        letter-spacing: -0.02em;
+        white-space: nowrap;
+      }
+
+      .source-note {
+        margin: 10px 2px 0;
+        color: var(--muted);
+        font-size: 10px;
+        line-height: 15px;
+      }
+
+      .bottom-action {
+        position: absolute;
+        right: 0;
+        bottom: 0;
+        left: 0;
+        min-height: 104px;
+        padding: 12px 16px 22px;
+        background: rgba(239, 244, 243, .96);
+        border-top: 1px solid var(--line);
+      }
+
+      .destination-note {
+        margin: 0 0 7px;
+        color: var(--muted);
+        font-size: 10px;
+        line-height: 15px;
+        text-align: center;
+      }
+
+      .primary {
+        width: 100%;
+        min-height: 48px;
+        border: 0;
+        border-radius: 12px;
+        background: var(--teal);
+        color: var(--surface);
+        font-size: 14px;
+        font-weight: 800;
+        cursor: pointer;
+        transition: transform 180ms cubic-bezier(.16, 1, .3, 1), background 180ms ease;
+      }
+
+      .primary:active {
+        transform: scale(.985);
+        background: var(--teal-deep);
+      }
+
+      .home-indicator {
+        position: absolute;
+        bottom: 6px;
+        left: 50%;
+        width: 120px;
+        height: 4px;
+        border-radius: 999px;
+        background: #173033;
+        transform: translateX(-50%);
+      }
+
+      .notes {
+        max-width: 510px;
+        align-self: center;
+      }
+
+      .notes h2 {
+        margin: 0;
+        max-width: 450px;
+        font-size: 36px;
+        line-height: 1.18;
+        letter-spacing: -0.035em;
+        text-wrap: balance;
+      }
+
+      .notes > p {
+        margin: 14px 0 0;
+        max-width: 46ch;
+        color: #415659;
+        font-size: 15px;
+        line-height: 1.7;
+      }
+
+      .decisions {
+        margin: 34px 0 0;
+        display: grid;
+        gap: 24px;
+      }
+
+      .decision {
+        display: grid;
+        grid-template-columns: 38px minmax(0, 1fr);
+        gap: 14px;
+      }
+
+      .decision-index {
+        width: 38px;
+        height: 38px;
+        border-radius: 12px;
+        background: var(--teal-deep);
+        color: var(--surface);
+        display: grid;
+        place-items: center;
+        font-size: 13px;
+        font-weight: 800;
+      }
+
+      .decision h3 {
+        margin: 0;
+        font-size: 15px;
+        line-height: 20px;
+      }
+
+      .decision p {
+        margin: 5px 0 0;
+        color: #4d6366;
+        font-size: 13px;
+        line-height: 1.65;
+      }
+
+      .tokens {
+        margin-top: 32px;
+        padding-top: 20px;
+        border-top: 1px solid rgba(21, 40, 43, .18);
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px 18px;
+        color: #4d6366;
+        font-size: 12px;
+      }
+
+      .token {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+      }
+
+      .swatch {
+        width: 12px;
+        height: 12px;
+        border-radius: 4px;
+      }
+
+      @media (max-width: 900px) {
+        .board {
+          width: auto;
+          min-width: 410px;
+          padding: 24px;
+          grid-template-columns: 1fr;
+          justify-items: center;
+        }
+
+        .notes { display: none; }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        *, *::before, *::after {
+          scroll-behavior: auto !important;
+          transition-duration: 0.01ms !important;
+          animation-duration: 0.01ms !important;
+          animation-iteration-count: 1 !important;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="board">
+      <section class="phone" aria-label="路线详情移动端高保真设计稿">
+        <div class="screen">
+          <div class="statusbar">
+            <span>9:41</span>
+            <div class="status-icons" aria-hidden="true"><span>▮▮▮</span><span>⌁</span><span>▰</span></div>
+          </div>
+
+          <header class="appbar">
+            <button class="icon-button" aria-label="返回">‹</button>
+            <div class="title-block">
+              <h1>路线详情</h1>
+              <p>综合推荐</p>
+            </div>
+            <button class="icon-button" aria-label="分享">↗</button>
+          </header>
+
+          <div class="content">
+            <section class="summary" aria-label="路线概览">
+              <div class="route-heading">
+                <strong>上海嘉定南翔格林公馆</strong>
+                <div class="summary-line" aria-hidden="true"></div>
+                <strong>青岛栈桥</strong>
+              </div>
+              <div class="metrics">
+                <div class="metric"><span>出发</span><strong>08:50</strong></div>
+                <div class="metric"><span>抵达</span><strong>16:26</strong></div>
+                <div class="metric"><span>预计总价</span><strong>¥608</strong></div>
+              </div>
+            </section>
+
+            <div class="section-head">
+              <h2>分段路线</h2>
+              <span>3 段 · 7小时36分</span>
+            </div>
+
+            <section class="journey" aria-label="分段路线及费用明细">
+              <article class="leg">
+                <div class="rail"><span class="node" aria-hidden="true"></span></div>
+                <div class="leg-copy">
+                  <div class="leg-topline">
+                    <span class="time">08:50 - 09:28</span>
+                    <span class="mode">市内接驳</span>
+                  </div>
+                  <h3 class="leg-title">南翔格林公馆 → 上海虹桥站</h3>
+                  <p class="leg-meta">打车 · 38 分钟 · 步行约 120 米</p>
+                  <div class="leg-cost">
+                    <span>接驳车费</span>
+                    <strong>¥34 <small class="estimated">估算</small></strong>
+                  </div>
+                </div>
+              </article>
+
+              <article class="leg">
+                <div class="rail"><span class="node" aria-hidden="true"></span></div>
+                <div class="leg-copy">
+                  <div class="leg-topline">
+                    <span class="time">10:12 - 15:38</span>
+                    <span class="mode">高铁 G900</span>
+                  </div>
+                  <h3 class="leg-title">上海虹桥站 → 青岛北站</h3>
+                  <p class="leg-meta">5小时26分 · 直达</p>
+                  <button class="seat-control" aria-label="更换高铁席别，当前二等座，票价553元">
+                    <span class="seat-copy"><span>已选席别</span><strong>二等座 · ¥553</strong></span>
+                    <span class="seat-action">更换席别 ›</span>
+                  </button>
+                </div>
+              </article>
+
+              <article class="leg last">
+                <div class="rail"><span class="node" aria-hidden="true"></span></div>
+                <div class="leg-copy">
+                  <div class="leg-topline">
+                    <span class="time">15:43 - 16:26</span>
+                    <span class="mode">市内接驳</span>
+                  </div>
+                  <h3 class="leg-title">青岛北站 → 青岛栈桥</h3>
+                  <p class="leg-meta">地铁 3 号线 · 43 分钟 · 步行约 360 米</p>
+                  <div class="leg-cost">
+                    <span>地铁票价</span>
+                    <strong>¥21 <small class="estimated">估算</small></strong>
+                  </div>
+                </div>
+              </article>
+
+              <div class="total">
+                <div class="total-label">
+                  <strong>路线费用合计</strong>
+                  <span>接驳 + 高铁二等座 + 地铁</span>
+                </div>
+                <strong class="total-price">¥608</strong>
+              </div>
+            </section>
+
+            <p class="source-note">票价与班次以铁路12306最终确认结果为准。</p>
+          </div>
+
+          <div class="bottom-action">
+            <p class="destination-note">点击后将打开铁路12306官方渠道</p>
+            <button class="primary">前往铁路12306确认</button>
+          </div>
+          <div class="home-indicator" aria-hidden="true"></div>
+        </div>
+      </section>
+
+      <aside class="notes">
+        <h2>调整入口明确，跳转去向透明</h2>
+        <p>席别调整不再藏在说明文字里，官方确认按钮也直接写明目标平台。用户在点击前就能预判下一步。</p>
+
+        <div class="decisions">
+          <div class="decision">
+            <div class="decision-index">01</div>
+            <div>
+              <h3>风险提示退场</h3>
+              <p>删除“方案风险提示”卡片，顶部只保留“综合推荐”，不再让警示色抢占主任务注意力。</p>
+            </div>
+          </div>
+          <div class="decision">
+            <div class="decision-index">02</div>
+            <div>
+              <h3>整行点击更换席别</h3>
+              <p>“已选席别 二等座 · ¥553”整行是 48px 触控入口，右侧明确显示“更换席别”，点击后在本段内展开可选席别。</p>
+            </div>
+          </div>
+          <div class="decision">
+            <div class="decision-index">03</div>
+            <div>
+              <h3>总价完成闭环</h3>
+              <p>三段路线之后紧接合计，顶部总价负责快速扫读，路线末尾合计负责解释组成。</p>
+            </div>
+          </div>
+          <div class="decision">
+            <div class="decision-index">04</div>
+            <div>
+              <h3>按钮直接写明目标平台</h3>
+              <p>当前方案以高铁为主，显示“前往铁路12306确认”。若主交通是航班，则替换为对应航空公司官网名称。</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="tokens" aria-label="设计令牌">
+          <span class="token"><i class="swatch" style="background:#126b75"></i>主色 #126B75</span>
+          <span class="token"><i class="swatch" style="background:#eff4f3"></i>背景 #EFF4F3</span>
+          <span class="token"><i class="swatch" style="background:#15282b"></i>正文 #15282B</span>
+          <span>卡片圆角 16</span>
+          <span>控件圆角 12</span>
+          <span>触控目标 48</span>
+        </div>
+      </aside>
+    </main>
+  </body>
+</html>
