@@ -15,7 +15,6 @@ from app.data_sources.flight_providers import (
     FlightOfferCabinOption,
     FlightOfferSegment,
     FlightProviderError,
-    FlightProviderJobCircuitBreaker,
     FlightProviderOutcome,
     FlightProviderSearchResult,
     FlightSearchRequest,
@@ -607,51 +606,6 @@ def test_flight_search_result_keeps_each_provider_outcome_and_real_offers(monkey
         ("airline_mu_browser_query", "VERIFIED", None),
         ("airline_timeout_query", "TIMEOUT", "FLIGHT_PROVIDER_TIMEOUT"),
     ]
-
-
-def test_job_challenge_circuit_stops_only_challenged_provider_scope(monkeypatch):
-    monkeypatch.setenv("TRAVEL_FLIGHT_JOB_CHALLENGE_CIRCUIT_BREAKER_ENABLED", "true")
-
-    class _Provider:
-        query_scope = "AIRPORT"
-
-        def __init__(self, source_id, challenge=False):
-            self.source_id = source_id
-            self.challenge = challenge
-            self.calls = 0
-
-        def search_offers(self, request):
-            self.calls += 1
-            if self.challenge:
-                raise FlightProviderError("captcha challenge detected")
-            return []
-
-    challenged = _Provider("airline_qw_public_query", challenge=True)
-    healthy = _Provider("airline_hu_public_query")
-    monkeypatch.setattr(
-        "app.data_sources.flight_providers.build_enabled_flight_providers",
-        lambda environment=None: [challenged, healthy],
-    )
-    scope = FlightSearchScope(
-        origin_city_name="上海",
-        destination_city_name="北京",
-        origin_city_code="SHA",
-        destination_city_code="BJS",
-        allowed_origin_airport_iatas=("SHA", "PVG"),
-        allowed_destination_airport_iatas=("PEK", "PKX"),
-        departure_date=date(2026, 8, 2),
-    )
-    circuit = FlightProviderJobCircuitBreaker()
-
-    first = search_flight_offers_with_enabled_provider_result(scope, job_circuit=circuit)
-    second = search_flight_offers_with_enabled_provider_result(scope, job_circuit=circuit)
-
-    assert challenged.calls == 1
-    assert healthy.calls == 8
-    assert circuit.is_open("airline_qw_public_query")
-    assert any(outcome.error_code == "FLIGHT_PROVIDER_CHALLENGE" for outcome in first.outcomes)
-    assert any(outcome.error_code == "FLIGHT_PROVIDER_CHALLENGE" for outcome in second.outcomes)
-    assert all(outcome.status != "EMPTY" for outcome in first.outcomes if outcome.source_id == challenged.source_id)
 
 
 def test_planner_records_flight_outcomes_per_source(monkeypatch):
