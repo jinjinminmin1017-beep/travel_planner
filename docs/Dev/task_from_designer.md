@@ -470,7 +470,7 @@ type OfficialRedirectPresentation = {
 
 - 代码提交：`b8f3b9f`。
 - 视觉回归：360×800、390×844、393×852、430×932 输入页，以及 390×844 规划、结果、详情页均已生成截图并人工核对。
-- 自动验证：前端 25 个 helper/UI 测试、TypeScript 检查、Expo Web/iOS/Android 导出均通过。
+- 自动验证：前端 24 个 helper/UI 测试、TypeScript 检查、Expo Web/iOS/Android 导出均通过。
 
 ## 0. 任务状态
 

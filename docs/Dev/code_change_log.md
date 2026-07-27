@@ -472,20 +472,16 @@
 
 ## 2026-07-27 09:20:00 +08:00
 
-- 任务：完成 Approved V2 移动端流程、航司完整交换证据，以及 ARC-DEV-20260727-01 规划链路延迟优化。
-- 代码提交：`9eead29`、`ae09105`、`58b715c`、`5e4eb85`、`c72b443`、`09c11a9`、`b8f3b9f`。
+- 任务：完成 Approved V2 移动端 UI 更新。
+- 代码提交：`b8f3b9f`。
 - 修改内容：
-  - 输入页抽为 `TravelInputScreen`，规划页采用真实进度纵向阶段；结果页使用城市级标题、真实候选数和更新时间；详情页将可靠单段费用、其他费用与权威总价合入连续路线，并保留席别/舱位/接驳调整、收藏、分享、来源、反馈和动态官方渠道跳转。
-  - 新增航司交换 evidence store：每个外部阶段在业务判断前保存完整脱敏请求/响应，使用 SQLite/WAL、gzip、原始/脱敏 SHA-256 和 HMAC 标记；required 写入失败 fail-closed；提供受控导出和分级保留清理。
-  - 规划 job 输出不含地点原文/完整输入/credential 的阶段 summary；HTTP transport 完整 URL INFO 日志关闭，并记录 Provider/缓存计数。
-  - selected 接驳验证后即可形成完整计划，alternatives 后补且保持 plan/segment/option ID 与选择稳定；铁路/航班单计划形成即通过安全门发布。
-  - 高德公交/地铁共享一次 integrated transit 响应但分别校验线路事实；机场和直线距离超过 2200 米的 walking 在网络前判定不适用；5 个唯一 OD 的确定性网络预算为 10 次。
-  - 航司明确 challenge 后仅在当前 job 内熔断该来源剩余 scope；活动空态前端轮询上限为 2 秒，出现首计划后恢复既有退避。
+  - 输入页抽为 `TravelInputScreen`，落地自然语言输入、快捷偏好、脱敏历史与留存偏好面板。
+  - 规划页使用纵向阶段、真实进度和候选数量；结果页使用城市级标题、真实候选数和更新时间。
+  - 详情页将可靠单段费用、其他费用与权威总价合入连续路线，并保留席别/舱位/接驳调整、收藏、分享、来源、反馈和动态官方渠道跳转。
+  - 新增 UI 展示 helper、合同测试和 Approved V2 多尺寸视觉回归资产。
 - 验证：
-  - 后端全量：251 passed。
-  - 前端：TypeScript 通过，25 个 helper/UI 测试通过，Expo Web/iOS/Android 导出通过。
-  - browser worker：16 passed，TypeScript build 通过。
+  - 前端 TypeScript 检查通过。
+  - 24 个 helper/UI 测试通过。
+  - Expo Web/iOS/Android 导出通过。
   - 视觉回归：360、390、393、430px 输入页及 390px 规划、结果、详情页截图完成人工核对。
-  - Python compileall、schema export/diff 和 `git diff --check` 通过。
-- 兼容性：外部 V1.17 schema 不变；证据表为 additive SQLite 迁移；所有延迟优化均有独立开关，deadline 保持 180 秒 observe；未启用或绕过任何待许可航司来源。
-- 未伪造项：冷/暖缓存各 30 次真实 Provider benchmark 与东航 50 次/95% 门禁仍需外部授权、凭据和受控测试窗口，由对应测试/准入任务继续跟踪。
+- 兼容性：不修改外部 API V1.17、数据库、Provider、轮询策略、规划性能与后端运行配置。
