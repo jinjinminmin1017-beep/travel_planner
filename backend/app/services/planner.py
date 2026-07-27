@@ -76,7 +76,6 @@ from app.services.local_transfer_engine import (
     RouteEstimator,
     LocationPointResolver,
     build_local_transfer_segment,
-    enrich_local_transfer_segment,
 )
 from app.services.location_resolver import (
     airport_candidate_for_iata,
@@ -87,7 +86,7 @@ from app.services.location_resolver import (
     transfer_station_candidates_between,
 )
 from app.services.planning_rules import assert_option_available
-from app.services.planning_progress import CandidateProgressCoordinator, NoOpPlanningProgressSink, PlanningExecutionMetrics, PlanningProgressSink, PlanningProgressUpdate
+from app.services.planning_progress import NoOpPlanningProgressSink, PlanningExecutionMetrics, PlanningProgressSink, PlanningProgressUpdate
 from app.services.rail_connection_matcher import (
     RailConnectionCandidate,
     RailConnectionMetrics,
@@ -1146,7 +1145,6 @@ def _build_dynamic_direct_rail_plans(
     deadline: PlanningDeadline | None = None,
     max_station_pairs: int = 4,
     max_plans: int = 4,
-    on_plan_ready: Callable[[TravelPlan, str], None] | None = None,
 ) -> list[TravelPlan]:
     origin_stations = _dynamic_station_names(route_nodes, origin_city)
     destination_stations = _dynamic_station_names(route_nodes, destination_city)
@@ -1240,8 +1238,6 @@ def _build_dynamic_direct_rail_plans(
                     "车次、时间、票价和席别来自 12306 公开匿名查询；接驳段仅使用地图 Provider 验证结果。",
                 )
             )
-            if on_plan_ready is not None:
-                on_plan_ready(plans[-1], "RAIL_PLAN_READY")
             logger.info(
                 "rail_direct_plan_created request_id=%s plan_id=%s train_number=%s selected_seat_count=%s",
                 travel_request.request_id,
@@ -1278,7 +1274,6 @@ def _build_dynamic_flight_plans(
     deadline: PlanningDeadline | None = None,
     max_airport_pairs: int = 2,
     max_plans: int = 2,
-    on_plan_ready: Callable[[TravelPlan, str], None] | None = None,
 ) -> list[TravelPlan]:
     del max_airport_pairs
     origin_airports = _dynamic_airport_candidates(route_nodes, origin_city)
@@ -1370,8 +1365,6 @@ def _build_dynamic_flight_plans(
                 "Flight times and fare come from the enabled flight provider; local transfers use verified map routes only.",
             )
         )
-        if on_plan_ready is not None:
-            on_plan_ready(plans[-1], "FLIGHT_PLAN_READY")
         if len(plans) >= max_plans:
             return plans
 
@@ -2212,7 +2205,6 @@ def build_plans(
             taxi=taxi,
             collector=collector,
             deadline=deadline,
-            on_plan_ready=report_single_plan if single_plan_progress_enabled else None,
         )
 
     def build_direct_flight() -> list[TravelPlan]:
@@ -2227,32 +2219,10 @@ def build_plans(
             taxi=taxi,
             collector=collector,
             deadline=deadline,
-            on_plan_ready=report_single_plan if single_plan_progress_enabled else None,
         )
 
     dynamic_rail_plans: list[TravelPlan] = []
     dynamic_flight_plans: list[TravelPlan] = []
-    single_plan_progress_enabled = os.getenv("TRAVEL_SINGLE_PLAN_PROGRESS_ENABLED", "false").strip().lower() not in {"0", "false", "no", "off"}
-    coordinator = CandidateProgressCoordinator(
-        lambda candidate_plans, progress, stage: _publish_safe_progress(
-            progress_sink,
-            candidate_plans,
-            travel_request,
-            progress,
-            stage,
-            execution_metrics,
-        )
-    )
-
-    def report_single_plan(plan: TravelPlan, stage: str) -> None:
-        if execution_metrics is not None:
-            execution_metrics.mark_stage("selected_transfer_hydration")
-        coordinator.report(
-            plan,
-            progress=62 if stage == "RAIL_PLAN_READY" else 68,
-            stage=stage,
-        )
-
     direct_builders: dict[str, Callable[[], list[TravelPlan]]] = {}
     if TransportMode.RAIL in generation_modes:
         direct_builders["RAIL"] = build_direct_rail
@@ -2275,31 +2245,28 @@ def build_plans(
                 else:
                     dynamic_flight_plans = family_plans
                 completed_count += 1
-                if not single_plan_progress_enabled:
-                    _publish_safe_progress(
-                        progress_sink,
-                        [*dynamic_rail_plans, *dynamic_flight_plans],
-                        travel_request,
-                        65 if completed_count == 1 else 78,
-                        f"{mode}_READY",
-                        execution_metrics,
-                    )
-    else:
-        if "RAIL" in direct_builders and allow_new_branch("DIRECT_RAIL"):
-            dynamic_rail_plans = build_direct_rail()
-            if not single_plan_progress_enabled:
-                _publish_safe_progress(progress_sink, dynamic_rail_plans, travel_request, 65, "RAIL_READY", execution_metrics)
-        if "FLIGHT" in direct_builders and allow_new_branch("DIRECT_FLIGHT"):
-            dynamic_flight_plans = build_direct_flight()
-            if not single_plan_progress_enabled:
                 _publish_safe_progress(
                     progress_sink,
                     [*dynamic_rail_plans, *dynamic_flight_plans],
                     travel_request,
-                    78,
-                    "DIRECT_MODES_READY",
+                    65 if completed_count == 1 else 78,
+                    f"{mode}_READY",
                     execution_metrics,
                 )
+    else:
+        if "RAIL" in direct_builders and allow_new_branch("DIRECT_RAIL"):
+            dynamic_rail_plans = build_direct_rail()
+            _publish_safe_progress(progress_sink, dynamic_rail_plans, travel_request, 65, "RAIL_READY", execution_metrics)
+        if "FLIGHT" in direct_builders and allow_new_branch("DIRECT_FLIGHT"):
+            dynamic_flight_plans = build_direct_flight()
+            _publish_safe_progress(
+                progress_sink,
+                [*dynamic_rail_plans, *dynamic_flight_plans],
+                travel_request,
+                78,
+                "DIRECT_MODES_READY",
+                execution_metrics,
+            )
     dynamic_transfer_rail_plans = []
     if (
         TransportMode.RAIL in generation_modes
@@ -2358,30 +2325,6 @@ def build_plans(
             execution_metrics,
         )
     plans = [*dynamic_rail_plans, *dynamic_flight_plans, *dynamic_transfer_rail_plans, *dynamic_mixed_plans]
-    two_phase_transfer_enabled = os.getenv("TRAVEL_TWO_PHASE_TRANSFER_ENABLED", "false").strip().lower() not in {"0", "false", "no", "off"}
-    if two_phase_transfer_enabled and plans:
-        for plan in plans:
-            enriched_segments = []
-            for segment in plan.segments:
-                if isinstance(segment, LocalTransferSegment):
-                    segment = enrich_local_transfer_segment(
-                        segment,
-                        route_estimator=route_estimator_cache,
-                        location_resolver=location_resolver_cache,
-                        issue_sink=collector,
-                    )
-                enriched_segments.append(segment)
-            plan.segments = enriched_segments
-        if execution_metrics is not None:
-            execution_metrics.mark_stage("alternative_transfer_hydration")
-        _publish_safe_progress(
-            progress_sink,
-            plans,
-            travel_request,
-            96,
-            "TRANSFER_ALTERNATIVES_READY",
-            execution_metrics,
-        )
     if execution_metrics is not None:
         execution_metrics.mark_stage("rail_flight_core_facts")
         execution_metrics.route_cache_hits = route_estimator_cache.hits

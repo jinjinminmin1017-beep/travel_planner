@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from threading import RLock
 from time import perf_counter
-from typing import Callable, Protocol
+from typing import Protocol
 
 from app.models.schemas import TravelPlan
 
@@ -64,21 +64,3 @@ class PlanningProgressSink(Protocol):
 class NoOpPlanningProgressSink:
     def publish(self, update: PlanningProgressUpdate) -> None:
         del update
-
-
-class CandidateProgressCoordinator:
-    """Thread-safe monotonic candidate set for provider-family builders."""
-
-    def __init__(self, publisher: Callable[[list[TravelPlan], int, str], None]) -> None:
-        self._publisher = publisher
-        self._plans: dict[str, TravelPlan] = {}
-        self._progress = 0
-        self._lock = RLock()
-
-    def report(self, plan: TravelPlan, *, progress: int, stage: str) -> None:
-        with self._lock:
-            self._plans[plan.plan_id] = plan.model_copy(deep=True)
-            self._progress = max(self._progress, min(progress, 99))
-            snapshot = [item.model_copy(deep=True) for item in self._plans.values()]
-            current_progress = self._progress
-        self._publisher(snapshot, current_progress, stage)
