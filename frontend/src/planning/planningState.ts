@@ -34,6 +34,7 @@ export interface PollTimingOptions {
 }
 
 export const DEFAULT_OBSERVATION_WINDOW_MS = 120_000;
+export const DEFAULT_ACTIVE_EMPTY_MAX_POLL_MS = 2_000;
 export const DEFAULT_POLL_TIMING: PollTimingOptions = {
   baseDelayMs: 1_200,
   maxDelayMs: 5_000,
@@ -86,4 +87,15 @@ export function nextPollDelayMs(
   const normalizedRandom = Math.min(1, Math.max(0, randomValue));
   const jitterMultiplier = 1 + ((normalizedRandom * 2) - 1) * options.jitterRatio;
   return Math.max(0, Math.round(backoffDelay * jitterMultiplier));
+}
+
+export function nextResponsePollDelayMs(
+  attempt: number,
+  hasPlans: boolean,
+  randomValue = Math.random(),
+  emptyMaxDelayMs = DEFAULT_ACTIVE_EMPTY_MAX_POLL_MS,
+): number {
+  const normalDelay = nextPollDelayMs(attempt, randomValue);
+  if (hasPlans) return normalDelay;
+  return Math.min(Math.max(0, emptyMaxDelayMs), normalDelay);
 }

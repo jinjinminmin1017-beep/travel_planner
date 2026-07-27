@@ -6,6 +6,7 @@ import {
   hasObservationWindowExpired,
   isPlanningActive,
   nextPollDelayMs
+  , nextResponsePollDelayMs
 } from "../src/planning/planningState.ts";
 
 const snapshot = (planningStatus, jobStatus, planCount = 0) => ({
@@ -73,4 +74,11 @@ test("elapsed observation timing and capped backoff are deterministic with a fak
   assert.equal(hasObservationWindowExpired(1_000, 121_000, 120_000), true);
   assert.equal(nextPollDelayMs(0, 0.5), 1_200);
   assert.equal(nextPollDelayMs(99, 0.5), 5_000);
+});
+
+test("active empty jobs poll within two seconds and relax after first plan", () => {
+  assert.equal(nextResponsePollDelayMs(99, false, 1), 2_000);
+  assert.equal(nextResponsePollDelayMs(99, false, 0), 2_000);
+  assert.equal(nextResponsePollDelayMs(99, true, 0.5), 5_000);
+  assert.ok(nextResponsePollDelayMs(0, false, 0.5) <= 2_000);
 });

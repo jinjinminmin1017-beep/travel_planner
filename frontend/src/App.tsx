@@ -22,7 +22,7 @@ import {
   derivePlanningPageState,
   hasObservationWindowExpired,
   isPlanningActive,
-  nextPollDelayMs,
+  nextResponsePollDelayMs,
   type PlanningObservationState
 } from "./planning/planningState";
 import { PlanningProgressScreen } from "./components/planning/PlanningProgressScreen";
@@ -57,6 +57,10 @@ const configuredObservationWindowMs = Number(process.env.EXPO_PUBLIC_PLANNING_OB
 const OBSERVATION_WINDOW_MS = Number.isFinite(configuredObservationWindowMs) && configuredObservationWindowMs > 0
   ? configuredObservationWindowMs
   : DEFAULT_OBSERVATION_WINDOW_MS;
+const configuredEmptyPollMaxMs = Number(process.env.EXPO_PUBLIC_PLANNING_EMPTY_MAX_POLL_MS);
+const ACTIVE_EMPTY_MAX_POLL_MS = Number.isFinite(configuredEmptyPollMaxMs) && configuredEmptyPollMaxMs > 0
+  ? configuredEmptyPollMaxMs
+  : 2_000;
 const TRANSPORT_MODE_SELECTOR_ENABLED = process.env.EXPO_PUBLIC_TRANSPORT_MODE_SELECTOR_ENABLED?.trim().toLowerCase() !== "false";
 const HOUR_OPTIONS = Array.from({ length: 24 }, (_, index) => index);
 const MINUTE_OPTIONS = Array.from({ length: 12 }, (_, index) => index * 5);
@@ -620,7 +624,10 @@ export default function App() {
         setObservationState("PAUSED");
         return;
       }
-      await new Promise((resolve) => setTimeout(resolve, nextPollDelayMs(attempt)));
+      await new Promise((resolve) => setTimeout(
+        resolve,
+        nextResponsePollDelayMs(attempt, current.plans.length > 0, Math.random(), ACTIVE_EMPTY_MAX_POLL_MS),
+      ));
       if (runId !== planningRunId.current) return;
       try {
         current = await pollPlanningJob(current.async_job.polling_url);
