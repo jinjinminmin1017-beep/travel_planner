@@ -13,12 +13,16 @@ from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
-from typing import Any, Literal, Protocol, cast
+from typing import Any, Callable, Literal, Mapping, Protocol, cast
 from urllib.parse import urlparse
 from uuid import uuid4
 
 import httpx
 
+from app.data_sources.flight_evidence_store import (
+    FlightEvidenceConfig,
+    FlightEvidenceStore,
+)
 from app.models.schemas import CacheMetadata, DataSourceMetadata, DataSourceType, Money, money, now_timepoint
 
 logger = logging.getLogger("app.flight")
@@ -106,6 +110,107 @@ _LAST_PROVIDER_CALL_AT: dict[str, float] = {}
 _SEARCH_CACHE: dict[str, tuple[float, list["FlightOffer"]]] = {}
 _monotonic = time.monotonic
 _sleep = time.sleep
+
+
+def _default_evidence_store(
+    snapshot_backend: Literal["sqlite", "disabled"],
+    snapshot_path: str | Path,
+) -> FlightEvidenceStore:
+    return FlightEvidenceStore(
+        FlightEvidenceConfig(
+            backend=snapshot_backend,
+            path=Path(snapshot_path),
+            required=False,
+        )
+    )
+
+
+def _request_with_exchange(
+    *,
+    store: FlightEvidenceStore,
+    source_id: str,
+    stage: str,
+    method: str,
+    url: str,
+    headers: Mapping[str, object] | None,
+    body: object | None,
+    content_type: str | None,
+    send: Callable[[], Any],
+    correlation_id: str | None = None,
+) -> tuple[Any, str]:
+    exchange_id = store.begin_exchange(
+        source_id=source_id,
+        stage=stage,
+        method=method,
+        url=url,
+        headers=headers,
+        body=body,
+        content_type=content_type,
+        correlation_id=correlation_id,
+    )
+    try:
+        response = send()
+    except httpx.TimeoutException:
+        store.finish_exchange(
+            exchange_id,
+            outcome="TIMEOUT",
+            error_code="FLIGHT_PROVIDER_TIMEOUT",
+        )
+        raise
+    except httpx.TransportError:
+        store.finish_exchange(
+            exchange_id,
+            outcome="CONNECT_ERROR",
+            error_code="FLIGHT_PROVIDER_CONNECTION_FAILED",
+        )
+        raise
+    except Exception:
+        store.finish_exchange(
+            exchange_id,
+            outcome="CONNECT_ERROR",
+            error_code="FLIGHT_PROVIDER_REQUEST_FAILED",
+        )
+        raise
+    response_headers = getattr(response, "headers", {})
+    response_body = _response_text(response)
+    store.record_response(
+        exchange_id,
+        status_code=int(getattr(response, "status_code", 0)),
+        headers=response_headers,
+        body=response_body,
+        content_type=str(response_headers.get("content-type", "")),
+    )
+    return response, exchange_id
+
+
+def _finish_exchange_for_exception(
+    store: FlightEvidenceStore,
+    exchange_id: str,
+    exc: Exception,
+) -> None:
+    message = str(exc)
+    lowered = message.lower()
+    if any(marker in lowered for marker in ("captcha", "challenge", "anti-bot", "waf", "429", "rate limit")):
+        outcome = "RISK_CHALLENGE"
+        error_code = "FLIGHT_PROVIDER_RISK_RESPONSE"
+    elif isinstance(exc, (json.JSONDecodeError, ValueError, TypeError, KeyError)):
+        outcome = "PARSE_ERROR"
+        error_code = "FLIGHT_PROVIDER_PARSE_FAILED"
+    elif "business code" in lowered:
+        outcome = "BUSINESS_ERROR"
+        error_code = "FLIGHT_PROVIDER_BUSINESS_ERROR"
+    elif "http" in lowered or "status" in lowered:
+        outcome = "HTTP_ERROR"
+        error_code = "FLIGHT_PROVIDER_HTTP_ERROR"
+    else:
+        outcome = "PARSE_ERROR"
+        error_code = "FLIGHT_PROVIDER_INVALID_RESPONSE"
+    store.finish_exchange(
+        exchange_id,
+        outcome=cast(Any, outcome),
+        error_code=error_code,
+        message=message,
+    )
 
 
 @dataclass(frozen=True)
@@ -302,6 +407,7 @@ class OfficialAirlinePublicQueryProvider:
         min_interval_seconds: float = 1.0,
         snapshot_backend: Literal["sqlite", "disabled"] = "sqlite",
         snapshot_sqlite_path: str | Path = DEFAULT_FLIGHT_SNAPSHOT_PATH,
+        evidence_store: FlightEvidenceStore | None = None,
     ) -> None:
         self.source_id = source_id
         self.source_name = source_name
@@ -315,6 +421,7 @@ class OfficialAirlinePublicQueryProvider:
         self.min_interval_seconds = min_interval_seconds
         self.snapshot_backend = snapshot_backend
         self.snapshot_sqlite_path = Path(snapshot_sqlite_path)
+        self.evidence_store = evidence_store or _default_evidence_store(snapshot_backend, snapshot_sqlite_path)
         self.client = client or httpx.Client(timeout=timeout_seconds, follow_redirects=False, headers=self._headers())
 
     def search_offers(self, request: FlightSearchRequest) -> list[FlightOffer]:
@@ -354,10 +461,27 @@ class OfficialAirlinePublicQueryProvider:
         }
         if request.non_stop is not None:
             request_values["non_stop"] = str(request.non_stop).lower()
-        response = self.client.get(endpoint, params=self.request_schema.request_params(request_values), headers=self._headers())
-        _raise_for_airline_risk_response(response, source_id=self.source_id)
-        response.raise_for_status()
-        payload = _response_payload(response)
+        request_params = self.request_schema.request_params(request_values)
+        request_url = str(httpx.URL(endpoint, params=request_params))
+        response, exchange_id = _request_with_exchange(
+            store=self.evidence_store,
+            source_id=self.source_id,
+            stage="SEARCH",
+            method="GET",
+            url=request_url,
+            headers=self._headers(),
+            body=None,
+            content_type=None,
+            send=lambda: self.client.get(endpoint, params=request_params, headers=self._headers()),
+            correlation_id=cache_key,
+        )
+        try:
+            _raise_for_airline_risk_response(response, source_id=self.source_id)
+            response.raise_for_status()
+            payload = _response_payload(response)
+        except Exception as exc:
+            _finish_exchange_for_exception(self.evidence_store, exchange_id, exc)
+            raise
         snapshot_id = save_flight_raw_snapshot(
             source_id=self.source_id,
             request_key=cache_key,
@@ -366,15 +490,19 @@ class OfficialAirlinePublicQueryProvider:
             snapshot_backend=self.snapshot_backend,
             snapshot_path=self.snapshot_sqlite_path,
         )
-        offers = _parse_public_airline_payload(
-            payload,
-            request=request,
-            source_id=self.source_id,
-            source_name=self.source_name,
-            allowed_carriers=self.allowed_carriers,
-            evidence_id=snapshot_id,
-            cache_ttl_seconds=self.cache_ttl_seconds,
-        )
+        try:
+            offers = _parse_public_airline_payload(
+                payload,
+                request=request,
+                source_id=self.source_id,
+                source_name=self.source_name,
+                allowed_carriers=self.allowed_carriers,
+                evidence_id=snapshot_id,
+                cache_ttl_seconds=self.cache_ttl_seconds,
+            )
+        except Exception as exc:
+            _finish_exchange_for_exception(self.evidence_store, exchange_id, exc)
+            raise
         raw_candidate_count = _public_airline_raw_candidate_count(payload)
         _log_flight_parse_diagnostics(
             source_id=self.source_id,
@@ -384,12 +512,18 @@ class OfficialAirlinePublicQueryProvider:
             rejected_counts={"FLIGHT_PARSER_REJECTED_ALL": raw_candidate_count} if raw_candidate_count and not offers else {},
         )
         if raw_candidate_count > 0 and not offers:
+            self.evidence_store.finish_exchange(
+                exchange_id,
+                outcome="PARSE_ERROR",
+                error_code="FLIGHT_PARSER_REJECTED_ALL",
+            )
             raise FlightParserRejectedAllError(
                 f"FLIGHT_PARSER_REJECTED_ALL source_id={self.source_id} raw_candidate_count={raw_candidate_count}"
             )
         offers = sorted(offers, key=lambda offer: offer.segments[0].departure_at or datetime.max.replace(tzinfo=SHANGHAI_TZ))
         offers = offers[: max(1, request.max_results)]
         if offers:
+            self.evidence_store.finish_exchange(exchange_id, outcome="SUCCESS")
             _cache_set(cache_key, offers, self.cache_ttl_seconds)
             save_flight_canonical_offers(
                 source_id=self.source_id,
@@ -402,6 +536,7 @@ class OfficialAirlinePublicQueryProvider:
             logger.info("flight_public_search_success source_id=%s offer_count=%s", self.source_id, len(offers))
             return offers
         logger.info("flight_public_search_empty source_id=%s", self.source_id)
+        self.evidence_store.finish_exchange(exchange_id, outcome="EMPTY")
         return []
 
     def _headers(self) -> dict[str, str]:
@@ -430,6 +565,7 @@ class SpringAirlinesPublicQueryProvider:
         timeout_seconds: float = 60.0,
         snapshot_backend: Literal["sqlite", "disabled"] = "sqlite",
         snapshot_sqlite_path: str | Path = DEFAULT_FLIGHT_SNAPSHOT_PATH,
+        evidence_store: FlightEvidenceStore | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.user_agent = user_agent
@@ -437,6 +573,7 @@ class SpringAirlinesPublicQueryProvider:
         self.allowed_hosts = tuple(host.lower().strip(".") for host in allowed_hosts)
         self.snapshot_backend = snapshot_backend
         self.snapshot_sqlite_path = Path(snapshot_sqlite_path)
+        self.evidence_store = evidence_store or _default_evidence_store(snapshot_backend, snapshot_sqlite_path)
         self.client = client or httpx.Client(
             timeout=timeout_seconds,
             follow_redirects=False,
@@ -480,15 +617,39 @@ class SpringAirlinesPublicQueryProvider:
             request.destination_iata,
             request.departure_date.isoformat(),
         )
-        response = self.client.post(
-            endpoint,
-            data=_spring_airlines_form_data(request),
-            headers=self._headers(request),
+        request_body = _spring_airlines_form_data(request)
+        request_headers = self._headers(request)
+        response, exchange_id = _request_with_exchange(
+            store=self.evidence_store,
+            source_id=self.source_id,
+            stage="SEARCH",
+            method="POST",
+            url=endpoint,
+            headers=request_headers,
+            body=request_body,
+            content_type="application/x-www-form-urlencoded",
+            send=lambda: self.client.post(
+                endpoint,
+                data=request_body,
+                headers=request_headers,
+            ),
+            correlation_id=cache_key,
         )
-        _raise_for_airline_risk_response(response, source_id=self.source_id)
-        response.raise_for_status()
-        payload = _response_payload(response)
+        try:
+            _raise_for_airline_risk_response(response, source_id=self.source_id)
+            response.raise_for_status()
+            payload = _response_payload(response)
+        except Exception as exc:
+            _finish_exchange_for_exception(self.evidence_store, exchange_id, exc)
+            raise
         if str(payload.get("Code")) != "0":
+            self.evidence_store.finish_exchange(
+                exchange_id,
+                outcome="BUSINESS_ERROR",
+                error_code="FLIGHT_PROVIDER_BUSINESS_ERROR",
+                business_code=str(payload.get("Code")),
+                message=str(payload.get("Message") or payload.get("Msg") or ""),
+            )
             raise FlightProviderError(f"{self.source_id} returned business code {payload.get('Code')}")
         snapshot_id = save_flight_raw_snapshot(
             source_id=self.source_id,
@@ -499,13 +660,17 @@ class SpringAirlinesPublicQueryProvider:
             snapshot_path=self.snapshot_sqlite_path,
         )
         diagnostics = FlightParseDiagnostics()
-        offers = _parse_spring_airlines_payload(
-            payload,
-            request=request,
-            evidence_id=snapshot_id,
-            cache_ttl_seconds=self.cache_ttl_seconds,
-            diagnostics=diagnostics,
-        )
+        try:
+            offers = _parse_spring_airlines_payload(
+                payload,
+                request=request,
+                evidence_id=snapshot_id,
+                cache_ttl_seconds=self.cache_ttl_seconds,
+                diagnostics=diagnostics,
+            )
+        except Exception as exc:
+            _finish_exchange_for_exception(self.evidence_store, exchange_id, exc)
+            raise
         _log_flight_parse_diagnostics(
             source_id=self.source_id,
             evidence_id=snapshot_id,
@@ -514,6 +679,11 @@ class SpringAirlinesPublicQueryProvider:
             rejected_counts=diagnostics.rejected_counts,
         )
         if diagnostics.raw_candidate_count > 0 and not offers:
+            self.evidence_store.finish_exchange(
+                exchange_id,
+                outcome="PARSE_ERROR",
+                error_code="FLIGHT_PARSER_REJECTED_ALL",
+            )
             raise FlightParserRejectedAllError(
                 f"FLIGHT_PARSER_REJECTED_ALL source_id={self.source_id} "
                 f"raw_candidate_count={diagnostics.raw_candidate_count}"
@@ -527,8 +697,10 @@ class SpringAirlinesPublicQueryProvider:
         offers = offers[: max(1, request.max_results)]
         if not offers:
             logger.info("flight_public_search_empty source_id=%s", self.source_id)
+            self.evidence_store.finish_exchange(exchange_id, outcome="EMPTY")
             return []
 
+        self.evidence_store.finish_exchange(exchange_id, outcome="SUCCESS")
         _cache_set(cache_key, offers, self.cache_ttl_seconds)
         save_flight_canonical_offers(
             source_id=self.source_id,
@@ -573,6 +745,7 @@ class HainanAirlinesPublicQueryProvider:
         timeout_seconds: float = 60.0,
         snapshot_backend: Literal["sqlite", "disabled"] = "sqlite",
         snapshot_sqlite_path: str | Path = DEFAULT_FLIGHT_SNAPSHOT_PATH,
+        evidence_store: FlightEvidenceStore | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.user_agent = user_agent
@@ -580,6 +753,7 @@ class HainanAirlinesPublicQueryProvider:
         self.allowed_hosts = tuple(host.lower().strip(".") for host in allowed_hosts)
         self.snapshot_backend = snapshot_backend
         self.snapshot_sqlite_path = Path(snapshot_sqlite_path)
+        self.evidence_store = evidence_store or _default_evidence_store(snapshot_backend, snapshot_sqlite_path)
         self.client = client or httpx.Client(
             timeout=timeout_seconds,
             follow_redirects=True,
@@ -607,23 +781,85 @@ class HainanAirlinesPublicQueryProvider:
             request.destination_iata,
             request.departure_date.isoformat(),
         )
-        first_response = self.client.get(deep_link_endpoint, params=params, headers=self._headers())
-        _raise_for_airline_risk_response(first_response, source_id=self.source_id)
-        first_response.raise_for_status()
-        second_response = self.client.post(
-            deep_link_endpoint,
-            params={**params, "redirected": "true"},
-            data={"ConversationID": "", "ENCRYPTED_QUERY": "", "QUERY": "", "redirected": "true"},
-            headers=self._headers(),
+        request_headers = self._headers()
+        first_response, first_exchange_id = _request_with_exchange(
+            store=self.evidence_store,
+            source_id=self.source_id,
+            stage="INIT_GET",
+            method="GET",
+            url=str(httpx.URL(deep_link_endpoint, params=params)),
+            headers=request_headers,
+            body=None,
+            content_type=None,
+            send=lambda: self.client.get(deep_link_endpoint, params=params, headers=request_headers),
+            correlation_id=cache_key,
         )
-        _raise_for_airline_risk_response(second_response, source_id=self.source_id)
-        second_response.raise_for_status()
-        response = self.client.post(search_endpoint, data="", headers=self._headers())
-        if getattr(response, "status_code", None) == 429:
-            _raise_for_airline_risk_response(response, source_id=self.source_id)
-        response.raise_for_status()
+        try:
+            _raise_for_airline_risk_response(first_response, source_id=self.source_id)
+            first_response.raise_for_status()
+        except Exception as exc:
+            _finish_exchange_for_exception(self.evidence_store, first_exchange_id, exc)
+            raise
+        self.evidence_store.finish_exchange(first_exchange_id, outcome="SUCCESS")
+
+        redirected_params = {**params, "redirected": "true"}
+        redirected_body = {
+            "ConversationID": "",
+            "ENCRYPTED_QUERY": "",
+            "QUERY": "",
+            "redirected": "true",
+        }
+        second_response, second_exchange_id = _request_with_exchange(
+            store=self.evidence_store,
+            source_id=self.source_id,
+            stage="INIT_POST",
+            method="POST",
+            url=str(httpx.URL(deep_link_endpoint, params=redirected_params)),
+            headers=request_headers,
+            body=redirected_body,
+            content_type="application/x-www-form-urlencoded",
+            send=lambda: self.client.post(
+                deep_link_endpoint,
+                params=redirected_params,
+                data=redirected_body,
+                headers=request_headers,
+            ),
+            correlation_id=cache_key,
+        )
+        try:
+            _raise_for_airline_risk_response(second_response, source_id=self.source_id)
+            second_response.raise_for_status()
+        except Exception as exc:
+            _finish_exchange_for_exception(self.evidence_store, second_exchange_id, exc)
+            raise
+        self.evidence_store.finish_exchange(second_exchange_id, outcome="SUCCESS")
+
+        response, exchange_id = _request_with_exchange(
+            store=self.evidence_store,
+            source_id=self.source_id,
+            stage="SEARCH",
+            method="POST",
+            url=search_endpoint,
+            headers=request_headers,
+            body="",
+            content_type="application/x-www-form-urlencoded",
+            send=lambda: self.client.post(search_endpoint, data="", headers=request_headers),
+            correlation_id=cache_key,
+        )
+        try:
+            if getattr(response, "status_code", None) == 429:
+                _raise_for_airline_risk_response(response, source_id=self.source_id)
+            response.raise_for_status()
+        except Exception as exc:
+            _finish_exchange_for_exception(self.evidence_store, exchange_id, exc)
+            raise
         response_text = _response_text(response)
         if "Flights[position] = Flight" not in response_text and _looks_like_airline_challenge(response_text):
+            self.evidence_store.finish_exchange(
+                exchange_id,
+                outcome="RISK_CHALLENGE",
+                error_code="FLIGHT_PROVIDER_RISK_RESPONSE",
+            )
             raise FlightProviderError(f"{self.source_id} anti-bot challenge detected; automated bypass is forbidden")
 
         snapshot_id = save_flight_raw_snapshot(
@@ -635,13 +871,17 @@ class HainanAirlinesPublicQueryProvider:
             snapshot_path=self.snapshot_sqlite_path,
         )
         diagnostics = FlightParseDiagnostics()
-        offers = _parse_hainan_airlines_response(
-            response_text,
-            request=request,
-            evidence_id=snapshot_id,
-            cache_ttl_seconds=self.cache_ttl_seconds,
-            diagnostics=diagnostics,
-        )
+        try:
+            offers = _parse_hainan_airlines_response(
+                response_text,
+                request=request,
+                evidence_id=snapshot_id,
+                cache_ttl_seconds=self.cache_ttl_seconds,
+                diagnostics=diagnostics,
+            )
+        except Exception as exc:
+            _finish_exchange_for_exception(self.evidence_store, exchange_id, exc)
+            raise
         _log_flight_parse_diagnostics(
             source_id=self.source_id,
             evidence_id=snapshot_id,
@@ -650,6 +890,11 @@ class HainanAirlinesPublicQueryProvider:
             rejected_counts=diagnostics.rejected_counts,
         )
         if diagnostics.raw_candidate_count > 0 and not offers:
+            self.evidence_store.finish_exchange(
+                exchange_id,
+                outcome="PARSE_ERROR",
+                error_code="FLIGHT_PARSER_REJECTED_ALL",
+            )
             raise FlightParserRejectedAllError(
                 f"FLIGHT_PARSER_REJECTED_ALL source_id={self.source_id} "
                 f"raw_candidate_count={diagnostics.raw_candidate_count}"
@@ -663,7 +908,9 @@ class HainanAirlinesPublicQueryProvider:
         offers = offers[: max(1, request.max_results)]
         if not offers:
             logger.info("flight_public_search_empty source_id=%s", self.source_id)
+            self.evidence_store.finish_exchange(exchange_id, outcome="EMPTY")
             return []
+        self.evidence_store.finish_exchange(exchange_id, outcome="SUCCESS")
         _cache_set(cache_key, offers, self.cache_ttl_seconds)
         save_flight_canonical_offers(
             source_id=self.source_id,
@@ -710,6 +957,7 @@ class QingdaoAirlinesPublicQueryProvider:
         timeout_seconds: float = 60.0,
         snapshot_backend: Literal["sqlite", "disabled"] = "sqlite",
         snapshot_sqlite_path: str | Path = DEFAULT_FLIGHT_SNAPSHOT_PATH,
+        evidence_store: FlightEvidenceStore | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.user_agent = user_agent
@@ -717,6 +965,7 @@ class QingdaoAirlinesPublicQueryProvider:
         self.allowed_hosts = tuple(host.lower().strip(".") for host in allowed_hosts)
         self.snapshot_backend = snapshot_backend
         self.snapshot_sqlite_path = Path(snapshot_sqlite_path)
+        self.evidence_store = evidence_store or _default_evidence_store(snapshot_backend, snapshot_sqlite_path)
         self.client = client or httpx.Client(timeout=timeout_seconds, follow_redirects=False)
 
     def search_offers(self, request: FlightSearchRequest) -> list[FlightOffer]:
@@ -733,31 +982,75 @@ class QingdaoAirlinesPublicQueryProvider:
         cookie_id = uuid4().hex
         init_endpoint = f"{self.base_url}{QINGDAO_AIRLINES_INIT_PATH}"
         search_endpoint = f"{self.base_url}{QINGDAO_AIRLINES_SEARCH_PATH}"
-        init_response = self.client.get(
-            init_endpoint,
-            params={"cookieId": cookie_id},
-            headers=self._headers(),
+        init_params = {"cookieId": cookie_id}
+        init_headers = self._headers()
+        init_response, init_exchange_id = _request_with_exchange(
+            store=self.evidence_store,
+            source_id=self.source_id,
+            stage="INIT",
+            method="GET",
+            url=str(httpx.URL(init_endpoint, params=init_params)),
+            headers=init_headers,
+            body=None,
+            content_type=None,
+            send=lambda: self.client.get(
+                init_endpoint,
+                params=init_params,
+                headers=init_headers,
+            ),
+            correlation_id=cache_key,
         )
-        _raise_for_airline_risk_response(init_response, source_id=self.source_id)
-        init_response.raise_for_status()
-        init_payload = init_response.json()
+        try:
+            _raise_for_airline_risk_response(init_response, source_id=self.source_id)
+            init_response.raise_for_status()
+            init_payload = init_response.json()
+        except Exception as exc:
+            _finish_exchange_for_exception(self.evidence_store, init_exchange_id, exc)
+            raise
         if not isinstance(init_payload, dict):
+            self.evidence_store.finish_exchange(
+                init_exchange_id,
+                outcome="PARSE_ERROR",
+                error_code="FLIGHT_PROVIDER_PARSE_FAILED",
+            )
             raise FlightProviderError(f"{self.source_id} returned an invalid anonymous initialization payload")
+        self.evidence_store.finish_exchange(init_exchange_id, outcome="SUCCESS")
         now = datetime.now(SHANGHAI_TZ)
         request_body = _qingdao_airlines_request_body(
             request,
             cookie_id=cookie_id,
             trick_token=_qingdao_airlines_trick_token(init_payload, now),
         )
-        response = self.client.post(
-            search_endpoint,
-            json=request_body,
-            headers=self._headers(now),
+        search_headers = self._headers(now)
+        response, exchange_id = _request_with_exchange(
+            store=self.evidence_store,
+            source_id=self.source_id,
+            stage="SEARCH",
+            method="POST",
+            url=search_endpoint,
+            headers=search_headers,
+            body=request_body,
+            content_type="application/json",
+            send=lambda: self.client.post(
+                search_endpoint,
+                json=request_body,
+                headers=search_headers,
+            ),
+            correlation_id=cache_key,
         )
-        _raise_for_airline_risk_response(response, source_id=self.source_id)
-        response.raise_for_status()
-        payload = response.json()
+        try:
+            _raise_for_airline_risk_response(response, source_id=self.source_id)
+            response.raise_for_status()
+            payload = response.json()
+        except Exception as exc:
+            _finish_exchange_for_exception(self.evidence_store, exchange_id, exc)
+            raise
         if not isinstance(payload, dict):
+            self.evidence_store.finish_exchange(
+                exchange_id,
+                outcome="PARSE_ERROR",
+                error_code="FLIGHT_PROVIDER_PARSE_FAILED",
+            )
             raise FlightProviderError(f"{self.source_id} returned an invalid response payload")
         snapshot_id = save_flight_raw_snapshot(
             source_id=self.source_id,
@@ -772,19 +1065,36 @@ class QingdaoAirlinesPublicQueryProvider:
             business_message = str(payload.get("message") or payload.get("msg") or "").strip()
             if code == "0" and re.search(r"未查询到航班|没有航班|无航班|no flights?", business_message, flags=re.IGNORECASE):
                 logger.info("flight_public_search_empty source_id=%s business_code=%s", self.source_id, code)
+                self.evidence_store.finish_exchange(
+                    exchange_id,
+                    outcome="EMPTY",
+                    business_code=code,
+                    message=business_message,
+                )
                 return []
+            self.evidence_store.finish_exchange(
+                exchange_id,
+                outcome="BUSINESS_ERROR",
+                error_code="FLIGHT_PROVIDER_BUSINESS_ERROR",
+                business_code=code,
+                message=business_message,
+            )
             raise FlightProviderError(
                 f"{self.source_id} returned business code {code}"
                 + (f" ({business_message})" if business_message else "")
             )
         diagnostics = FlightParseDiagnostics()
-        offers = _parse_qingdao_airlines_payload(
-            payload,
-            request=request,
-            evidence_id=snapshot_id,
-            cache_ttl_seconds=self.cache_ttl_seconds,
-            diagnostics=diagnostics,
-        )
+        try:
+            offers = _parse_qingdao_airlines_payload(
+                payload,
+                request=request,
+                evidence_id=snapshot_id,
+                cache_ttl_seconds=self.cache_ttl_seconds,
+                diagnostics=diagnostics,
+            )
+        except Exception as exc:
+            _finish_exchange_for_exception(self.evidence_store, exchange_id, exc)
+            raise
         _log_flight_parse_diagnostics(
             source_id=self.source_id,
             evidence_id=snapshot_id,
@@ -793,6 +1103,11 @@ class QingdaoAirlinesPublicQueryProvider:
             rejected_counts=diagnostics.rejected_counts,
         )
         if diagnostics.raw_candidate_count > 0 and not offers:
+            self.evidence_store.finish_exchange(
+                exchange_id,
+                outcome="PARSE_ERROR",
+                error_code="FLIGHT_PARSER_REJECTED_ALL",
+            )
             raise FlightParserRejectedAllError(
                 f"FLIGHT_PARSER_REJECTED_ALL source_id={self.source_id} "
                 f"raw_candidate_count={diagnostics.raw_candidate_count}"
@@ -806,7 +1121,9 @@ class QingdaoAirlinesPublicQueryProvider:
         offers = offers[: max(1, request.max_results)]
         if not offers:
             logger.info("flight_public_search_empty source_id=%s", self.source_id)
+            self.evidence_store.finish_exchange(exchange_id, outcome="EMPTY")
             return []
+        self.evidence_store.finish_exchange(exchange_id, outcome="SUCCESS")
         _cache_set(cache_key, offers, self.cache_ttl_seconds)
         save_flight_canonical_offers(
             source_id=self.source_id,
