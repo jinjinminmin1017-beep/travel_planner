@@ -21,7 +21,7 @@ from app.data_sources.flight_providers import (
     flight_city_query_code,
     search_flight_offers_with_enabled_provider_result,
 )
-from app.data_sources.map_providers import estimate_route_with_enabled_provider_result
+from app.data_sources.map_providers import build_planning_route_estimator, estimate_route_with_enabled_provider_result
 from app.data_sources.rail_providers import RailOffer, RailSearchRequest, search_rail_offers_with_enabled_provider_result
 from app.models.schemas import (
     AirportCandidate,
@@ -2147,7 +2147,9 @@ def build_plans(
     origin = travel_request.origin_text
     destination = travel_request.destination_text
     collector = PlanningIssueCollector(travel_request)
-    route_estimator_cache = PlanningRouteEstimatorCache(estimate_route_with_enabled_provider_result)
+    transit_single_flight_enabled = os.getenv("TRAVEL_MAP_TRANSIT_SINGLE_FLIGHT_ENABLED", "false").strip().lower() not in {"0", "false", "no", "off"}
+    route_estimator = build_planning_route_estimator() if transit_single_flight_enabled else estimate_route_with_enabled_provider_result
+    route_estimator_cache = PlanningRouteEstimatorCache(route_estimator)
     location_resolver_cache = PlanningLocationResolverCache()
 
     def allow_new_branch(stage: str) -> bool:

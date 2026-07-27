@@ -1,4 +1,5 @@
 from decimal import Decimal
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
@@ -95,6 +96,127 @@ def test_amap_transit_route_maps_real_response():
     assert estimate.distance_meters == 8600
     assert estimate.duration_minutes == 40
     assert estimate.estimated_cost.amount_minor == 500
+
+
+def test_amap_transit_family_single_flight_parses_bus_and_subway_separately(monkeypatch):
+    monkeypatch.setenv("TRAVEL_MAP_TRANSIT_SINGLE_FLIGHT_ENABLED", "true")
+    client = _FakeClient(
+        {
+            "status": "1",
+            "info": "OK",
+            "route": {
+                "transits": [
+                    {
+                        "distance": "9000",
+                        "duration": "2700",
+                        "cost": "4",
+                        "segments": [{"bus": {"buslines": [{"type": "普通公交", "name": "20路"}]}}],
+                    },
+                    {
+                        "distance": "8200",
+                        "duration": "2100",
+                        "cost": "6",
+                        "segments": [{"bus": {"buslines": [{"type": "地铁线路", "name": "地铁2号线"}]}}],
+                    },
+                ]
+            },
+        }
+    )
+    provider = AmapRouteProvider("test-key", client=client, base_url="https://example.test")
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        subway_future = executor.submit(provider.estimate_route, _route_request(TransportMode.SUBWAY))
+        bus_future = executor.submit(provider.estimate_route, _route_request(TransportMode.BUS))
+        subway = subway_future.result()
+        bus = bus_future.result()
+
+    assert len(client.calls) == 1
+    assert subway.distance_meters == 8200
+    assert bus.distance_meters == 9000
+
+
+def test_amap_transit_does_not_copy_bus_only_fact_to_subway(monkeypatch):
+    monkeypatch.setenv("TRAVEL_MAP_TRANSIT_SINGLE_FLIGHT_ENABLED", "true")
+    client = _FakeClient(
+        {
+            "status": "1",
+            "route": {
+                "transits": [
+                    {
+                        "distance": "9000",
+                        "duration": "2700",
+                        "cost": "4",
+                        "segments": [{"bus": {"buslines": [{"type": "普通公交", "name": "20路"}]}}],
+                    }
+                ]
+            },
+        }
+    )
+    provider = AmapRouteProvider("test-key", client=client, base_url="https://example.test")
+
+    assert provider.estimate_route(_route_request(TransportMode.BUS)).distance_meters == 9000
+    with pytest.raises(MapProviderError, match="no verified subway"):
+        provider.estimate_route(_route_request(TransportMode.SUBWAY))
+    assert len(client.calls) == 1
+
+
+def test_five_od_amap_network_budget_is_at_most_ten_calls(monkeypatch):
+    monkeypatch.setenv("TRAVEL_MAP_TRANSIT_SINGLE_FLIGHT_ENABLED", "true")
+
+    class _EndpointClient:
+        def __init__(self):
+            self.calls = []
+
+        def get(self, url, params):
+            self.calls.append((url, params))
+            if url.endswith("/transit/integrated"):
+                return _FakeResponse(
+                    {
+                        "status": "1",
+                        "route": {
+                            "transits": [
+                                {
+                                    "distance": "9000",
+                                    "duration": "2700",
+                                    "cost": "4",
+                                    "segments": [{"bus": {"buslines": [{"type": "普通公交"}]}}],
+                                },
+                                {
+                                    "distance": "8200",
+                                    "duration": "2100",
+                                    "cost": "6",
+                                    "segments": [{"bus": {"buslines": [{"type": "地铁线路"}]}}],
+                                },
+                            ]
+                        },
+                    }
+                )
+            return _FakeResponse(
+                {
+                    "status": "1",
+                    "route": {
+                        "taxi_cost": "20",
+                        "paths": [{"distance": "5000", "duration": "900"}],
+                    },
+                }
+            )
+
+    client = _EndpointClient()
+    provider = AmapRouteProvider("test-key", client=client, base_url="https://example.test")
+    for index in range(5):
+        base = _route_request()
+        request = MapRouteRequest(
+            origin=base.origin.model_copy(update={"latitude": base.origin.latitude + index * 0.01}),
+            destination=base.destination,
+            mode=TransportMode.TAXI,
+            origin_city=base.origin_city,
+            destination_city=base.destination_city,
+        )
+        provider.estimate_route(request)
+        provider.estimate_route(MapRouteRequest(**{**request.__dict__, "mode": TransportMode.SUBWAY}))
+        provider.estimate_route(MapRouteRequest(**{**request.__dict__, "mode": TransportMode.BUS}))
+
+    assert len(client.calls) == 10
 
 
 @pytest.mark.parametrize("value", [None, "", "   ", []])

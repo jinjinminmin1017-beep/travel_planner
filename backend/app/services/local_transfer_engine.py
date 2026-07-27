@@ -3,6 +3,7 @@ from __future__ import annotations
 from concurrent.futures import Future
 from dataclasses import dataclass
 import os
+from math import asin, cos, radians, sin, sqrt
 from threading import RLock
 from typing import Callable, Protocol
 
@@ -302,6 +303,28 @@ def _two_phase_transfer_enabled() -> bool:
     return os.getenv("TRAVEL_TWO_PHASE_TRANSFER_ENABLED", "false").strip().lower() not in {"0", "false", "no", "off"}
 
 
+def _walking_not_applicable(context: TransferContext, origin: GeoPoint, destination: GeoPoint) -> bool:
+    enabled = os.getenv("TRAVEL_WALKING_SHORT_CIRCUIT_ENABLED", "false").strip().lower() not in {"0", "false", "no", "off"}
+    if not enabled:
+        return False
+    if context.is_airport_transfer:
+        return True
+    return _straight_line_distance_meters(origin, destination) > 2200
+
+
+def _straight_line_distance_meters(origin: GeoPoint, destination: GeoPoint) -> float:
+    earth_radius_meters = 6_371_000
+    latitude_delta = radians(destination.latitude - origin.latitude)
+    longitude_delta = radians(destination.longitude - origin.longitude)
+    origin_latitude = radians(origin.latitude)
+    destination_latitude = radians(destination.latitude)
+    haversine = (
+        sin(latitude_delta / 2) ** 2
+        + cos(origin_latitude) * cos(destination_latitude) * sin(longitude_delta / 2) ** 2
+    )
+    return 2 * earth_radius_meters * asin(sqrt(haversine))
+
+
 def build_local_transfer_options(context: TransferContext) -> list[LocalTransferOption]:
     origin = _coerce_location_resolution(context.location_resolver(context.origin), context.origin)
     destination = _coerce_location_resolution(context.location_resolver(context.destination), context.destination)
@@ -311,6 +334,8 @@ def build_local_transfer_options(context: TransferContext) -> list[LocalTransfer
 
     options: list[LocalTransferOption] = []
     for mode in (TransportMode.TAXI, TransportMode.SUBWAY, TransportMode.BUS, TransportMode.WALK):
+        if mode == TransportMode.WALK and _walking_not_applicable(context, origin.point, destination.point):
+            continue
         resolution = _estimate_route(context, origin, destination, mode)
         option = _option_from_resolution(context, mode, resolution)
         if option:

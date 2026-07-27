@@ -84,6 +84,43 @@ def test_two_phase_transfer_publishes_selected_fact_before_alternatives(monkeypa
     assert len(enriched.transfer_options) == 4
 
 
+@pytest.mark.parametrize(
+    ("origin_name", "destination_point"),
+    [
+        ("上海虹桥机场", GeoPoint(name="虹桥站", latitude=31.20, longitude=121.32)),
+        ("上海虹桥站", GeoPoint(name="上海站", latitude=31.23, longitude=121.47)),
+    ],
+)
+def test_walking_short_circuit_skips_inapplicable_network_calls(
+    monkeypatch,
+    origin_name,
+    destination_point,
+):
+    monkeypatch.setenv("TRAVEL_WALKING_SHORT_CIRCUIT_ENABLED", "true")
+    requested_modes: list[TransportMode] = []
+
+    def resolve_location(query):
+        if query == origin_name:
+            return GeoPoint(name=query, latitude=31.20, longitude=121.32)
+        return destination_point
+
+    def tracked_estimate(request, environment=None):
+        requested_modes.append(request.mode)
+        return _estimate_for_mode(request, environment)
+
+    build_local_transfer_segment(
+        segment_id="seg_no_walk_network",
+        origin=origin_name,
+        destination="上海站",
+        default_minutes=15,
+        default_cost_minor=3200,
+        route_estimator=tracked_estimate,
+        location_resolver=resolve_location,
+    )
+
+    assert TransportMode.WALK not in requested_modes
+
+
 def test_local_transfer_engine_exposes_walk_for_short_non_airport_routes():
     segment = build_local_transfer_segment(
         segment_id="seg_short_walk",
