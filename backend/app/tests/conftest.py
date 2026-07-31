@@ -141,7 +141,10 @@ def fake_verified_location_resolution_for_planner(monkeypatch):
 def fake_real_rail_provider_for_planner(monkeypatch):
     def fake_search(request, environment=None):
         source = rail_data_source_metadata("rail_12306_public_query", "12306 Public Ticket Query")
-        departure = datetime.combine(request.departure_date, datetime.min.time(), tzinfo=SHANGHAI_TZ).replace(hour=9, minute=48)
+        # The shared request requires leaving the origin address after 09:00.
+        # Keep the provider train late enough that verified access plus the rail
+        # boarding buffer also satisfies that door-to-door constraint.
+        departure = datetime.combine(request.departure_date, datetime.min.time(), tzinfo=SHANGHAI_TZ).replace(hour=10, minute=30)
         arrival = datetime.combine(request.departure_date, datetime.min.time(), tzinfo=SHANGHAI_TZ).replace(hour=15, minute=38)
         train_number = request.train_number or "G900"
         base_minor = 52600 if train_number.startswith("G") else 30000

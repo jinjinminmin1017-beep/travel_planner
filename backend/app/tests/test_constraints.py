@@ -1,5 +1,5 @@
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -113,7 +113,8 @@ def test_time_constraints_compare_different_offsets_by_absolute_instant():
     request = _request()
     plans, *_ = build_plans(request)
     plan = plans[0]
-    arrival = next(segment.arrival_time for segment in reversed(plan.segments) if isinstance(segment, (RailSegment, FlightSegment)))
+    assert plan.arrival_time is not None
+    arrival = plan.arrival_time
     latest = TimePoint(
         datetime=arrival.datetime.astimezone(timezone.utc),
         timezone="UTC",
@@ -126,3 +127,24 @@ def test_time_constraints_compare_different_offsets_by_absolute_instant():
 
     assert not any(item.constraint_type == "LATEST_ARRIVAL" for item in violations)
     assert "LATEST_ARRIVAL" in preserved
+
+
+def test_time_constraints_use_door_to_door_departure_instead_of_main_segment():
+    request = _request()
+    plans, *_ = build_plans(request)
+    plan = plans[0]
+    main_departure = next(segment.departure_time for segment in plan.segments if isinstance(segment, (RailSegment, FlightSegment)))
+    assert plan.departure_time is not None
+    earliest = TimePoint(
+        datetime=main_departure.datetime - timedelta(minutes=5),
+        timezone=main_departure.timezone,
+        source_timezone=main_departure.source_timezone,
+    )
+    request.earliest_departure_time = earliest
+    request.hard_constraints.earliest_departure_time = earliest
+
+    violations, _ = evaluate_time_constraints(plan, request)
+
+    violation = next(item for item in violations if item.constraint_type == "EARLIEST_DEPARTURE")
+    assert violation.actual_value["datetime"] == plan.departure_time.datetime.isoformat()
+    assert plan.departure_time.datetime < earliest.datetime < main_departure.datetime

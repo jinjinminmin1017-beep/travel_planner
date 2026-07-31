@@ -11,6 +11,21 @@ from app.services.constraints.transport_mode_calculator import evaluate_transpor
 
 def evaluate_plan_constraints(plan: TravelPlan, request: TravelRequest) -> ConstraintEvaluationResult:
     safety_reason = relaxation_safety_reason(plan)
+    has_departure_constraint = bool(
+        request.hard_constraints.earliest_departure_time
+        or request.earliest_departure_time
+        or (request.time_anchor_type != "ARRIVAL" and (request.time_window_start or request.time_window_end))
+    )
+    has_arrival_constraint = bool(
+        request.hard_constraints.latest_arrival_time
+        or request.latest_arrival_time
+        or (request.time_anchor_type == "ARRIVAL" and (request.time_window_start or request.time_window_end))
+    )
+    if safety_reason is None and (
+        (has_departure_constraint and plan.departure_time is None)
+        or (has_arrival_constraint and plan.arrival_time is None)
+    ):
+        safety_reason = "DOOR_TO_DOOR_TIME_MISSING"
     violations = []
     preserved = []
     for calculator in (

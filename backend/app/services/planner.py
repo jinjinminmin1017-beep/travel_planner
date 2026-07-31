@@ -77,6 +77,7 @@ from app.services.local_transfer_engine import (
     LocationPointResolver,
     build_local_transfer_segment,
 )
+from app.services.offer_preselection import OfferPreselectionBucket, preselect_rail_offers
 from app.services.location_resolver import (
     airport_candidate_for_iata,
     airport_candidates_for_city,
@@ -1167,8 +1168,16 @@ def _build_dynamic_direct_rail_plans(
         collector.add_warning("未能生成完整的铁路站点候选，动态铁路方案已阻断。")
         return []
 
-    plans: list[TravelPlan] = []
+    normal_plans: list[TravelPlan] = []
+    reserve_plans: list[TravelPlan] = []
     failure_messages: list[str] = []
+    bucket_counts = {bucket.value: 0 for bucket in OfferPreselectionBucket}
+    normal_build_attempts = 0
+    reserve_build_attempts = 0
+    built_plan_count = 0
+    max_normal_build_attempts = max(12, max_plans * 4)
+    max_reserve_build_attempts = max(4, max_plans)
+    constraint_preselection_enabled = os.getenv("TRAVEL_CONSTRAINT_AWARE_PRESELECTION_ENABLED", "true").strip().lower() not in {"0", "false", "no", "off"}
     station_pairs = [(origin_station, destination_station) for origin_station in origin_stations for destination_station in destination_stations][:max_station_pairs]
     logger.info("rail_direct_station_pairs request_id=%s pair_count=%s station_pairs=%s", travel_request.request_id, len(station_pairs), station_pairs)
     for pair_index, (origin_station, destination_station) in enumerate(station_pairs, start=1):
@@ -1210,8 +1219,29 @@ def _build_dynamic_direct_rail_plans(
             pair_index,
             len(result.offers),
         )
-        for offer_index, offer in enumerate(result.offers[: max(1, max_plans - len(plans))], start=1):
-            plan_index = len(plans) + 1
+        preselection = preselect_rail_offers(
+            result.offers,
+            travel_request,
+            build_budget=max_normal_build_attempts + max_reserve_build_attempts,
+            constraint_aware=constraint_preselection_enabled,
+        )
+        if not constraint_preselection_enabled:
+            # Rollback mode still scans the complete verified fact set. It must
+            # never restore the old first-N-before-evaluation behavior.
+            max_normal_build_attempts = max(max_normal_build_attempts, len(result.offers))
+        for bucket, count in preselection.counts.items():
+            bucket_counts[bucket] += count
+        for selected in preselection.buildable:
+            if selected.bucket == OfferPreselectionBucket.RELAXATION_RESERVE:
+                if normal_plans or reserve_build_attempts >= max_reserve_build_attempts:
+                    continue
+                reserve_build_attempts += 1
+            else:
+                if normal_build_attempts >= max_normal_build_attempts:
+                    continue
+                normal_build_attempts += 1
+            offer = selected.offer
+            plan_index = normal_build_attempts + reserve_build_attempts
             rail_segment = _rail_segment_from_offer(f"seg_rail_dynamic_direct_{plan_index}", offer)
             try:
                 segments = [
@@ -1226,29 +1256,46 @@ def _build_dynamic_direct_rail_plans(
                     offer.train_number,
                 )
                 continue
-            plans.append(
-                _plan(
-                    f"plan_rail_direct_dynamic_{plan_index}",
-                    f"动态高铁直达 {offer.train_number}",
-                    PlanType.DIRECT_RAIL,
-                    segments,
-                    8.0 if pair_index == 1 and offer_index == 1 else 7.6,
-                    RiskLevel.LOW,
-                    "12306 公开查询返回",
-                    "车次、时间、票价和席别来自 12306 公开匿名查询；接驳段仅使用地图 Provider 验证结果。",
-                )
+            plan = _plan(
+                f"plan_rail_direct_dynamic_{plan_index}",
+                f"动态高铁直达 {offer.train_number}",
+                PlanType.DIRECT_RAIL,
+                segments,
+                8.0 if pair_index == 1 and built_plan_count == 0 else 7.6,
+                RiskLevel.LOW,
+                "12306 公开查询返回",
+                "车次、时间、票价和席别来自 12306 公开匿名查询；接驳段仅使用地图 Provider 验证结果。",
             )
+            built_plan_count += 1
+            evaluation = evaluate_plan_constraints(plan, travel_request)
+            if evaluation.satisfies_all:
+                normal_plans.append(plan)
+            elif evaluation.safe_for_relaxation and evaluation.violations and len(reserve_plans) < max_reserve_build_attempts:
+                reserve_plans.append(plan)
             logger.info(
-                "rail_direct_plan_created request_id=%s plan_id=%s train_number=%s selected_seat_count=%s",
+                "rail_direct_plan_created request_id=%s plan_id=%s train_number=%s preselection_bucket=%s satisfies_all=%s violation_types=%s selected_seat_count=%s",
                 travel_request.request_id,
                 f"plan_rail_direct_dynamic_{plan_index}",
                 offer.train_number,
+                selected.bucket.value,
+                evaluation.satisfies_all,
+                [str(item.constraint_type) for item in evaluation.violations],
                 len(offer.seat_options),
             )
-            if len(plans) >= max_plans:
-                logger.info("rail_direct_planner_complete request_id=%s plan_count=%s reason=max_plans", travel_request.request_id, len(plans))
-                return plans
+            if len(normal_plans) >= max_plans:
+                logger.info(
+                    "rail_direct_planner_complete request_id=%s raw_offer_count=%s bucket_counts=%s build_attempt_count=%s build_success_count=%s final_eligible_count=%s relaxation_reserve_count=%s reason=max_plans",
+                    travel_request.request_id,
+                    sum(bucket_counts.values()),
+                    bucket_counts,
+                    normal_build_attempts + reserve_build_attempts,
+                    built_plan_count,
+                    len(normal_plans),
+                    len(reserve_plans),
+                )
+                return normal_plans
 
+    plans = normal_plans or reserve_plans
     if not plans and failure_messages:
         _record_rail_provider_block(
             collector,
@@ -1256,7 +1303,17 @@ def _build_dynamic_direct_rail_plans(
             missing_component="rail_core_fact",
             impacted_plan_types=[PlanType.DIRECT_RAIL],
         )
-    logger.info("rail_direct_planner_complete request_id=%s plan_count=%s", travel_request.request_id, len(plans))
+    logger.info(
+        "rail_direct_planner_complete request_id=%s raw_offer_count=%s bucket_counts=%s build_attempt_count=%s build_success_count=%s final_eligible_count=%s relaxation_reserve_count=%s plan_count=%s",
+        travel_request.request_id,
+        sum(bucket_counts.values()),
+        bucket_counts,
+        normal_build_attempts + reserve_build_attempts,
+        built_plan_count,
+        len(normal_plans),
+        len(reserve_plans),
+        len(plans),
+    )
     return plans
 
 

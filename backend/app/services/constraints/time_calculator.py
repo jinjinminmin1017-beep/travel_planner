@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from math import ceil
 from zoneinfo import ZoneInfo
 
 from app.models.schemas import ConstraintType, ConstraintViolation, DurationDeviation, FlightSegment, RailSegment, TimePoint, TravelPlan, TravelRequest
+
+logger = logging.getLogger("app.constraints.time")
 
 
 def _utc_datetime(point: TimePoint) -> datetime:
@@ -48,8 +51,8 @@ def evaluate_time_constraints(plan: TravelPlan, request: TravelRequest) -> tuple
     violations: list[ConstraintViolation] = []
     preserved: list[ConstraintType] = []
     main_segments = [segment for segment in plan.segments if isinstance(segment, (RailSegment, FlightSegment))]
-    departure = main_segments[0].departure_time if main_segments else plan.departure_time
-    arrival = main_segments[-1].arrival_time if main_segments else plan.arrival_time
+    departure = plan.departure_time
+    arrival = plan.arrival_time
     earliest = request.hard_constraints.earliest_departure_time or request.earliest_departure_time
     latest = request.hard_constraints.latest_arrival_time or request.latest_arrival_time
 
@@ -84,4 +87,14 @@ def evaluate_time_constraints(plan: TravelPlan, request: TravelRequest) -> tuple
             violations.append(_violation(ConstraintType.DEPARTURE_TIME_WINDOW, request.time_window_end, departure, "LATER", "DEPARTURE_WINDOW_TOO_LATE", f"该方案比出发时间窗晚{minutes}分钟。"))
         elif request.time_window_start or request.time_window_end:
             preserved.append(ConstraintType.DEPARTURE_TIME_WINDOW)
+    logger.info(
+        "time_constraint_evaluated request_id=%s plan_id=%s main_departure_at=%s main_arrival_at=%s plan_departure_at=%s plan_arrival_at=%s violation_types=%s",
+        request.request_id,
+        plan.plan_id,
+        main_segments[0].departure_time.datetime.isoformat() if main_segments else None,
+        main_segments[-1].arrival_time.datetime.isoformat() if main_segments else None,
+        departure.datetime.isoformat() if departure else None,
+        arrival.datetime.isoformat() if arrival else None,
+        [str(item.constraint_type) for item in violations],
+    )
     return violations, preserved
