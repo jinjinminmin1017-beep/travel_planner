@@ -485,3 +485,20 @@
   - Expo Web/iOS/Android 导出通过。
   - 视觉回归：360、390、393、430px 输入页及 390px 规划、结果、详情页截图完成人工核对。
 - 兼容性：不修改外部 API V1.17、数据库、Provider、轮询策略、规划性能与后端运行配置。
+
+## 2026-08-01 07:39:02 +08:00
+
+- 任务：完成 ARC-DEV-20260801-01 首次规划提交首帧误显未输入状态修复。
+- 代码提交：`a7c740e`。
+- 修改内容：
+  - 将客户端规划生命周期扩展为互斥的 `IDLE | SUBMITTING | OBSERVING | PAUSED`，并在纯状态机中为无响应提交期增加 `SUBMITTING` 页面状态。
+  - 首次异步 POST 返回前显示专用“正在理解你的行程”界面和受限长度的只读输入摘要，不伪造 `TravelPlanResponse`、地点或服务端进度。
+  - 活动 job 返回后才进入 `OBSERVING`；终态与请求失败退出提交态，失败后保留原始输入。
+  - 在初始 POST 返回处补充 `planningRunId` 校验，阻止旧请求延迟响应覆盖当前 run。
+  - 保留旧结果的重规划继续展示旧结果与局部 busy 状态。
+- 验证：
+  - `npm --prefix frontend run typecheck`：通过。
+  - `npm --prefix frontend run test:helpers`：25 passed。
+  - `npm --prefix frontend run build`：Web、iOS、Android 导出通过。
+  - `git diff --check`：通过。
+- 兼容性：不修改外部 API V1.17、后端、schema、数据库或持久化结构。
