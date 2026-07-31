@@ -502,3 +502,24 @@
   - `npm --prefix frontend run build`：Web、iOS、Android 导出通过。
   - `git diff --check`：通过。
 - 兼容性：不修改外部 API V1.17、后端、schema、数据库或持久化结构。
+
+## 2026-08-01 07:53:36 +08:00
+
+- 任务：完成 ARC-20260801-02 约束感知候选与可解释备选。
+- 代码提交：`b235622`、`9a4008f`、`a37d381`、`524922e`。
+- 修改内容：
+  - 新增纯函数铁路 offer 预选，完整扫描 Provider 元数据后分桶、稳定排序；删除约束评估前的 first-N 截断，并为正常候选与 relaxation reserve 使用独立构建预算。
+  - 最终约束失败或接驳失败时继续尝试后续 offer；日志覆盖原始数、分桶数、构建尝试/成功数、最终合格数和备选数。
+  - 时间约束改用门到门 `TravelPlan.departure_time/arrival_time`；缺失所需门到门时间 fail-closed，日志同时记录干线和门到门时刻。
+  - 海航 Flight block 支持 1–2 段，严格校验航班、机场、日期、顺序、同机场衔接、最小换乘时间及行程级价格/舱位。
+  - NO_MATCH 只读详情展示门到门路线、费用、偏差、确认影响、保留约束、来源、更新时间、风险与缺口；逐航司说明区分有效空、结构不支持、超时、限流、禁用和失败，且不提供购票动作。
+  - 新增三处独立功能开关；预选关闭时仍扫描完整事实集，不恢复 first-N 行为。
+- 验证：
+  - `.\.venv\Scripts\python -m pytest backend\app\tests -q`：250 passed。
+  - `npm --prefix frontend run typecheck`：通过。
+  - `npm --prefix frontend run test:helpers`：26 passed。
+  - `npm --prefix frontend run build`：Web、iOS、Android 导出通过。
+  - Python compileall 与 schema export/diff：通过，无 schema 差异。
+  - `git diff --check`：通过。
+  - Ruff：虚拟环境未安装 `ruff`，项目当前无法执行该检查。
+- 兼容性：外部 API schema 保持 V1.17；无需数据库迁移；没有启用任何未获许可航司数据源。
