@@ -4,6 +4,7 @@ import html
 import hashlib
 import json
 import logging
+import os
 import re
 import sqlite3
 import threading
@@ -1461,62 +1462,98 @@ def _parse_hainan_airlines_response(
     allowed_carriers = {"HU", "Y8", "JD", "8L", "UQ", "FU", "GX", "CN"}
     for block in flight_blocks:
         diagnostics.raw_candidate_count += 1
-        if len(re.findall(r"var\s+Segment\s*=\s*\{\};", block)) != 1:
+        segment_blocks = re.findall(
+            r"var\s+Segment\s*=\s*\{\};(?P<body>.*?)(?=var\s+Segment\s*=\s*\{\};|var\s+FareInfo\s*=\s*\{\};|Flights\[position\])",
+            block,
+            flags=re.DOTALL,
+        )
+        if not segment_blocks or len(segment_blocks) > 2:
             diagnostics.reject("FLIGHT_SEGMENT_STRUCTURE_INVALID")
             continue
-        carrier = _js_assignment(block, "Segment.marketingAirlineEN").upper()
-        flight_number = _js_assignment(block, "Segment.marketingFlightNum").upper()
-        if carrier not in allowed_carriers or not re.fullmatch(r"\d{3,4}[A-Z]?", flight_number):
-            diagnostics.reject("FLIGHT_NUMBER_INVALID")
+        multisegment_enabled = os.getenv("TRAVEL_HAINAN_MULTISEGMENT_ENABLED", "true").strip().lower() not in {"0", "false", "no", "off"}
+        if len(segment_blocks) > 1 and not multisegment_enabled:
+            diagnostics.reject("FLIGHT_SEGMENT_STRUCTURE_UNSUPPORTED")
             continue
-        origin_iata = _js_assignment(block, "Segment.departureIATA").upper()
-        destination_iata = _js_assignment(block, "Segment.arrivalIATA").upper()
-        if not re.fullmatch(r"[A-Z]{3}", origin_iata) or not re.fullmatch(r"[A-Z]{3}", destination_iata):
-            diagnostics.reject("FLIGHT_AIRPORT_UNRESOLVED")
+        if request.non_stop is True and len(segment_blocks) != 1:
+            diagnostics.reject("FLIGHT_NON_STOP_REQUIRED")
             continue
-        if not _actual_airport_is_allowed(origin_iata, request, origin=True) or not _actual_airport_is_allowed(
-            destination_iata, request, origin=False
+        segments: list[FlightOfferSegment] = []
+        segment_metadata: list[dict[str, str]] = []
+        segment_error: str | None = None
+        for segment_block in segment_blocks:
+            carrier = _js_assignment(segment_block, "Segment.marketingAirlineEN").upper()
+            flight_number = _js_assignment(segment_block, "Segment.marketingFlightNum").upper()
+            origin_iata = _js_assignment(segment_block, "Segment.departureIATA").upper()
+            destination_iata = _js_assignment(segment_block, "Segment.arrivalIATA").upper()
+            if carrier not in allowed_carriers or not re.fullmatch(r"\d{3,4}[A-Z]?", flight_number):
+                segment_error = "FLIGHT_NUMBER_INVALID"
+                break
+            if not re.fullmatch(r"[A-Z]{3}", origin_iata) or not re.fullmatch(r"[A-Z]{3}", destination_iata):
+                segment_error = "FLIGHT_AIRPORT_UNRESOLVED"
+                break
+            departure_date_text = _js_assignment(segment_block, "Segment.departureDate")
+            departure_time_text = _js_assignment(segment_block, "Segment.departureTime")
+            arrival_date_text = _js_assignment(segment_block, "Segment.arrivalDate")
+            arrival_time_text = _js_assignment(segment_block, "Segment.arrivalTime")
+            if not all((departure_date_text, departure_time_text, arrival_date_text, arrival_time_text)):
+                segment_error = "FLIGHT_TIME_INVALID"
+                break
+            departure_at = _parse_datetime(f"{departure_date_text}T{departure_time_text}", request.departure_date)
+            arrival_at = _parse_datetime(f"{arrival_date_text}T{arrival_time_text}", request.departure_date)
+            if departure_at is None or arrival_at is None or arrival_at <= departure_at:
+                segment_error = "FLIGHT_TIME_INVALID"
+                break
+            duration_hour = _js_assignment(segment_block, "Segment.durationHour")
+            duration_minute = _js_assignment(segment_block, "Segment.durationMin")
+            segments.append(FlightOfferSegment(
+                carrier_code=carrier,
+                flight_number=flight_number,
+                origin_iata=origin_iata,
+                destination_iata=destination_iata,
+                departure_at=departure_at,
+                arrival_at=arrival_at,
+                duration=f"PT{duration_hour or '0'}H{duration_minute or '0'}M",
+            ))
+            segment_metadata.append({
+                "flight_number": f"{carrier}{flight_number}",
+                "departure_airport": _js_assignment(segment_block, "Segment.departureAirportName"),
+                "arrival_airport": _js_assignment(segment_block, "Segment.arrivalAirportName"),
+                "equipment": _js_assignment(segment_block, "Segment.EquipType"),
+            })
+        if segment_error:
+            diagnostics.reject(segment_error)
+            continue
+        if segments[0].departure_at is None or segments[0].departure_at.date() != request.departure_date:
+            diagnostics.reject("FLIGHT_TIME_INVALID")
+            continue
+        if not _actual_airport_is_allowed(segments[0].origin_iata, request, origin=True) or not _actual_airport_is_allowed(
+            segments[-1].destination_iata, request, origin=False
         ):
             diagnostics.reject("FLIGHT_AIRPORT_OUT_OF_SCOPE")
             continue
-        departure_date_text = _js_assignment(block, "Segment.departureDate")
-        departure_time_text = _js_assignment(block, "Segment.departureTime")
-        arrival_date_text = _js_assignment(block, "Segment.arrivalDate")
-        arrival_time_text = _js_assignment(block, "Segment.arrivalTime")
-        if not all((departure_date_text, departure_time_text, arrival_date_text, arrival_time_text)):
-            diagnostics.reject("FLIGHT_TIME_INVALID")
-            continue
-        departure_at = _parse_datetime(
-            f"{departure_date_text}T{departure_time_text}",
-            request.departure_date,
+        connection_invalid = any(
+            previous.destination_iata != current.origin_iata
+            or previous.arrival_at is None
+            or current.departure_at is None
+            or current.departure_at < previous.arrival_at + timedelta(minutes=45)
+            for previous, current in zip(segments, segments[1:])
         )
-        arrival_at = _parse_datetime(
-            f"{arrival_date_text}T{arrival_time_text}",
-            request.departure_date,
-        )
-        if (
-            departure_at is None
-            or arrival_at is None
-            or departure_at.date() != request.departure_date
-            or arrival_at <= departure_at
-        ):
-            diagnostics.reject("FLIGHT_TIME_INVALID")
+        if connection_invalid:
+            diagnostics.reject("FLIGHT_CONNECTION_INVALID")
             continue
+        itinerary_token = "_".join(f"{segment.carrier_code}{segment.flight_number}" for segment in segments)
         cabins = _hainan_airlines_cabin_options(
             block,
-            flight_no=f"{carrier}{flight_number}",
+            flight_no=itinerary_token,
             evidence_id=evidence_id,
         )
         if not cabins:
             diagnostics.reject("FLIGHT_CABIN_UNAVAILABLE")
             continue
         selected = min(cabins, key=lambda cabin: cabin.price.amount_minor)
-        duration_hour = _js_assignment(block, "Segment.durationHour")
-        duration_minute = _js_assignment(block, "Segment.durationMin")
-        duration = f"PT{duration_hour or '0'}H{duration_minute or '0'}M"
         offer_id = (
-            f"hainan_{carrier.lower()}{flight_number.lower()}_"
-            f"{departure_at.date().isoformat()}_{origin_iata.lower()}_{destination_iata.lower()}"
+            f"hainan_{itinerary_token.lower()}_"
+            f"{segments[0].departure_at.date().isoformat()}_{segments[0].origin_iata.lower()}_{segments[-1].destination_iata.lower()}"
         )
         offers.append(
             FlightOffer(
@@ -1524,23 +1561,11 @@ def _parse_hainan_airlines_response(
                 source="HAINAN_AIRLINES_PUBLIC_FRONTEND",
                 total_price=selected.price,
                 currency=selected.price.currency,
-                segments=[
-                    FlightOfferSegment(
-                        carrier_code=carrier,
-                        flight_number=flight_number,
-                        origin_iata=origin_iata,
-                        destination_iata=destination_iata,
-                        departure_at=departure_at,
-                        arrival_at=arrival_at,
-                        duration=duration,
-                    )
-                ],
-                validating_airline_codes=[carrier],
+                segments=segments,
+                validating_airline_codes=sorted({segment.carrier_code for segment in segments}),
                 raw_offer={
-                    "flight_number": f"{carrier}{flight_number}",
-                    "departure_airport": _js_assignment(block, "Segment.departureAirportName"),
-                    "arrival_airport": _js_assignment(block, "Segment.arrivalAirportName"),
-                    "equipment": _js_assignment(block, "Segment.EquipType"),
+                    "segments": segment_metadata,
+                    "fare_scope": "ITINERARY",
                     "evidence_id": evidence_id,
                 },
                 data_source=flight_data_source_metadata(

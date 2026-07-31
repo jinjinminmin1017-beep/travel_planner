@@ -393,6 +393,30 @@ def test_hainan_airlines_provider_replays_anonymous_session_and_maps_fares():
     assert offer.cabin_options[0].availability == "AVAILABLE"
 
 
+def test_hainan_airlines_provider_maps_two_segment_itinerary_with_full_fare():
+    client = _FakeClient([
+        _FakeResponse(text="<html><form></form></html>", content_type="text/html"),
+        _FakeResponse(text="<html>loading</html>", content_type="text/html"),
+        _FakeResponse(text=_hainan_airlines_transfer_response(), content_type="text/html"),
+    ])
+    provider = HainanAirlinesPublicQueryProvider(client=client, cache_ttl_seconds=0, snapshot_backend="disabled")
+
+    offers = provider.search_offers(FlightSearchRequest(
+        origin_iata="BJS",
+        destination_iata="SHA",
+        departure_date=date(2026, 7, 23),
+        max_results=3,
+        non_stop=False,
+    ))
+
+    assert len(offers) == 1
+    offer = offers[0]
+    assert [(segment.carrier_code, segment.flight_number) for segment in offer.segments] == [("HU", "7606"), ("HU", "6377")]
+    assert [(segment.origin_iata, segment.destination_iata) for segment in offer.segments] == [("PEK", "CKG"), ("CKG", "SHA")]
+    assert offer.total_price.amount_minor == 138000
+    assert offer.raw_offer["fare_scope"] == "ITINERARY"
+
+
 def test_qingdao_airlines_provider_derives_anonymous_tokens_and_maps_fares():
     init_payload = {"a": 11, "b": 7, "c": 3, "d": 5, "e": 13, "f": 17, "g": 19}
     client = _FakeClient(
@@ -996,6 +1020,52 @@ def _hainan_airlines_response() -> str:
     priceDetails.baseAmount ='770.0';
     priceDetails.totalAmount ='920.0';
     seatDetails.seatNum ='A';
+    FareInfos[FareInfosCode]=FareInfo;
+    Flights[position] = Flight;
+    </script></html>
+    """
+
+
+def _hainan_airlines_transfer_response() -> str:
+    return """
+    <html><script>
+    var Flight = {};
+    var position = '1';
+    var Segment={};
+    Segment.marketingAirlineEN = 'HU';
+    Segment.marketingFlightNum = '7606';
+    Segment.departureDate = '2026-07-23';
+    Segment.departureTime = '08:00';
+    Segment.departureIATA = 'PEK';
+    Segment.departureAirportName = '北京首都国际';
+    Segment.arrivalDate = '2026-07-23';
+    Segment.arrivalTime = '10:30';
+    Segment.arrivalIATA = 'CKG';
+    Segment.arrivalAirportName = '重庆江北国际';
+    Segment.durationHour = '2';
+    Segment.durationMin = '30';
+    Segment.EquipType = '波音737';
+    var Segment={};
+    Segment.marketingAirlineEN = 'HU';
+    Segment.marketingFlightNum = '6377';
+    Segment.departureDate = '2026-07-23';
+    Segment.departureTime = '12:00';
+    Segment.departureIATA = 'CKG';
+    Segment.departureAirportName = '重庆江北国际';
+    Segment.arrivalDate = '2026-07-23';
+    Segment.arrivalTime = '14:30';
+    Segment.arrivalIATA = 'SHA';
+    Segment.arrivalAirportName = '上海虹桥';
+    Segment.durationHour = '2';
+    Segment.durationMin = '30';
+    Segment.EquipType = '波音737';
+    var FareInfo = {};
+    FareInfo.resBookDesigCode='R';
+    FareInfo.cabinCode='Y';
+    FareInfo.fareFamilyName='联程经济舱';
+    priceDetails.baseAmount ='1180.0';
+    priceDetails.totalAmount ='1380.0';
+    seatDetails.seatNum ='5';
     FareInfos[FareInfosCode]=FareInfo;
     Flights[position] = Flight;
     </script></html>
