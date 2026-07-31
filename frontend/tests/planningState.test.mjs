@@ -24,6 +24,24 @@ test("active empty response never derives the terminal empty page", () => {
   }), "PLANNING_EMPTY");
 });
 
+test("initial submission is explicit until the server returns an authoritative response", () => {
+  assert.equal(derivePlanningPageState({
+    response: null,
+    observationState: "SUBMITTING",
+    errorType: "NONE"
+  }), "SUBMITTING");
+  assert.equal(derivePlanningPageState({
+    response: null,
+    observationState: "SUBMITTING",
+    errorType: "BLOCKING"
+  }), "BLOCKING_ERROR");
+  assert.equal(derivePlanningPageState({
+    response: null,
+    observationState: "OBSERVING",
+    errorType: "NONE"
+  }), "IDLE");
+});
+
 test("observation exhaustion is a local paused state instead of a business terminal", () => {
   assert.equal(derivePlanningPageState({
     response: snapshot("RUNNING", "RUNNING"),

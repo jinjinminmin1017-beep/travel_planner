@@ -118,6 +118,35 @@ export function PlanningProgressScreen({ progress, candidateCount = 0, originTex
   );
 }
 
+type PlanningSubmittingScreenProps = {
+  inputSummary?: string | null;
+};
+
+export function PlanningSubmittingScreen({ inputSummary }: PlanningSubmittingScreenProps) {
+  return (
+    <View style={styles.page}>
+      <PlanningBackground />
+      <View style={styles.header}>
+        <Text style={styles.brand}>路明</Text>
+      </View>
+      <View style={styles.main}>
+        <Text accessibilityRole="header" style={styles.title}>正在理解你的行程</Text>
+        <Text style={styles.description}>
+          {inputSummary || "正在识别起点与终点"}
+        </Text>
+        <View accessible accessibilityLabel="正在理解行程并准备规划" style={styles.mapFrame}>
+          <Image source={worldMapImage} resizeMode="contain" style={[styles.mapImage, styles.mapBase]} />
+          <View pointerEvents="none" style={styles.submittingMapOverlay}>
+            <MapSweep />
+          </View>
+        </View>
+        <Text style={styles.submittingTask}>正在整理地点、时间与出行偏好…</Text>
+        <Text style={styles.note}>请求返回后会展示真实路线与规划进度。</Text>
+      </View>
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   page: { flex: 1, minHeight: 700, overflow: "hidden", paddingBottom: ui.spacing.xl, paddingHorizontal: 18, paddingTop: 10, position: "relative" },
   header: { alignItems: "center", flexDirection: "row", justifyContent: "space-between" },
@@ -140,5 +169,7 @@ const styles = StyleSheet.create({
   progressTrack: { backgroundColor: ui.colors.disabled, borderRadius: ui.radius.pill, height: 4, overflow: "hidden" },
   progressFill: { backgroundColor: ui.colors.primary, borderRadius: ui.radius.pill, height: "100%" },
   note: { color: ui.colors.textSecondary, fontSize: 10, lineHeight: 16, marginTop: ui.spacing.md, textAlign: "center" },
+  submittingMapOverlay: { bottom: 0, left: "38%", position: "absolute", top: 0, width: 84 },
+  submittingTask: { color: ui.colors.text, fontSize: 14, fontWeight: "800", lineHeight: 20, marginTop: 14 },
   disabled: { backgroundColor: ui.colors.disabled }
 });

@@ -24,7 +24,7 @@ import {
   nextPollDelayMs,
   type PlanningObservationState
 } from "./planning/planningState";
-import { PlanningProgressScreen } from "./components/planning/PlanningProgressScreen";
+import { PlanningProgressScreen, PlanningSubmittingScreen } from "./components/planning/PlanningProgressScreen";
 import { TravelInputScreen } from "./components/input/TravelInputScreen";
 import { ConstraintNoMatchScreen } from "./components/constraints/ConstraintNoMatchScreen";
 import { ResultsBottomAction } from "./components/results/ResultsBottomAction";
@@ -449,6 +449,7 @@ export default function App() {
   const [response, setResponse] = useState<TravelPlanResponse | null>(null);
   const [planningResponse, setPlanningResponse] = useState<TravelPlanResponse | null>(null);
   const [observationState, setObservationState] = useState<PlanningObservationState>("IDLE");
+  const [submittingInputSummary, setSubmittingInputSummary] = useState<string | null>(null);
   const [selectedPlanId, setSelectedPlanId] = useState<string | null>(null);
   const [selectedTransportMode, setSelectedTransportMode] = useState<IntercityTransportMode | null>(null);
   const [loading, setLoading] = useState(false);
@@ -486,7 +487,7 @@ export default function App() {
     observationState,
     errorType: error ? (authoritativeResponse ? "NON_BLOCKING" : "BLOCKING") : "NONE"
   });
-  const planningFullScreen = activeTab === "results" && pageState === "PLANNING_EMPTY";
+  const planningFullScreen = activeTab === "results" && (pageState === "SUBMITTING" || pageState === "PLANNING_EMPTY");
 
   useEffect(() => {
     if (response && selectedPlan) {
@@ -635,9 +636,14 @@ export default function App() {
   }
 
   async function startPlanning(input: string | TravelRequest, metadata: Record<string, unknown> = {}, preserveCurrentResults = false) {
+    const inputSummary = (typeof input === "string" ? input : input.raw_user_input)
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 120);
     setLoading(true);
     setError("");
-    setObservationState("OBSERVING");
+    setSubmittingInputSummary(inputSummary || null);
+    setObservationState("SUBMITTING");
     setPlanningResponse(null);
     if (!preserveCurrentResults) {
       setResponse(null);
@@ -651,15 +657,20 @@ export default function App() {
     try {
       void trackEvent({ eventType: "INPUT_SUBMITTED", metadata }).catch(() => undefined);
       const result = await planTripAsync(input);
+      if (runId !== planningRunId.current) return;
+      setSubmittingInputSummary(null);
       applyPlanningSnapshot(result);
       if (isPlanningActive(result)) {
+        setObservationState("OBSERVING");
         await pollUntilSettled(result, runId);
       } else {
         setObservationState("IDLE");
         trackPlanningTerminal(result);
       }
     } catch (caught) {
+      if (runId !== planningRunId.current) return;
       setError(caught instanceof Error ? caught.message : "请求失败");
+      setSubmittingInputSummary(null);
       setObservationState("IDLE");
     } finally {
       if (runId === planningRunId.current) setLoading(false);
@@ -882,7 +893,9 @@ export default function App() {
           />
         ) : (
           <ScrollView style={styles.screen} contentContainerStyle={[styles.content, planningFullScreen && styles.planningContent, wideLayout && styles.contentWide]}>
-            {pageState === "PLANNING_EMPTY" && authoritativeResponse ? (
+            {pageState === "SUBMITTING" ? (
+              <PlanningSubmittingScreen inputSummary={submittingInputSummary} />
+            ) : pageState === "PLANNING_EMPTY" && authoritativeResponse ? (
               <PlanningProgressScreen
                 cancelBusy={false}
                 candidateCount={authoritativeResponse.plans.length}

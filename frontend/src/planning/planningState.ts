@@ -3,11 +3,12 @@ import type { AsyncJobStatus, PlanningStatus, TravelPlanResponse } from "../type
 const ACTIVE_PLANNING_STATUSES = new Set<PlanningStatus>(["PENDING", "RUNNING"]);
 const ACTIVE_JOB_STATUSES = new Set<AsyncJobStatus>(["QUEUED", "RUNNING", "WAITING_SOURCE"]);
 
-export type PlanningObservationState = "IDLE" | "OBSERVING" | "PAUSED";
+export type PlanningObservationState = "IDLE" | "SUBMITTING" | "OBSERVING" | "PAUSED";
 export type PlanningErrorType = "NONE" | "BLOCKING" | "NON_BLOCKING";
 export type PlanningPageState =
   | "IDLE"
   | "BLOCKING_ERROR"
+  | "SUBMITTING"
   | "PLANNING_EMPTY"
   | "PLANNING_WITH_RESULTS"
   | "OBSERVATION_PAUSED"
@@ -52,7 +53,11 @@ export function isPlanningTerminal(response: PlanningStatusSnapshot): boolean {
 
 export function derivePlanningPageState(input: PlanningPageStateInput): PlanningPageState {
   const { response, observationState, errorType } = input;
-  if (!response) return errorType === "BLOCKING" ? "BLOCKING_ERROR" : "IDLE";
+  if (!response) {
+    if (errorType === "BLOCKING") return "BLOCKING_ERROR";
+    if (observationState === "SUBMITTING") return "SUBMITTING";
+    return "IDLE";
+  }
 
   if (isPlanningActive(response)) {
     if (observationState === "PAUSED") return "OBSERVATION_PAUSED";
