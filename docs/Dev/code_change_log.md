@@ -520,6 +520,7 @@
   - `npm --prefix frontend run test:helpers`：26 passed。
   - `npm --prefix frontend run build`：Web、iOS、Android 导出通过。
   - Python compileall 与 schema export/diff：通过，无 schema 差异。
+  - 低频真实 smoke：春秋航空 `SHA -> CAN` 通过；12306 返回非 JSON 响应，铁路 smoke 失败并保持 fail-closed，未生成模拟事实。
   - `git diff --check`：通过。
   - Ruff：虚拟环境未安装 `ruff`，项目当前无法执行该检查。
 - 兼容性：外部 API schema 保持 V1.17；无需数据库迁移；没有启用任何未获许可航司数据源。

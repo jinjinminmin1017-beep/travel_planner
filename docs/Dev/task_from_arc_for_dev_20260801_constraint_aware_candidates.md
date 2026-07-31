@@ -103,3 +103,4 @@
 - 三处能力分别由 `TRAVEL_CONSTRAINT_AWARE_PRESELECTION_ENABLED`、`TRAVEL_HAINAN_MULTISEGMENT_ENABLED`、`EXPO_PUBLIC_ENHANCED_NO_MATCH_DETAIL_ENABLED` 控制；关闭预选优化也不会恢复 first-N 截断。
 - 外部 API schema 保持 1.17，无数据库迁移；schema export 无差异。
 - 验证：后端 250 passed；前端 26 passed；TypeScript、Python compileall、Web/iOS/Android Expo 导出、schema diff 与 `git diff --check` 通过。Ruff 未安装，未执行。
+- 低频真实 smoke：春秋航空公开查询通过（`SHA -> CAN`，返回 9C8929 与可用舱位）；12306 返回非 JSON 响应，铁路 smoke 失败并保持 fail-closed，未生成模拟 offer。
