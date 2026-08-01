@@ -15,7 +15,12 @@ from app.models.schemas import (
 from app.services.candidate_generator import generate_candidate_plan_pool
 from app.services.intent_parser import parse_travel_request
 from app.services.planner import build_plans
-from app.services.recommendation import recommend_with_validation, validate_llm_output
+from app.services.recommendation import (
+    deterministic_cheapest_plan,
+    pareto_candidate_plans,
+    recommend_with_validation,
+    validate_llm_output,
+)
 
 _BASE_LLM_INPUT_JSON: str | None = None
 
@@ -68,11 +73,14 @@ def _llm_input():
 
 
 def _output(plan_ids: list[str]) -> LLMRecommendationOutput:
+    if not plan_ids:
+        raise ValueError("at least one plan_id is required")
+    expanded_plan_ids = [plan_ids[index % len(plan_ids)] for index in range(3)]
     return LLMRecommendationOutput(
         selected_recommendations=[
-            RecommendationSlot(recommendation_type=RecommendationType.CHEAPEST, status=RecommendationSlotStatus.AVAILABLE, plan_id=plan_ids[0], reason="cheapest"),
-            RecommendationSlot(recommendation_type=RecommendationType.MOST_COMFORTABLE, status=RecommendationSlotStatus.AVAILABLE, plan_id=plan_ids[1], reason="comfortable"),
-            RecommendationSlot(recommendation_type=RecommendationType.BALANCED, status=RecommendationSlotStatus.AVAILABLE, plan_id=plan_ids[2], reason="balanced"),
+            RecommendationSlot(recommendation_type=RecommendationType.CHEAPEST, status=RecommendationSlotStatus.AVAILABLE, plan_id=expanded_plan_ids[0], reason="cheapest"),
+            RecommendationSlot(recommendation_type=RecommendationType.MOST_COMFORTABLE, status=RecommendationSlotStatus.AVAILABLE, plan_id=expanded_plan_ids[1], reason="comfortable"),
+            RecommendationSlot(recommendation_type=RecommendationType.BALANCED, status=RecommendationSlotStatus.AVAILABLE, plan_id=expanded_plan_ids[2], reason="balanced"),
         ],
         validation_blockers=[],
         explanation="ok",
@@ -206,7 +214,7 @@ def test_recommendation_repair_once_success(monkeypatch):
 
         def repair_recommendation(self, _llm_input, invalid_reasons):
             assert invalid_reasons
-            return _output(llm_input.candidate_plan_ids[:3])
+            return _output(_llm_input.candidate_plan_ids[:3])
 
     monkeypatch.setattr("app.services.recommendation.build_enabled_llm_provider", lambda: _RepairingProvider())
 
@@ -232,7 +240,7 @@ def test_recommendation_repairs_schema_validation_failure(monkeypatch):
 
         def repair_recommendation(self, _llm_input, invalid_reasons):
             assert any("schema validation failed" in reason for reason in invalid_reasons)
-            return _output(llm_input.candidate_plan_ids[:3])
+            return _output(_llm_input.candidate_plan_ids[:3])
 
     monkeypatch.setattr("app.services.recommendation.build_enabled_llm_provider", lambda: _SchemaBrokenProvider())
 
@@ -261,3 +269,115 @@ def test_recommendation_repair_failure_returns_none(monkeypatch):
     monkeypatch.setattr("app.services.recommendation.build_enabled_llm_provider", lambda: _BrokenProvider())
 
     assert recommend_with_validation(llm_input) is None
+
+
+def test_cheapest_selector_uses_total_cost_duration_and_plan_id():
+    llm_input = _llm_input()
+    plans = [plan.model_copy(deep=True) for plan in llm_input.candidate_plans[:4]]
+    assert len(plans) == 4
+    for plan, train_number, amount in zip(
+        plans,
+        ["G1673", "G7591", "G7511", "D3291"],
+        [33800, 30250, 34000, 32600],
+        strict=True,
+    ):
+        plan.plan_id = f"plan_{train_number.lower()}"
+        rail = next(
+            (segment for segment in plan.segments if segment.segment_type == "RAIL"),
+            None,
+        )
+        if rail is not None:
+            rail.train_number = train_number
+        plan.cost_breakdown.total_cost = plan.cost_breakdown.total_cost.model_copy(
+            update={"amount_minor": amount, "display_text": f"¥{amount / 100:.2f}"}
+        )
+
+    selected = deterministic_cheapest_plan(plans)
+
+    assert selected.plan_id == "plan_g7591"
+    assert selected.cost_breakdown.total_cost.amount_minor == 30250
+
+
+def test_validate_rejects_legal_but_semantically_wrong_extreme_slots():
+    llm_input = _llm_input()
+    cheapest = deterministic_cheapest_plan(llm_input.candidate_plans)
+    wrong_cheapest = next(
+        plan for plan in llm_input.candidate_plans
+        if plan.plan_id != cheapest.plan_id
+    )
+    output = _output(llm_input.candidate_plan_ids[:3])
+    cheapest_slot = next(
+        slot for slot in output.selected_recommendations
+        if slot.recommendation_type == RecommendationType.CHEAPEST
+    )
+    cheapest_slot.plan_id = wrong_cheapest.plan_id
+
+    reasons = validate_llm_output(output, llm_input)
+
+    assert any("CHEAPEST must select deterministic plan_id" in reason for reason in reasons)
+
+
+def test_recommendation_gate_corrects_legal_extreme_and_factual_reason(monkeypatch):
+    llm_input = _llm_input()
+    cheapest = deterministic_cheapest_plan(llm_input.candidate_plans)
+
+    class _SemanticallyWrongProvider:
+        source_id = "real_llm"
+        model_name = "test-semantic-gate"
+
+        def recommend(self, _llm_input):
+            scoped_cheapest = deterministic_cheapest_plan(_llm_input.candidate_plans)
+            scoped_wrong = next(
+                plan for plan in _llm_input.candidate_plans
+                if plan.plan_id != scoped_cheapest.plan_id
+            )
+            output = _output(_llm_input.candidate_plan_ids[:3])
+            slot = next(
+                item for item in output.selected_recommendations
+                if item.recommendation_type == RecommendationType.CHEAPEST
+            )
+            slot.plan_id = scoped_wrong.plan_id
+            slot.reason = "legal id but wrong cheapest fact"
+            return output
+
+    monkeypatch.setattr(
+        "app.services.recommendation.build_enabled_llm_provider",
+        lambda: _SemanticallyWrongProvider(),
+    )
+
+    result = recommend_with_validation(llm_input)
+
+    assert result is not None
+    cheapest_slot = next(
+        slot for slot in result.recommendations
+        if slot.recommendation_type == RecommendationType.CHEAPEST
+    )
+    assert cheapest_slot.plan_id == cheapest.plan_id
+    assert cheapest.cost_breakdown.total_cost.display_text in cheapest_slot.reason
+    assert result.llm_validation_result.final_strategy == "FALLBACK_RULES"
+
+
+def test_recommendation_provider_receives_only_pareto_candidates(monkeypatch):
+    llm_input = _llm_input()
+    expected_ids = {
+        plan.plan_id for plan in pareto_candidate_plans(llm_input.candidate_plans)
+    }
+    received_ids: set[str] = set()
+
+    class _ParetoRecordingProvider:
+        source_id = "real_llm"
+        model_name = "test-pareto-scope"
+
+        def recommend(self, scoped_input):
+            received_ids.update(scoped_input.candidate_plan_ids)
+            return _output(scoped_input.candidate_plan_ids)
+
+    monkeypatch.setattr(
+        "app.services.recommendation.build_enabled_llm_provider",
+        lambda: _ParetoRecordingProvider(),
+    )
+
+    result = recommend_with_validation(llm_input)
+
+    assert result is not None
+    assert received_ids == expected_ids

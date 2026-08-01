@@ -78,6 +78,10 @@ from app.services.local_transfer_engine import (
     build_local_transfer_segment,
 )
 from app.services.offer_preselection import OfferPreselectionBucket, preselect_rail_offers
+from app.services.plan_variant_materializer import (
+    materialize_rail_plan_variants,
+    select_lowest_available_seat,
+)
 from app.services.location_resolver import (
     airport_candidate_for_iata,
     airport_candidates_for_city,
@@ -271,13 +275,13 @@ def _rail(segment_id: str, train: str, origin: str, destination: str, day, dep_h
         duration_minutes=offer.duration_minutes,
         stop_sequence=offer.stop_sequence,
         seat_options=offer.seat_options,
-        selected_seat_option_id=offer.seat_options[0].option_id,
+        selected_seat_option_id=select_lowest_available_seat(offer.seat_options).option_id,
         data_source=offer.data_source,
     )
 
 
 def _rail_segment_from_offer(segment_id: str, offer: RailOffer) -> RailSegment:
-    selected = next((seat for seat in offer.seat_options if seat.availability != "NO_TICKET"), offer.seat_options[0])
+    selected = select_lowest_available_seat(offer.seat_options)
     return RailSegment(
         segment_id=segment_id,
         train_number=offer.train_number,
@@ -2456,6 +2460,12 @@ def plan_trip(
         execution_metrics=execution_metrics,
         deadline=deadline,
     )
+    rail_variants_enabled = os.getenv(
+        "TRAVEL_RAIL_PLAN_VARIANTS_ENABLED",
+        "true",
+    ).strip().lower() not in {"0", "false", "no", "off"}
+    if rail_variants_enabled:
+        plans = materialize_rail_plan_variants(plans, travel_request)
     for failure in failures:
         failure.trace_id = ctx.trace_id
         failure.correlation_id = ctx.correlation_id

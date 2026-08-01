@@ -25,6 +25,18 @@ RISK_SCORE_VERSION = "risk_assessment_v1"
 COST_SCORE_VERSION = "cost_breakdown_v1"
 DATA_QUALITY_VERSION = "data_quality_v1"
 
+RAIL_SEAT_COMFORT_RANK = {
+    "无座": 0,
+    "硬座": 1,
+    "二等座": 2,
+    "软座": 2,
+    "硬卧": 3,
+    "一等座": 4,
+    "软卧": 4,
+    "特等座": 5,
+    "商务座": 6,
+}
+
 
 def calculate_cost_breakdown(segments: list[object], ticket: TicketEnhancement | None = None) -> CostBreakdown:
     items: list[CostItem] = []
@@ -116,6 +128,55 @@ def refresh_plan_cost_and_quality(plan: TravelPlan) -> None:
         plan.total_duration_minutes = max(0, int((plan.arrival_time.datetime - plan.departure_time.datetime).total_seconds() // 60))
     else:
         plan.total_duration_minutes = sum(segment.duration_minutes for segment in plan.segments)
+
+
+def refresh_plan_variant_scores(plan: TravelPlan, baseline: TravelPlan) -> None:
+    """Recompute option-dependent facts without inventing provider data."""
+    refresh_plan_cost_and_quality(plan)
+    comfort_delta = 0.0
+    selected_seats: list[str] = []
+    baseline_rail = {
+        segment.segment_id: segment
+        for segment in baseline.segments
+        if isinstance(segment, RailSegment)
+    }
+    for segment in plan.segments:
+        if not isinstance(segment, RailSegment):
+            continue
+        selected = next(option for option in segment.seat_options if option.option_id == segment.selected_seat_option_id)
+        selected_seats.append(f"{segment.train_number} {selected.seat_type}")
+        baseline_segment = baseline_rail.get(segment.segment_id)
+        if baseline_segment is None:
+            continue
+        baseline_selected = next(
+            option for option in baseline_segment.seat_options
+            if option.option_id == baseline_segment.selected_seat_option_id
+        )
+        comfort_delta += 0.8 * (
+            rail_seat_comfort_rank(selected.seat_type)
+            - rail_seat_comfort_rank(baseline_selected.seat_type)
+        )
+
+    plan.comfort_score.total_score = _clamp_score(baseline.comfort_score.total_score + comfort_delta)
+    if "座席/舱位舒适度" in plan.comfort_score.breakdown:
+        baseline_breakdown = baseline.comfort_score.breakdown.get(
+            "座席/舱位舒适度",
+            baseline.comfort_score.total_score,
+        )
+        plan.comfort_score.breakdown["座席/舱位舒适度"] = _clamp_score(baseline_breakdown + comfort_delta)
+    plan.comfort_score.score_vector.comfort = round(plan.comfort_score.total_score / 10, 4)
+    if selected_seats:
+        plan.comfort_score.explanation = (
+            f"当前选择{'、'.join(selected_seats)}；舒适度由接驳、换乘、实际席别和风险共同计算。"
+        )
+    plan.risk_assessment.recommendation_allowed = (
+        plan.risk_assessment.overall_risk_level != RiskLevel.BLOCKED
+    )
+
+
+def rail_seat_comfort_rank(seat_type: str) -> int:
+    normalized = "".join(seat_type.strip().split()).replace("席", "座")
+    return RAIL_SEAT_COMFORT_RANK.get(normalized, 1)
 
 
 def _clamp_score(value: float) -> float:

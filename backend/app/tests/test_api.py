@@ -815,6 +815,17 @@ def test_recalculate_result_set_syncs_canonical_seat_only_to_matching_train(monk
     target_plan_model.segments.append(other_train_segment)
     refresh_plan_cost_and_quality(target_plan_model)
 
+    expected_applied_plan_ids = {
+        plan.plan_id
+        for plan in rail_plans
+        if any(
+            segment.train_number.strip().upper() == "G900"
+            and any(option.seat_type == "一等座" for option in segment.seat_options)
+            for segment in plan.segments
+            if segment.segment_type == "RAIL"
+        )
+    }
+
     preferred_seat_before = plan_response["travel_request"]["preferred_rail_seat"]
     preference_source_before = plan_response["travel_request"]["preference_source"]
 
@@ -844,9 +855,9 @@ def test_recalculate_result_set_syncs_canonical_seat_only_to_matching_train(monk
     assert updated["travel_request"]["preferred_rail_seat"] == preferred_seat_before
     assert updated["travel_request"]["preference_source"] == preference_source_before
     assert body["preference_application"]["canonical_value"] == "一等座"
-    assert set(body["preference_application"]["applied_plan_ids"]) == {target_plan_model.plan_id, same_train_plan.plan_id}
+    assert set(body["preference_application"]["applied_plan_ids"]) == expected_applied_plan_ids
     assert body["preference_application"]["unsupported_plan_ids"] == [unsupported_plan.plan_id]
-    assert "G900 的一等座已同步到2个方案" in body["preference_application"]["message"]
+    assert f"G900 的一等座已同步到{len(expected_applied_plan_ids)}个方案" in body["preference_application"]["message"]
     assert body["change_summary"]["changed_fields"] == ["plans", "recommendation_result"]
     assert body["recommendation_result"] == updated["recommendation_result"]
     available_ids = {
