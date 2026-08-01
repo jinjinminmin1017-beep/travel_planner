@@ -524,3 +524,20 @@
   - `git diff --check`：通过。
   - Ruff：虚拟环境未安装 `ruff`，项目当前无法执行该检查。
 - 兼容性：外部 API schema 保持 V1.17；无需数据库迁移；没有启用任何未获许可航司数据源。
+
+## 2026-08-02 07:59:16 +08:00
+
+- 任务：完成 ARC-20260801-03 预算方案席别物化与推荐确定性门禁。
+- 代码提交：`13a3a55`。
+- 修改内容：
+  - 新增有界铁路方案变体物化器，只基于真实可售、有价格的席别生成省预算、更舒适和均衡变体；selected option fingerprint 去重且每个基础行程最多三个变体。
+  - Planner 默认选择最低价可售席别，显式席别偏好优先且不可售时保留现有约束解释，不再依赖 Provider 返回顺序。
+  - 变体统一重算费用、总时长、席别舒适度与推荐风险状态，确保费用明细、席别、总价和理由一致。
+  - 推荐门禁确定性计算 CHEAPEST 和 MOST_COMFORTABLE；BALANCED 仅使用 Pareto 候选，合法但语义错误的 LLM 选择会被后端纠正。
+  - 新增两个独立回滚开关，并补充 D3291、四车次最低价、显式席别、Plan ID、Pareto 输入和结果集席别同步回归测试。
+- 验证：
+  - `.\.venv\Scripts\python -m pytest backend\app\tests -q`：257 passed。
+  - `.\.venv\Scripts\python scripts\export_schemas.py`：导出后 schema diff 无变化。
+  - Python compileall 与 `git diff --check`：通过。
+  - Ruff：虚拟环境未安装 `ruff`，项目当前无法执行该检查。
+- 兼容性：外部 API schema 保持 V1.17；无数据库迁移；航班 Provider、航班配置、限流和 browser worker 无 diff。
