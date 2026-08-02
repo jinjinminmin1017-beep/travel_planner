@@ -29,3 +29,11 @@
 - 问题根因：前端固定轮询 100 次后停止，并以 `plans.length === 0` 独立推导空态；后端只在全部 Provider 与 LLM 完成后保存最终快照，已形成的完整铁路方案没有渐进发布；同一规划重复地点和地图路线请求又放大了最终延迟；声明的服务端超时配置没有进入执行链路。
 - 解决方式：前端新增单一规划状态机和 `OBSERVATION_PAUSED`，继续获取/前台恢复复用原 job；后端新增安全门禁后的渐进快照与 generation 比较写入；规划内复用地点/路线并有界并行铁路和航班族；新增首方案/最终结果指标；服务端期限先观察、再允许显式强制，强制到期保留完整方案为 `PARTIAL`。
 - 问题修改提交：`92d7e08`、`e2043c9`、`0e66dd2`、`17c3748`。
+
+## 2026-08-02 真机调试行程规划因 FlyAI CLI 无法启动而失败
+
+- 用户提问时间：2026-08-02。
+- 问题描述：真机调试中的上海格林公馆到温州永嘉梨村规划连续失败；所有铁路、航班和混合方案均返回 `FLIGGY_EXECUTION_FAILED`，没有形成可验证计划。
+- 问题根因：Windows 启动配置指向无扩展名的 `node_modules/.bin/flyai` POSIX shim，Python `subprocess.run(shell=False)` 无法执行该文件并返回 `FileNotFoundError / WinError 2`；同目录的 Windows `flyai.cmd` 可以启动。
+- 解决方式：在 `scripts/device-debug.ps1` 启动后端前默认启用 FlyAI，把 `node_modules\.bin\flyai.cmd` 的绝对路径写入子进程环境并校验固定依赖存在；保留 `-SkipFlyAI` 回退开关。
+- 问题修改提交：`3a272a7`。

@@ -563,3 +563,18 @@
   - `@fly-ai/flyai-cli` 安装版本核对：1.0.16。
 - 阻塞：仓库根目录 `.env` 未检测到非空 `TRAVEL_SOURCE_FLIGGY_FLYAI_API_KEY`；secret 配置检查与 50 样例 benchmark 明确返回阻塞。无 Key 的 Windows CLI 探测在输出体验模式 JSON 后发生 libuv assertion 并非零退出，按门禁不得忽略。
 - 兼容性：外部 API 升级到 V1.18；规划请求结构和数据库 schema 不变。历史 `AIRLINE` / `RAIL_12306` redirect 类型仍可解析，但新计划只生成 `FLIGGY`，旧票务源不可通过 ENV 重新启用。
+
+## 2026-08-02 23:34:15 +08:00
+
+- 任务：修复 Windows 真机调试启动时 FlyAI CLI 无法执行的问题。
+- 代码提交：`3a272a7`。
+- 修改内容：
+  - `scripts/device-debug.ps1` 默认启用 `fliggy_flyai`，并把仓库固定安装的 `node_modules\.bin\flyai.cmd` 绝对路径注入后端进程环境。
+  - 启动前校验 Windows CLI shim 是否存在；缺失时提示在仓库根目录执行 `npm install`，不在运行期动态下载依赖。
+  - 新增 `-SkipFlyAI` 本地回退开关，并同步真机调试命令说明。
+- 验证：
+  - PowerShell AST 语法解析：通过。
+  - 隔离端口启动 `device-debug.ps1 -SkipFrontend -NoWait`：`fliggy_flyai enabled=True, health_status=OK`；测试端口已清理。
+  - `.\.venv\Scripts\python -m pytest backend\app\tests\test_fliggy_flyai.py backend\app\tests\test_data_sources.py -q`：30 passed。
+  - `git diff --check`：通过。
+- 兼容性：外部 API、数据库与前端无变化；未发起真实 FlyAI 票务查询。
