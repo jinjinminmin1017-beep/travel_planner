@@ -102,7 +102,7 @@
 - 启动前端：`cd frontend; npm run start`
 - 启动脚本：`.\scripts\dev.ps1 -Target backend` / `frontend` / `test`
 - FlyAI 50 样例门禁：`.\.venv\Scripts\python scripts\benchmark_fliggy_flyai.py --date <未来日期>`
-- 真机调试：`.\scripts\device-debug.ps1 -OpenQr`
+- 真机调试：`.\scripts\device-debug.ps1 -OpenQr`；Windows 下默认启用仓库固定安装的 `node_modules\.bin\flyai.cmd`，需要跳过票务源时显式传入 `-SkipFlyAI`。
 - 后端测试：`.\.venv\Scripts\python -m pytest backend\app\tests`
 - 前端 typecheck：`cd frontend; npm run typecheck`
 - 前端构建导出：`cd frontend; npm run build`

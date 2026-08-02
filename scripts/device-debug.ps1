@@ -5,6 +5,7 @@ param(
   [string]$QrImagePath = "logs\expo-go-qr.png",
   [switch]$SkipBackend,
   [switch]$SkipFrontend,
+  [switch]$SkipFlyAI,
   [switch]$NoWait,
   [switch]$OpenQr
 )
@@ -17,6 +18,7 @@ $FrontendDir = Join-Path $RootDir "frontend"
 $LogsDir = Join-Path $RootDir "logs"
 $PythonExe = Join-Path $RootDir ".venv\Scripts\python.exe"
 $NpmExe = (Get-Command npm.cmd -ErrorAction SilentlyContinue).Source
+$FlyAIExecutable = Join-Path $RootDir "node_modules\.bin\flyai.cmd"
 
 if (-not (Test-Path $PythonExe)) {
   throw "Python virtualenv not found at $PythonExe. Run: python -m venv .venv; .\.venv\Scripts\python -m pip install -r backend\requirements.txt"
@@ -26,6 +28,14 @@ if (-not $NpmExe) {
 }
 if (-not (Test-Path $FrontendDir)) {
   throw "Frontend directory not found at $FrontendDir."
+}
+if (-not $SkipBackend -and -not $SkipFlyAI -and -not (Test-Path -LiteralPath $FlyAIExecutable)) {
+  throw "FlyAI CLI was not found at $FlyAIExecutable. Run npm install from $RootDir before starting device debugging."
+}
+
+if (-not $SkipBackend -and -not $SkipFlyAI) {
+  $env:TRAVEL_SOURCE_FLIGGY_FLYAI_ENABLED = "true"
+  $env:TRAVEL_SOURCE_FLIGGY_FLYAI_EXECUTABLE = $FlyAIExecutable
 }
 
 New-Item -ItemType Directory -Force -Path $LogsDir | Out-Null
@@ -262,6 +272,9 @@ try {
   $info | Set-Content -LiteralPath $InfoPath -Encoding UTF8
 
   if (-not $SkipBackend) {
+    if (-not $SkipFlyAI) {
+      Write-Host "FlyAI enabled for backend queries: $FlyAIExecutable"
+    }
     $backend = Start-Backend
     $Processes += $backend
     $ManagedPorts += $BackendPort
