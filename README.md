@@ -1,6 +1,6 @@
 # AI Travel Planner
 
-Mobile App travel planning prototype based on PRD V2.1, architecture, Schema V1.15, data source governance, LLM prompt design, task breakdown, and execution plan.
+Mobile App travel planning prototype based on PRD V2.1, architecture, Schema V1.18, data source governance, LLM prompt design, task breakdown, and execution plan.
 
 ## Scope
 
@@ -14,10 +14,10 @@ The current implementation is moving from the earlier demo loop to real provider
 - Deterministic internal calculation is still used for scoring, risk rules, and validation, but not for generating fallback recommendation cards and not as a fake transport data source.
 - OSRM Route Service is enabled in DEV / TEST as a no-key read-only route provider so map live smoke can run before commercial map keys are available. For production usage, self-host OSRM or use an approved commercial map provider.
 - Nominatim Search is enabled in DEV / TEST as a no-key read-only geocoding provider. Public usage requires a descriptive User-Agent and low-frequency calls.
-- Redirect-only providers for 12306, airline official websites, and AMap navigation are enabled in DEV / TEST and can be live-smoked without storing user credentials or creating orders.
+- AMap navigation redirect remains enabled in DEV / TEST. Ticket handoff uses only the FlyAI item `jumpUrl` persisted with the generated plan.
 - OpenSky aircraft states are enabled in DEV / TEST as a no-key read-only flight status provider. They are not fare or ticket inventory data.
 - Open-Meteo forecast is enabled in DEV / TEST as a no-key read-only weather provider for weather risk assistance. It is not a fare, availability, or traffic source.
-- `rail_12306_public_query` is enabled in DEV / TEST as a low-frequency public anonymous 12306 query provider. It only reads public ticket search results, filters out unavailable or unpriced seats, and does not log in, bypass captcha, place orders, pay, or grab tickets.
+- `fliggy_flyai` is the only runtime ticket fact source for both rail and flight offers. It is disabled until a formal FlyAI key is configured, and it never falls back to airline scraping, a browser worker, or 12306 ticket queries.
 
 When a real provider is enabled but unavailable, unauthorized, missing credentials, or returns no usable result, the backend must surface a degraded status, source failure, business error, or blocked plan type. It must not silently replace the failed provider with simulated transport facts.
 
@@ -35,7 +35,15 @@ $env:TRAVEL_SOURCE_AMAP_ROUTE_LICENSE_STATUS="APPROVED"
 $env:TRAVEL_SOURCE_AMAP_ROUTE_API_KEY="..."
 ```
 
-For flight fares, configure one or more approved official airline public query sources such as `airline_mu_public_query`, `airline_cz_public_query`, or `airline_sc_public_query`. Each enabled source must have an approved license status, a source allowlisted `TRAVEL_SOURCE_*_BASE_URL`, a low QPS limit, and no fallback source. The provider only returns offers with a real price and an available or limited cabin signal.
+Install the pinned root dependency, place the formal key only in the repository-root `.env`, and explicitly enable FlyAI after the CLI platform gate passes:
+
+```powershell
+npm install --ignore-scripts
+$env:TRAVEL_SOURCE_FLIGGY_FLYAI_ENABLED="true"
+$env:TRAVEL_SOURCE_FLIGGY_FLYAI_API_KEY="..."
+```
+
+The fixed `@fly-ai/flyai-cli` adapter accepts only exact-price items with an allowlisted HTTPS `jumpUrl`. Payment, identity, passenger details, and order submission stay outside this service.
 
 Run the CI-safe public configuration check before expecting no-key provider behavior:
 
@@ -46,10 +54,14 @@ Run the CI-safe public configuration check before expecting no-key provider beha
 The public tier checks fixture-safe config, `.env.example` drift, no-key read-only providers, and redirect-only official entry points. Use the secret tier only in an authorized environment:
 
 ```powershell
-.\.venv\Scripts\python scripts\check_real_api_config.py --tier secret --source flight
+.\.venv\Scripts\python scripts\check_real_api_config.py --tier secret --source ticket
 ```
 
-Use `--tier full` only for a production-readiness check after public airline query sources have passed source review and are explicitly configured.
+Use `--tier full` only after FlyAI is explicitly configured. Run the required 50-sample cold/warm latency gate with a future travel date:
+
+```powershell
+.\.venv\Scripts\python scripts\benchmark_fliggy_flyai.py --date 2026-08-20
+```
 
 Transport node candidates are loaded from `backend/app/data/transport_nodes.json`. Regenerate that catalog from approved public catalog sources instead of hand-editing city-to-station mappings:
 
@@ -70,14 +82,10 @@ You can test one provider at a time:
 ```powershell
 .\.venv\Scripts\python scripts\live_smoke_real_apis.py --provider map
 .\.venv\Scripts\python scripts\live_smoke_real_apis.py --provider geocode
-.\.venv\Scripts\python scripts\live_smoke_real_apis.py --provider flight
 .\.venv\Scripts\python scripts\live_smoke_real_apis.py --provider flight-status
 .\.venv\Scripts\python scripts\live_smoke_real_apis.py --provider weather
-.\.venv\Scripts\python scripts\live_smoke_real_apis.py --provider rail
 .\.venv\Scripts\python scripts\live_smoke_real_apis.py --provider redirect
 ```
-
-The public smoke tier does not run real-time 12306 ticket queries by default; use `--provider rail` explicitly for a low-frequency manual check.
 
 ## Run
 

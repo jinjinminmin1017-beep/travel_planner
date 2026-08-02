@@ -93,7 +93,7 @@ test("planning map keeps the approved progress glow aligned to the reveal edge",
 
 test("no-match alternatives expose decision facts without a booking action", async () => {
   const noMatch = await read("../src/components/constraints/ConstraintNoMatchScreen.tsx");
-  for (const label of ["门到门概览", "完整路线", "确认后将放宽的条件", "仍满足的条件", "数据与风险", "航司查询说明"]) {
+  for (const label of ["门到门概览", "完整路线", "确认后将放宽的条件", "仍满足的条件", "数据与风险", "票务查询说明"]) {
     assert.match(noMatch, new RegExp(label));
   }
   assert.match(noMatch, /alternative\.plan\.segments\.map/);

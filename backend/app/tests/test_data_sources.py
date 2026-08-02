@@ -21,20 +21,23 @@ PLANNED_REAL_SOURCE_IDS = {
     "amap_route",
     "baidu_map_route",
     "real_llm",
-    "airline_mu_browser_query",
+    "fliggy_flyai",
 }
 DEFAULT_ENABLED_REAL_SOURCE_IDS = {
     "osrm_route",
     "nominatim_geocode",
     "opensky_states",
+    "open_meteo_forecast",
+    "amap_uri_redirect",
+}
+RETIRED_TICKET_SOURCE_IDS = {
     "rail_12306_public_query",
+    "rail_12306_redirect",
+    "airline_official_redirect",
     "airline_9c_public_query",
     "airline_hu_public_query",
     "airline_qw_public_query",
-    "open_meteo_forecast",
-    "amap_uri_redirect",
-    "airline_official_redirect",
-    "rail_12306_redirect",
+    "airline_mu_browser_query",
 }
 
 
@@ -43,7 +46,7 @@ class _FakeLLMResponse:
         return None
 
     def json(self):
-        return {"choices": [{"message": {"content": '{"schema_version":"1.17"}'}}]}
+        return {"choices": [{"message": {"content": '{"schema_version":"1.18"}'}}]}
 
 
 class _RecordingLLMClient:
@@ -80,6 +83,7 @@ def test_env_only_defaults_register_expected_sources_for_dev_and_test():
         assert all(config.environment == environment for config in configs.values())
         assert all(not configs[source_id].enabled for source_id in PLANNED_REAL_SOURCE_IDS)
         assert all(configs[source_id].enabled for source_id in DEFAULT_ENABLED_REAL_SOURCE_IDS)
+        assert RETIRED_TICKET_SOURCE_IDS.isdisjoint(configs)
 
 
 def test_disabled_sources_are_reported_without_requiring_credentials():
@@ -222,15 +226,11 @@ def test_env_example_contains_only_behaviorally_effective_provider_keys():
     ]
 
     assert "_HTTP_METHOD=" not in env_example
-    assert "TRAVEL_SOURCE_AIRLINE_MU_BROWSER_QUERY_ENABLED=false" in env_example
+    assert "TRAVEL_SOURCE_FLIGGY_FLYAI_ENABLED=false" in env_example
+    assert "TRAVEL_SOURCE_FLIGGY_FLYAI_API_KEY=" in env_example
+    assert all(source_id.upper() not in env_example for source_id in RETIRED_TICKET_SOURCE_IDS)
     assert "VARIFLIGHT_STATUS" not in env_example
-    assert cache_ttl_keys == [
-        "TRAVEL_SOURCE_AIRLINE_9C_PUBLIC_QUERY_CACHE_TTL_SECONDS",
-        "TRAVEL_SOURCE_AIRLINE_HU_PUBLIC_QUERY_CACHE_TTL_SECONDS",
-        "TRAVEL_SOURCE_AIRLINE_QW_PUBLIC_QUERY_CACHE_TTL_SECONDS",
-        "TRAVEL_SOURCE_AIRLINE_MU_BROWSER_QUERY_CACHE_TTL_SECONDS",
-        "TRAVEL_SOURCE_RAIL_12306_PUBLIC_QUERY_CACHE_TTL_SECONDS",
-    ]
+    assert cache_ttl_keys == ["TRAVEL_SOURCE_FLIGGY_FLYAI_CACHE_TTL_SECONDS"]
 
 
 def test_public_provider_config_and_factories_are_ready_without_secrets():

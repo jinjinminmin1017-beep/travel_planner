@@ -1,4 +1,4 @@
-import type { AppEventType, BookingRedirect, DataSourceStatusResponse, ErrorResponse, FeedbackCategory, FeedbackResponse, RecalculateChangeType, RecalculateResponse, RecalculateScope, TravelPlanResponse, TravelRequest } from "../types";
+import type { AppEventType, BookingRedirect, BookingRedirectType, DataSourceStatusResponse, ErrorResponse, FeedbackCategory, FeedbackResponse, RecalculateChangeType, RecalculateResponse, RecalculateScope, TravelPlanResponse, TravelRequest } from "../types";
 import { NativeModules, Platform } from "react-native";
 
 const configuredApiBase = process.env.EXPO_PUBLIC_API_BASE_URL?.trim();
@@ -90,7 +90,7 @@ export function recalculate(
   return request<RecalculateResponse>("/api/travel/recalculate", {
     method: "POST",
     body: JSON.stringify({
-      schema_version: "1.17",
+      schema_version: "1.18",
       request_id: `req_ui_${Date.now()}`,
       idempotency_key: `idem_ui_${Date.now()}`,
       plan_id: planId,
@@ -108,11 +108,11 @@ export function recalculate(
   });
 }
 
-export function bookingRedirect(planId: string, segmentId: string | null, redirectType: string) {
+export function bookingRedirect(planId: string, segmentId: string | null, redirectType: BookingRedirectType) {
   return request<{ redirect: BookingRedirect }>("/api/redirect/booking", {
     method: "POST",
     body: JSON.stringify({
-      schema_version: "1.17",
+      schema_version: "1.18",
       request_id: `req_redirect_${Date.now()}`,
       idempotency_key: `idem_redirect_${Date.now()}`,
       plan_id: planId,
@@ -133,7 +133,7 @@ export function submitFeedback(payload: {
   return request<FeedbackResponse>("/api/feedback", {
     method: "POST",
     body: JSON.stringify({
-      schema_version: "1.17",
+      schema_version: "1.18",
       request_id: payload.requestId,
       trace_id: payload.traceId,
       correlation_id: payload.correlationId,
@@ -149,7 +149,7 @@ export function trackEvent(payload: { eventType: AppEventType; requestId?: strin
   return request<{ accepted: boolean }>("/api/events", {
     method: "POST",
     body: JSON.stringify({
-      schema_version: "1.17",
+      schema_version: "1.18",
       event_type: payload.eventType,
       request_id: payload.requestId ?? null,
       trace_id: payload.traceId ?? null,

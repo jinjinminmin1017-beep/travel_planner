@@ -45,7 +45,8 @@ function deviationText(violation: ConstraintViolation) {
   return [...deviation.added_modes, ...deviation.removed_modes].join("、") || "交通方式有变化";
 }
 
-function airlineLabel(sourceId: string) {
+function ticketSourceLabel(sourceId: string) {
+  if (sourceId === "fliggy_flyai") return "飞猪 FlyAI";
   const labels: Array<[string, string]> = [
     ["airline_hu", "海南航空"], ["airline_9c", "春秋航空"], ["airline_qw", "青岛航空"],
     ["airline_mu", "中国东方航空"], ["airline_cz", "中国南方航空"], ["airline_ca", "中国国际航空"],
@@ -60,6 +61,7 @@ function airlineOutcome(failure: SourceFailure) {
   if (code.includes("PARSER") || code.includes("INVALID_RESPONSE")) return "响应结构暂不支持";
   if (code.includes("TIMEOUT")) return "查询超时";
   if (code.includes("RATE_LIMIT")) return "查询受限";
+  if (code.includes("PRICE_NOT_EXACT")) return "价格不是精确金额";
   if (code.includes("DISABLED")) return "当前未启用";
   return "查询失败";
 }
@@ -94,14 +96,14 @@ export function ConstraintNoMatchScreen({
         ))}
       </View>
 
-      {response.source_failures.some((failure) => failure.source_id.toLowerCase().includes("airline") || failure.source_id.toLowerCase().includes("flight")) ? (
+      {response.source_failures.some((failure) => failure.source_id === "fliggy_flyai" || failure.source_id.toLowerCase().includes("airline") || failure.source_id.toLowerCase().includes("flight")) ? (
         <View style={styles.coveragePanel}>
-          <Text style={styles.sectionTitle}>航司查询说明</Text>
+          <Text style={styles.sectionTitle}>票务查询说明</Text>
           {response.source_failures
-            .filter((failure) => failure.source_id.toLowerCase().includes("airline") || failure.source_id.toLowerCase().includes("flight"))
+            .filter((failure) => failure.source_id === "fliggy_flyai" || failure.source_id.toLowerCase().includes("airline") || failure.source_id.toLowerCase().includes("flight"))
             .map((failure) => (
               <View key={failure.failure_id} style={styles.coverageRow}>
-                <Text style={styles.coverageMode}>{airlineLabel(failure.source_id)} · {airlineOutcome(failure)}</Text>
+                <Text style={styles.coverageMode}>{ticketSourceLabel(failure.source_id)} · {airlineOutcome(failure)}</Text>
                 <Text style={styles.coverageMessage}>{failure.user_visible_message}</Text>
               </View>
             ))}

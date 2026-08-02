@@ -1,6 +1,6 @@
 # Project Index
 
-更新日期：2026-08-01
+更新日期：2026-08-02
 
 ## 技术栈
 
@@ -24,7 +24,7 @@
 - `frontend/src/pages/`：目录存在，当前未发现页面文件或路由文件。
 - `frontend/assets/`：地图与目的地静态视觉资源。
 - `backend/`：FastAPI 后端工程。
-- `browser_worker/`：独立 Node.js/Playwright 常驻浏览器进程；第一阶段只实现东航/上航 handler，通过 loopback 内部接口向后端返回脱敏统一航班结构。
+- `browser_worker/`：已退出默认运行路径的历史实现，仅保留迁移审计和旧测试参考；启动脚本与数据源注册均不再引用。
 - `backend/app/main.py`：后端应用、middleware、异常处理与全部路由注册入口。
 - `backend/app/models/`：Pydantic schema/model。
 - `backend/app/services/`：规划、解析、推荐、重算、结果集偏好传播、存储、可观测性等业务服务层；结果集席别传播位于 `result_set_preferences.py`。
@@ -38,8 +38,10 @@
   - `config_loader.py`：从 `TRAVEL_DATA_SOURCE_IDS` 与 `TRAVEL_SOURCE_<ID>_*` 构造不可变、类型化的 ENV-only 配置快照。
   - `provider_registry.py`：统一的 adapter settings model 与 Provider factory 注册表；启用源在启动期完成构造校验。
   - `rate_limiter.py`：按 source_id 共享的线程安全 HTTP 请求门控，使外部 Provider 的 `QPS_LIMIT` 在真实请求边界生效。
-  - `flight_providers.py`：航班请求构造、响应解析、逐来源 outcome 聚合和快照脱敏；已区分 VERIFIED、EMPTY、RATE_LIMITED、TIMEOUT、FAILED、DISABLED，并实现春秋航空 `airline_9c_public_query`、海航 `airline_hu_public_query`（含严格校验的两段联程）与青岛航空 `airline_qw_public_query` 匿名公开票价查询。其他航司仍需独立实现与验证，环境变量不能声明技术就绪。
-  - `browser_worker_client.py`、`browser_flight_providers.py`：loopback worker 客户端和浏览器航班 Provider；东航真实结果页模板与含税 DOM 已确认，源仍保持禁用，需完成许可、目标 Chromium 和 50 次真实 benchmark 才能启用。
+  - `flight_providers.py`：航班请求构造、逐来源 outcome 聚合与 FlyAI offer 接入；已区分 VERIFIED、EMPTY、RATE_LIMITED、TIMEOUT、FAILED、INVALID_RESPONSE、PRICE_NOT_EXACT、DISABLED。
+  - `flyai_cli_client.py`、`fliggy_flyai_provider.py`：固定版本官方 FlyAI CLI 的 fail-closed 子进程边界，以及共用的航班/铁路精确价格解析、60 秒缓存、single-flight、item fingerprint 和 allowlisted `jumpUrl`。
+  - `provider_booking.py`：Provider 内部 booking reference；只在规划阶段生成 plan/segment-bound `FLIGGY` redirect。
+  - `browser_worker_client.py`、`browser_flight_providers.py`：历史兼容代码，不在配置模型、Provider 注册表或默认启动脚本中。
 - `backend/app/core/`：请求上下文、安全策略、日志配置。
 - `backend/app/data/`：本地数据目录，如交通节点和目的地资产。
 - `backend/app/llm/`：Prompt、LLM 调用日志和版本相关文件。
@@ -55,7 +57,7 @@
 - 前端入口：`frontend/index.ts`，注册 `frontend/src/App.tsx`。
 - 后端入口：`backend/app/main.py`，FastAPI app 对象为 `app`。
 - 后端启动命令：`python -m uvicorn app.main:app --reload --app-dir backend`。
-- 浏览器 worker 启动命令：`cd browser_worker; npm install; npx playwright install chromium; npm run build; npm run start`。
+- FlyAI CLI 依赖：根目录 `package.json` / `package-lock.json` 固定 `@fly-ai/flyai-cli` 版本；运行时禁止 `npx -y` 动态安装。
 
 ## API Client
 
@@ -82,7 +84,7 @@
 - TTL 缓存服务：`backend/app/services/cache_store.py`。
 - 运行时 store：`backend/app/services/store.py`。
 - 默认 SQLite 路径配置：`.env.example` 中的 `TRAVEL_SQLITE_PATH=logs/travel_planner.sqlite3`。
-- 春秋航空、海航与青岛航空匿名公开查询已分别登记为 `airline_9c_public_query`、`airline_hu_public_query`、`airline_qw_public_query`；报价使用 60 秒进程内缓存，脱敏原始快照与规范化 offer 写入本地 SQLite `logs/flight_harvest.sqlite3`。
+- `fliggy_flyai` 是航班与铁路唯一运行时票务事实源；旧航司、浏览器航司、12306 查询和旧票务 redirect 已从配置模型、注册表与 `.env.example` 移除，不存在自动 fallback。
 - Redis/PostgreSQL 尚未实现，当前不提供对应运行配置。
 
 ## 配置文件
@@ -99,7 +101,7 @@
 - 启动后端：`.\.venv\Scripts\python -m uvicorn app.main:app --reload --app-dir backend`
 - 启动前端：`cd frontend; npm run start`
 - 启动脚本：`.\scripts\dev.ps1 -Target backend` / `frontend` / `test`
-- 浏览器 worker：`.\scripts\dev.ps1 -Target browser-worker`
+- FlyAI 50 样例门禁：`.\.venv\Scripts\python scripts\benchmark_fliggy_flyai.py --date <未来日期>`
 - 真机调试：`.\scripts\device-debug.ps1 -OpenQr`
 - 后端测试：`.\.venv\Scripts\python -m pytest backend\app\tests`
 - 前端 typecheck：`cd frontend; npm run typecheck`
@@ -107,6 +109,5 @@
 - Schema 导出：`.\.venv\Scripts\python scripts\export_schemas.py`
 - Provider 配置检查：`.\.venv\Scripts\python scripts\check_real_api_config.py --tier public`
 - 公开 live smoke：`.\.venv\Scripts\python scripts\live_smoke_real_apis.py --tier public`
-- 春秋航班 live smoke：`.\.venv\Scripts\python scripts\live_smoke_real_apis.py --tier public --provider flight`
-- 航司连续门禁 smoke：`.\.venv\Scripts\python scripts\continuous_flight_smoke.py --mode gate --iterations 3 --interval-seconds 0`
+- FlyAI 航班/铁路 live smoke：`.\.venv\Scripts\python scripts\live_smoke_real_apis.py --tier secret --provider flight --provider rail`
 - 春秋航空匿名查询验证：`docs/flight_provider_evidence/2026-07-18/spring_airlines_anonymous_query.md`

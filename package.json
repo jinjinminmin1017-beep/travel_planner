@@ -1,0 +1,8 @@
+{
+  "name": "travel-planner-runtime-tools",
+  "version": "0.1.0",
+  "private": true,
+  "dependencies": {
+    "@fly-ai/flyai-cli": "1.0.16"
+  }
+}

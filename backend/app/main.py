@@ -17,7 +17,7 @@ from app.core.logging import configure_logging
 from app.core.security import evaluate_request_security
 from app.data_sources.config_loader import load_data_source_configs, runtime_statuses
 from app.data_sources.provider_registry import validate_enabled_provider_factories
-from app.data_sources.redirect_providers import create_booking_redirect
+from app.data_sources.redirect_providers import RedirectProviderError, create_booking_redirect
 from app.models.schemas import (
     AsyncJob,
     AsyncJobStatus,
@@ -586,7 +586,10 @@ def booking_redirect(body: BookingRedirectRequest, request: Request) -> BookingR
     plan = get_plan(body.plan_id)
     if plan is None:
         raise HTTPException(status_code=404, detail="方案不存在，无法生成跳转。")
-    redirect = create_booking_redirect(body, plan)
+    try:
+        redirect = create_booking_redirect(body, plan)
+    except RedirectProviderError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return BookingRedirectResponse(
         request_id=ctx.request_id,
         trace_id=ctx.trace_id,

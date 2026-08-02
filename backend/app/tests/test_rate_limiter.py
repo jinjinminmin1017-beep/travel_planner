@@ -70,12 +70,11 @@ def test_enabled_http_provider_factories_use_rate_limited_clients() -> None:
             "nominatim_geocode",
             "opensky_states",
             "open_meteo_forecast",
-            "rail_12306_public_query",
         },
         "DEV",
     )
     try:
-        assert len(providers) == 5
+        assert len(providers) == 4
         assert all(isinstance(provider.client, RateLimitedHttpClient) for provider in providers)
     finally:
         for provider in providers:

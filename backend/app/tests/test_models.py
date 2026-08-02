@@ -77,7 +77,7 @@ def test_error_response_required_fields_and_extra_forbidden():
         details=None,
         generated_at=now_timepoint(),
     )
-    assert payload.schema_version == "1.17"
+    assert payload.schema_version == "1.18"
     with pytest.raises(ValidationError):
         ErrorResponse(
             request_id="req_1",

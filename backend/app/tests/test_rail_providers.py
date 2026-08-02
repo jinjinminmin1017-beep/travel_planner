@@ -126,9 +126,9 @@ def test_12306_public_query_filters_no_ticket_seats():
         )
 
 
-def test_planner_blocks_rail_plans_when_12306_public_query_is_empty(monkeypatch):
+def test_planner_blocks_rail_plans_when_fliggy_query_is_empty(monkeypatch):
     def fake_empty_search(request, environment=None):
-        return RailProviderSearchResult(offers=[], attempted_source_ids=["rail_12306_public_query"], failure_message="empty real response")
+        return RailProviderSearchResult(offers=[], attempted_source_ids=["fliggy_flyai"], failure_message="fliggy_flyai: empty response")
 
     monkeypatch.setattr("app.services.planner.search_rail_offers_with_enabled_provider_result", fake_empty_search)
     request = _travel_request("req_no_simulated_rail_fallback", "2026-05-21 Shanghai to Qingdao", "Shanghai", "Qingdao", date(2026, 5, 21))
@@ -140,18 +140,18 @@ def test_planner_blocks_rail_plans_when_12306_public_query_is_empty(monkeypatch)
     assert "rail_core_fact" in missing
     assert blocked_types
     assert explanations
-    assert any(failure.source_id == "rail_12306_public_query" and failure.failure_class == "CORE_FACT_FAILURE" for failure in failures)
+    assert any(failure.source_id == "fliggy_flyai" and failure.failure_class == "CORE_FACT_FAILURE" for failure in failures)
 
 
-def test_planner_reports_12306_rate_limit_without_fake_plan(monkeypatch):
+def test_planner_reports_fliggy_rate_limit_without_fake_plan(monkeypatch):
     rail_calls = []
 
     def fake_rate_limited_search(request, environment=None):
         rail_calls.append((request.origin_station, request.destination_station))
         return RailProviderSearchResult(
             offers=[],
-            attempted_source_ids=["rail_12306_public_query"],
-            failure_message="rail_12306_public_query: 12306 public query failed: 请求频率超过限制",
+            attempted_source_ids=["fliggy_flyai"],
+            failure_message="fliggy_flyai: FLIGGY_RATE_LIMITED: 请求频率超过限制",
         )
 
     monkeypatch.setattr("app.services.planner.search_rail_offers_with_enabled_provider_result", fake_rate_limited_search)
@@ -162,7 +162,7 @@ def test_planner_reports_12306_rate_limit_without_fake_plan(monkeypatch):
     assert plans
     assert not any(plan.plan_type in {PlanType.DIRECT_RAIL, PlanType.TRANSFER_RAIL} for plan in plans)
     assert "rail_core_fact" in missing
-    failure = next(item for item in failures if item.source_id == "rail_12306_public_query")
+    failure = next(item for item in failures if item.source_id == "fliggy_flyai")
     assert failure.error_code == "RAIL_PROVIDER_RATE_LIMITED"
     assert "访问限制" in failure.user_visible_message
     assert any("访问限制" in item.user_visible_message for item in explanations)
@@ -170,12 +170,12 @@ def test_planner_reports_12306_rate_limit_without_fake_plan(monkeypatch):
     assert len(rail_calls) == 1
 
 
-def test_planner_classifies_missing_12306_price_as_core_fact_failure(monkeypatch):
+def test_planner_classifies_fliggy_masked_price_as_core_fact_failure(monkeypatch):
     def fake_missing_price_search(request, environment=None):
         return RailProviderSearchResult(
             offers=[],
-            attempted_source_ids=["rail_12306_public_query"],
-            failure_message="rail_12306_public_query: 12306 public query returned no priced available seats for G532",
+            attempted_source_ids=["fliggy_flyai"],
+            failure_message="fliggy_flyai: FLIGGY_PRICE_NOT_EXACT: masked price for G532",
         )
 
     monkeypatch.setattr("app.services.planner.search_rail_offers_with_enabled_provider_result", fake_missing_price_search)
@@ -186,18 +186,18 @@ def test_planner_classifies_missing_12306_price_as_core_fact_failure(monkeypatch
     assert plans
     assert not any(plan.plan_type in {PlanType.DIRECT_RAIL, PlanType.TRANSFER_RAIL} for plan in plans)
     assert "rail_core_fact" in missing
-    failure = next(item for item in failures if item.source_id == "rail_12306_public_query")
+    failure = next(item for item in failures if item.source_id == "fliggy_flyai")
     assert failure.error_code == "RAIL_PROVIDER_MISSING_PRICE"
-    assert "有票和票价" in failure.user_visible_message
-    assert any("有票和票价" in warning for warning in warnings)
+    assert "精确票价" in failure.user_visible_message
+    assert any("精确票价" in warning for warning in warnings)
 
 
-def test_planner_classifies_all_empty_12306_pairs_as_no_direct_result(monkeypatch):
+def test_planner_classifies_all_empty_fliggy_pairs_as_no_direct_result(monkeypatch):
     def fake_empty_search(request, environment=None):
         return RailProviderSearchResult(
             offers=[],
-            attempted_source_ids=["rail_12306_public_query"],
-            failure_message="rail_12306_public_query: empty response",
+            attempted_source_ids=["fliggy_flyai"],
+            failure_message="fliggy_flyai: empty response",
         )
 
     monkeypatch.setattr("app.services.planner.search_rail_offers_with_enabled_provider_result", fake_empty_search)
@@ -208,10 +208,10 @@ def test_planner_classifies_all_empty_12306_pairs_as_no_direct_result(monkeypatc
     assert plans
     assert not any(plan.plan_type in {PlanType.DIRECT_RAIL, PlanType.TRANSFER_RAIL} for plan in plans)
     assert "rail_core_fact" in missing
-    failure = next(item for item in failures if item.source_id == "rail_12306_public_query")
+    failure = next(item for item in failures if item.source_id == "fliggy_flyai")
     assert failure.error_code == "RAIL_PROVIDER_EMPTY"
-    assert "有票直达车次" in failure.user_visible_message
-    assert any("有票直达车次" in warning for warning in warnings)
+    assert "直达车次" in failure.user_visible_message
+    assert any("直达车次" in warning for warning in warnings)
 
 
 def _travel_request(request_id: str, raw: str, origin: str, destination: str, travel_date: date) -> TravelRequest:

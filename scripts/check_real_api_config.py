@@ -16,6 +16,7 @@ sys.path.insert(0, str(BACKEND))
 from app.data_sources.config_loader import (  # noqa: E402
     DataSourceConfigurationError,
     expected_source_env_suffixes,
+    has_required_secret,
     load_data_source_configs,
     load_data_source_settings,
     required_secret_envs,
@@ -29,12 +30,6 @@ PUBLIC_READ_ONLY_SOURCE_IDS = {
     "nominatim_geocode": "地点解析辅助",
     "opensky_states": "航班动态辅助",
     "open_meteo_forecast": "天气风险辅助",
-    "rail_12306_public_query": "12306 公开匿名车次、票价和席别查询",
-    "rail_12306_redirect": "12306 官方入口跳转",
-    "airline_official_redirect": "航司官网跳转",
-    "airline_9c_public_query": "春秋航空公开匿名航班、票价和舱位查询",
-    "airline_hu_public_query": "海航公开匿名航班、票价和舱位查询",
-    "airline_qw_public_query": "青岛航空公开匿名航班、票价和舱位查询",
     "amap_uri_redirect": "地图导航跳转",
 }
 
@@ -119,13 +114,27 @@ def validate_public_tier() -> list[str]:
 
 
 def validate_secret_tier(selected_sources: list[str]) -> list[str]:
-    if "flight" in selected_sources:
-        return ["flight: 已实现的春秋、海航和青岛航空查询无需密钥，请使用 public tier 验证"]
-    return []
+    failures: list[str] = []
+    if "ticket" not in selected_sources:
+        return failures
+    configs, statuses = _configs_and_statuses()
+    config = configs.get("fliggy_flyai")
+    status = statuses.get("fliggy_flyai")
+    if config is None or status is None:
+        return ["ticket: fliggy_flyai is not registered"]
+    if not config.enabled:
+        failures.append("ticket: fliggy_flyai is disabled")
+    if config.license_status != "APPROVED":
+        failures.append("ticket: fliggy_flyai license is not approved")
+    if not has_required_secret("fliggy_flyai"):
+        failures.append("ticket: fliggy_flyai API key is missing")
+    if status.health_status != "OK":
+        failures.append(f"ticket: fliggy_flyai status is {status.health_status}")
+    return failures
 
 
 def validate_full_tier() -> list[str]:
-    return validate_public_tier()
+    return [*validate_public_tier(), *validate_secret_tier(["ticket"])]
 
 
 def _print_failures(title: str, failures: list[str]) -> None:
@@ -137,14 +146,14 @@ def _print_failures(title: str, failures: list[str]) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Check ENV-only real API provider configuration.")
     parser.add_argument("--tier", choices=("public", "secret", "full"), default="public")
-    parser.add_argument("--source", action="append", choices=("flight",))
+    parser.add_argument("--source", action="append", choices=("ticket",))
     args = parser.parse_args()
 
     try:
         if args.tier == "public":
             failures = validate_public_tier()
         elif args.tier == "secret":
-            failures = validate_secret_tier(args.source or ["flight"])
+            failures = validate_secret_tier(args.source or ["ticket"])
         else:
             failures = validate_full_tier()
     except DataSourceConfigurationError as exc:

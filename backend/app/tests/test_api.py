@@ -30,14 +30,15 @@ def _assert_no_legacy_runtime_plans(plans):
 def test_health_and_data_source_status():
     health = client.get("/api/health")
     assert health.status_code == 200
-    assert health.json()["schema_version"] == "1.17"
+    assert health.json()["schema_version"] == "1.18"
 
     status = client.get("/api/data-sources/status")
     assert status.status_code == 200
     body = status.json()
-    assert body["schema_version"] == "1.17"
+    assert body["schema_version"] == "1.18"
     source_ids = {source["source_id"] for source in body["sources"]}
-    assert {"amap_route", "baidu_map_route", "rail_12306_public_query", "real_llm", "internal_calc"}.issubset(source_ids)
+    assert {"amap_route", "baidu_map_route", "fliggy_flyai", "real_llm", "internal_calc"}.issubset(source_ids)
+    assert "rail_12306_public_query" not in source_ids
     assert "airline_mu_public_query" not in source_ids
     assert not any(source_id.startswith("simulated_") for source_id in source_ids)
     assert "source_id" in body["sources"][0]
@@ -224,12 +225,12 @@ def test_parse_uses_llm_repair_once_when_enabled_provider_returns_invalid_output
         model_name = "test-intent-model"
 
         def parse_intent(self, raw_user_input, request_id, current_date, default_timezone):
-            return '{"schema_version":"1.17","origin_text":"","destination_text":"青岛金水假日酒店"}'
+            return '{"schema_version":"1.18","origin_text":"","destination_text":"青岛金水假日酒店"}'
 
         def repair_intent(self, raw_llm_output, invalid_reasons, raw_user_input, request_id):
             return (
                 "{"
-                '"schema_version":"1.17",'
+                '"schema_version":"1.18",'
                 f'"request_id":"{request_id}",'
                 f'"raw_user_input":"{raw_user_input}",'
                 '"origin_text":"上海嘉定南翔格林公馆",'
@@ -509,7 +510,7 @@ def test_async_plan_uses_idempotency_key_to_reuse_job():
 
 def test_feedback_submission_is_traceable_and_rejects_sensitive_message():
     payload = {
-        "schema_version": "1.17",
+        "schema_version": "1.18",
         "request_id": "req_feedback",
         "trace_id": "trace_feedback",
         "correlation_id": "corr_feedback",
@@ -535,7 +536,7 @@ def test_feedback_submission_is_traceable_and_rejects_sensitive_message():
 
 def test_app_event_submission_updates_metrics_and_rejects_sensitive_metadata():
     payload = {
-        "schema_version": "1.17",
+        "schema_version": "1.18",
         "event_type": "INPUT_SUBMITTED",
         "request_id": "req_event",
         "trace_id": "trace_event",
@@ -558,7 +559,7 @@ def test_growth_retention_events_are_counted_without_sensitive_payloads():
         response = client.post(
             "/api/events",
             json={
-                "schema_version": "1.17",
+                "schema_version": "1.18",
                 "event_type": event_type,
                 "request_id": "req_growth",
                 "trace_id": "trace_growth",
@@ -576,7 +577,7 @@ def test_growth_retention_events_are_counted_without_sensitive_payloads():
     blocked = client.post(
         "/api/events",
         json={
-            "schema_version": "1.17",
+            "schema_version": "1.18",
             "event_type": "PREFERENCE_UPDATED",
             "request_id": "req_growth",
             "trace_id": "trace_growth",
@@ -625,7 +626,7 @@ def test_plan_returns_failed_business_response_when_core_providers_return_empty(
         "app.services.planner.search_rail_offers_with_enabled_provider_result",
         lambda request, environment=None: RailProviderSearchResult(
             offers=[],
-            attempted_source_ids=["rail_12306_public_query"],
+            attempted_source_ids=["fliggy_flyai"],
             failure_message="rail empty result",
         ),
     )
@@ -633,7 +634,7 @@ def test_plan_returns_failed_business_response_when_core_providers_return_empty(
         "app.services.planner.search_flight_offers_with_enabled_provider_result",
         lambda request, environment=None: FlightProviderSearchResult(
             offers=[],
-            attempted_source_ids=["airline_mu_public_query"],
+            attempted_source_ids=["fliggy_flyai"],
             failure_message="flight empty result",
         ),
     )
@@ -646,7 +647,7 @@ def test_plan_returns_failed_business_response_when_core_providers_return_empty(
     assert body["recommendation_result"] is None
     assert "travel_plan" in body["missing_components"]
     assert "rail_core_fact" in body["missing_components"]
-    assert any(failure["source_id"] == "rail_12306_public_query" for failure in body["source_failures"])
+    assert any(failure["source_id"] == "fliggy_flyai" for failure in body["source_failures"])
 
 
 def test_plan_uses_real_llm_recommendations_when_provider_returns_valid_output(monkeypatch):
@@ -726,7 +727,7 @@ def test_recalculate_rail_seat_updates_cost_comfort_and_stored_snapshot():
     recalc = client.post(
         "/api/travel/recalculate",
         json={
-            "schema_version": "1.17",
+            "schema_version": "1.18",
             "request_id": "req_test",
             "idempotency_key": "idem_test",
             "plan_id": plan["plan_id"],
@@ -832,7 +833,7 @@ def test_recalculate_result_set_syncs_canonical_seat_only_to_matching_train(monk
     recalc = client.post(
         "/api/travel/recalculate",
         json={
-            "schema_version": "1.17",
+            "schema_version": "1.18",
             "request_id": "req_result_set",
             "idempotency_key": "idem_result_set",
             "plan_id": target_plan["plan_id"],
@@ -918,7 +919,7 @@ def test_recalculate_result_set_does_not_require_other_train_to_offer_selected_s
     recalc = client.post(
         "/api/travel/recalculate",
         json={
-            "schema_version": "1.17",
+            "schema_version": "1.18",
             "request_id": "req_train_specific_regression",
             "idempotency_key": "idem_train_specific_regression",
             "plan_id": target_plan_model.plan_id,
@@ -961,7 +962,7 @@ def test_recalculate_local_transfer_consistency_on_dynamic_rail_plan():
     transfer_recalc = client.post(
         "/api/travel/recalculate",
         json={
-            "schema_version": "1.17",
+            "schema_version": "1.18",
             "request_id": "req_transfer",
             "idempotency_key": "idem_transfer",
             "plan_id": plan["plan_id"],
@@ -996,7 +997,7 @@ def test_recalculate_local_transfer_consistency_on_dynamic_rail_plan():
         walk_recalc = client.post(
             "/api/travel/recalculate",
             json={
-                "schema_version": "1.17",
+                "schema_version": "1.18",
                 "request_id": "req_walk",
                 "idempotency_key": "idem_walk",
                 "plan_id": transfer_plan["plan_id"],
@@ -1027,7 +1028,7 @@ def test_recalculate_rejects_historical_rule_estimated_transfer_options():
     response = client.post(
         "/api/travel/recalculate",
         json={
-            "schema_version": "1.17",
+            "schema_version": "1.18",
             "request_id": "req_historical_transfer",
             "idempotency_key": "idem_historical_transfer",
             "plan_id": plan["plan_id"],
@@ -1068,7 +1069,7 @@ def test_recalculate_is_idempotent_and_can_refresh_recommendation(monkeypatch):
     plan = _first_dynamic_rail_plan(plan_response["plans"])
     rail_segment = next(seg for seg in plan["segments"] if seg["segment_type"] == "RAIL")
     body = {
-        "schema_version": "1.17",
+        "schema_version": "1.18",
         "request_id": "req_recalc_idem",
         "idempotency_key": "idem_recalc_same",
         "plan_id": plan["plan_id"],
@@ -1103,7 +1104,7 @@ def test_booking_redirect():
     redirect = client.post(
         "/api/redirect/booking",
         json={
-            "schema_version": "1.17",
+            "schema_version": "1.18",
             "request_id": "req_test",
             "idempotency_key": "idem_redirect",
             "plan_id": plan["plan_id"],
@@ -1191,7 +1192,7 @@ def test_api_error_paths_return_error_response():
     missing_recalc = client.post(
         "/api/travel/recalculate",
         json={
-            "schema_version": "1.17",
+            "schema_version": "1.18",
             "request_id": "req_missing",
             "idempotency_key": "idem_missing",
             "plan_id": "missing_plan",
@@ -1215,7 +1216,7 @@ def test_api_error_paths_return_error_response():
     invalid_option = client.post(
         "/api/travel/recalculate",
         json={
-            "schema_version": "1.17",
+            "schema_version": "1.18",
             "request_id": "req_invalid_option",
             "idempotency_key": "idem_invalid_option",
             "plan_id": plan["plan_id"],
@@ -1231,5 +1232,5 @@ def test_api_error_paths_return_error_response():
         },
     )
     assert invalid_option.status_code == 400
-    assert invalid_option.json()["schema_version"] == "1.17"
+    assert invalid_option.json()["schema_version"] == "1.18"
     assert invalid_option.json()["error_code"] == "HTTP_400"

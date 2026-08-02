@@ -5,14 +5,12 @@ from typing import Callable, Iterable, TypeVar
 
 from app.data_sources.config_loader import (
     ADAPTER_SETTINGS_MODELS,
-    BrowserFlightSourceSettings,
     CredentialedHttpSourceSettings,
     DataSourceConfigurationError,
     DataSourceSettings,
-    FlightSourceSettings,
+    FlyAICliSourceSettings,
     HttpSourceSettings,
     NominatimSourceSettings,
-    RailSourceSettings,
     RealLlmSourceSettings,
     load_data_source_settings,
     secret_value,
@@ -125,17 +123,13 @@ def _nominatim_factory(settings: DataSourceSettings) -> object:
 
 def _redirect_factory(settings: DataSourceSettings) -> object:
     from app.data_sources.redirect_providers import (
-        AirlineOfficialRedirectProvider,
         AmapUriRedirectProvider,
         BaiduUriRedirectProvider,
-        Rail12306RedirectProvider,
     )
 
     providers = {
         "amap_uri_redirect": AmapUriRedirectProvider,
         "baidu_uri_redirect": BaiduUriRedirectProvider,
-        "airline_official_redirect": AirlineOfficialRedirectProvider,
-        "rail_12306_redirect": Rail12306RedirectProvider,
     }
     provider = providers.get(settings.source_id)
     if provider is None:
@@ -154,64 +148,6 @@ def _opensky_factory(settings: DataSourceSettings) -> object:
     )
 
 
-def _spring_airlines_factory(settings: DataSourceSettings) -> object:
-    from app.data_sources.flight_providers import SpringAirlinesPublicQueryProvider
-
-    typed = _require_type(settings, FlightSourceSettings)
-    return SpringAirlinesPublicQueryProvider(
-        client=_rate_limited_client(typed),
-        base_url=typed.base_url or "",
-        user_agent=typed.user_agent or "",
-        cache_ttl_seconds=typed.cache_ttl_seconds,
-        allowed_hosts=typed.allowed_hosts,
-        timeout_seconds=typed.timeout_seconds,
-    )
-
-
-def _hainan_airlines_factory(settings: DataSourceSettings) -> object:
-    from app.data_sources.flight_providers import HainanAirlinesPublicQueryProvider
-
-    typed = _require_type(settings, FlightSourceSettings)
-    return HainanAirlinesPublicQueryProvider(
-        client=_rate_limited_client(typed, follow_redirects=True),
-        base_url=typed.base_url or "",
-        user_agent=typed.user_agent or "",
-        cache_ttl_seconds=typed.cache_ttl_seconds,
-        allowed_hosts=typed.allowed_hosts,
-        timeout_seconds=typed.timeout_seconds,
-    )
-
-
-def _qingdao_airlines_factory(settings: DataSourceSettings) -> object:
-    from app.data_sources.flight_providers import QingdaoAirlinesPublicQueryProvider
-
-    typed = _require_type(settings, FlightSourceSettings)
-    return QingdaoAirlinesPublicQueryProvider(
-        client=_rate_limited_client(typed),
-        base_url=typed.base_url or "",
-        user_agent=typed.user_agent or "",
-        cache_ttl_seconds=typed.cache_ttl_seconds,
-        allowed_hosts=typed.allowed_hosts,
-        timeout_seconds=typed.timeout_seconds,
-    )
-
-
-def _browser_airline_factory(settings: DataSourceSettings) -> object:
-    from app.data_sources.browser_flight_providers import BrowserAirlineFlightProvider
-    from app.data_sources.browser_worker_client import BrowserWorkerClient
-
-    typed = _require_type(settings, BrowserFlightSourceSettings)
-    return BrowserAirlineFlightProvider(
-        source_id=typed.source_id,
-        client=BrowserWorkerClient(
-            worker_url=typed.worker_url or "",
-            allowed_hosts=typed.worker_allowed_hosts,
-            timeout_seconds=typed.timeout_seconds,
-        ),
-        cache_ttl_seconds=typed.cache_ttl_seconds,
-    )
-
-
 def _weather_factory(settings: DataSourceSettings) -> object:
     from app.data_sources.weather_providers import OpenMeteoForecastProvider
 
@@ -223,20 +159,20 @@ def _weather_factory(settings: DataSourceSettings) -> object:
     )
 
 
-def _rail_factory(settings: DataSourceSettings) -> object:
-    from app.data_sources.rail_providers import Official12306RailProvider
+def _fliggy_flyai_factory(settings: DataSourceSettings) -> object:
+    from app.data_sources.fliggy_flyai_provider import FliggyFlyAIProvider
+    from app.data_sources.flyai_cli_client import FlyAIClient
 
-    typed = _require_type(settings, RailSourceSettings)
-    return Official12306RailProvider(
-        client=_rate_limited_client(
-            typed,
-            min_interval_seconds=typed.min_interval_seconds,
-            follow_redirects=True,
+    typed = _require_type(settings, FlyAICliSourceSettings)
+    return FliggyFlyAIProvider(
+        client=FlyAIClient(
+            api_key=secret_value(typed.api_key) or "",
+            executable=typed.executable or "",
+            timeout_seconds=typed.timeout_seconds,
         ),
-        base_url=typed.base_url or "",
-        user_agent=typed.user_agent or "",
+        qps_limit=typed.qps_limit,
         cache_ttl_seconds=typed.cache_ttl_seconds,
-        timeout_seconds=typed.timeout_seconds,
+        redirect_allowed_hosts=typed.redirect_allowed_hosts,
     )
 
 
@@ -267,24 +203,8 @@ ADAPTER_REGISTRY: dict[str, AdapterRegistration] = {
     "baidu_uri_redirect": AdapterRegistration(ADAPTER_SETTINGS_MODELS["baidu_uri_redirect"], _redirect_factory),
     "opensky_states": AdapterRegistration(ADAPTER_SETTINGS_MODELS["opensky_states"], _opensky_factory),
     "open_meteo_forecast": AdapterRegistration(ADAPTER_SETTINGS_MODELS["open_meteo_forecast"], _weather_factory),
-    "airline_official_redirect": AdapterRegistration(
-        ADAPTER_SETTINGS_MODELS["airline_official_redirect"], _redirect_factory
-    ),
-    "spring_airlines_public_query": AdapterRegistration(
-        ADAPTER_SETTINGS_MODELS["spring_airlines_public_query"], _spring_airlines_factory
-    ),
-    "hainan_airlines_public_query": AdapterRegistration(
-        ADAPTER_SETTINGS_MODELS["hainan_airlines_public_query"], _hainan_airlines_factory
-    ),
-    "qingdao_airlines_public_query": AdapterRegistration(
-        ADAPTER_SETTINGS_MODELS["qingdao_airlines_public_query"], _qingdao_airlines_factory
-    ),
-    "browser_airline_flight": AdapterRegistration(
-        ADAPTER_SETTINGS_MODELS["browser_airline_flight"], _browser_airline_factory
-    ),
-    "rail_12306_redirect": AdapterRegistration(ADAPTER_SETTINGS_MODELS["rail_12306_redirect"], _redirect_factory),
-    "rail_12306_public_query": AdapterRegistration(
-        ADAPTER_SETTINGS_MODELS["rail_12306_public_query"], _rail_factory
+    "fliggy_flyai_cli": AdapterRegistration(
+        ADAPTER_SETTINGS_MODELS["fliggy_flyai_cli"], _fliggy_flyai_factory
     ),
     "real_llm": AdapterRegistration(ADAPTER_SETTINGS_MODELS["real_llm"], _llm_factory),
 }

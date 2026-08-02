@@ -486,12 +486,8 @@ def test_qingdao_airlines_business_no_flight_message_is_verified_empty():
     assert offers == []
 
 
-def test_unimplemented_public_airline_cannot_be_enabled_through_env(monkeypatch):
-    assert [provider.source_id for provider in build_enabled_flight_providers("DEV")] == [
-        "airline_9c_public_query",
-        "airline_hu_public_query",
-        "airline_qw_public_query",
-    ]
+def test_retired_public_airline_cannot_be_enabled_through_env(monkeypatch):
+    assert build_enabled_flight_providers("DEV") == []
 
     monkeypatch.setenv("TRAVEL_SOURCE_AIRLINE_MU_PUBLIC_QUERY_ENABLED", "true")
     monkeypatch.setenv("TRAVEL_SOURCE_AIRLINE_MU_PUBLIC_QUERY_LICENSE_STATUS", "APPROVED")
@@ -506,15 +502,10 @@ def test_unimplemented_public_airline_cannot_be_enabled_through_env(monkeypatch)
 def test_official_airline_implementation_registry_is_program_owned_and_fail_closed():
     assert OFFICIAL_AIRLINE_REQUEST_SCHEMAS == {}
     assert load_data_source_settings().by_adapter("official_airline_public_query") == ()
-    assert [source.source_id for source in load_data_source_settings().by_adapter("spring_airlines_public_query")] == [
-        "airline_9c_public_query"
-    ]
-    assert [source.source_id for source in load_data_source_settings().by_adapter("hainan_airlines_public_query")] == [
-        "airline_hu_public_query"
-    ]
-    assert [source.source_id for source in load_data_source_settings().by_adapter("qingdao_airlines_public_query")] == [
-        "airline_qw_public_query"
-    ]
+    assert load_data_source_settings().by_adapter("spring_airlines_public_query") == ()
+    assert load_data_source_settings().by_adapter("hainan_airlines_public_query") == ()
+    assert load_data_source_settings().by_adapter("qingdao_airlines_public_query") == ()
+    assert [source.source_id for source in load_data_source_settings().by_adapter("fliggy_flyai_cli")] == ["fliggy_flyai"]
 
 
 def test_public_airline_provider_blocks_captcha_and_rate_limit():
@@ -580,10 +571,6 @@ def test_redact_flight_snapshot_handles_headers_and_query_tokens():
 
 
 def test_flight_search_result_reports_disabled_provider_when_not_configured(monkeypatch):
-    monkeypatch.setenv("TRAVEL_SOURCE_AIRLINE_9C_PUBLIC_QUERY_ENABLED", "false")
-    monkeypatch.setenv("TRAVEL_SOURCE_AIRLINE_HU_PUBLIC_QUERY_ENABLED", "false")
-    monkeypatch.setenv("TRAVEL_SOURCE_AIRLINE_QW_PUBLIC_QUERY_ENABLED", "false")
-    reset_data_source_settings_cache()
     result = search_flight_offers_with_enabled_provider_result(
         FlightSearchRequest(origin_iata="SHA", destination_iata="WNZ", departure_date=date(2026, 6, 28)),
         environment="DEV",
@@ -591,8 +578,9 @@ def test_flight_search_result_reports_disabled_provider_when_not_configured(monk
 
     assert result.offers == []
     assert result.attempted_source_ids == []
-    assert result.failure_message == "no enabled approved official-airline flight provider"
+    assert result.failure_message == "no enabled approved Fliggy FlyAI ticket provider"
     assert result.outcomes[0].status == "DISABLED"
+    assert result.outcomes[0].source_id == "fliggy_flyai"
     assert result.outcomes[0].error_code == "FLIGHT_PROVIDER_DISABLED"
 
 

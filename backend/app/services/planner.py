@@ -23,6 +23,7 @@ from app.data_sources.flight_providers import (
 )
 from app.data_sources.map_providers import estimate_route_with_enabled_provider_result
 from app.data_sources.rail_providers import RailOffer, RailSearchRequest, search_rail_offers_with_enabled_provider_result
+from app.data_sources.redirect_providers import build_fliggy_redirect
 from app.models.schemas import (
     AirportCandidate,
     CabinOption,
@@ -139,8 +140,8 @@ def _source(source_id: str, name: str, source_type: DataSourceType = DataSourceT
 
 
 MAP_SOURCE = _source("amap_route", "AMap Route Planning API", DataSourceType.MAP)
-RAIL_SOURCE = _source("rail_12306_public_query", "12306 Public Ticket Query", DataSourceType.RAIL)
-FLIGHT_SOURCE = _source("airline_public_query", "Official Airline Public Flight Query", DataSourceType.FLIGHT)
+RAIL_SOURCE = _source("fliggy_flyai", "Fliggy FlyAI", DataSourceType.OTA)
+FLIGHT_SOURCE = _source("fliggy_flyai", "Fliggy FlyAI", DataSourceType.OTA)
 TAXI_SOURCE = _source("amap_route", "AMap Route Planning API", DataSourceType.MAP)
 INTERNAL_SOURCE = _source("internal_calc", "Internal Deterministic Calculator", DataSourceType.INTERNAL_CALCULATION)
 
@@ -166,7 +167,7 @@ class PlanningIssueCollector:
     def has_rail_rate_limit(self) -> bool:
         with self._lock:
             return any(
-                failure.source_id == "rail_12306_public_query" and failure.error_code == "RAIL_PROVIDER_RATE_LIMITED"
+                failure.source_id == "fliggy_flyai" and failure.error_code == "RAIL_PROVIDER_RATE_LIMITED"
                 for failure in self.failures
             )
 
@@ -262,7 +263,7 @@ def _rail(segment_id: str, train: str, origin: str, destination: str, day, dep_h
         )
     )
     if not result.offers:
-        source_id = result.attempted_source_ids[-1] if result.attempted_source_ids else "rail_12306_public_query"
+        source_id = result.attempted_source_ids[-1] if result.attempted_source_ids else "fliggy_flyai"
         raise ValueError(f"real rail provider unavailable: {source_id}; {result.failure_message or 'no offers returned'}")
     offer = result.offers[0]
     return RailSegment(
@@ -295,6 +296,26 @@ def _rail_segment_from_offer(segment_id: str, offer: RailOffer) -> RailSegment:
         selected_seat_option_id=selected.option_id,
         data_source=offer.data_source,
     )
+
+
+def _attach_offer_redirects(
+    plan: TravelPlan,
+    offer_segments: list[tuple[RailOffer | FlightOffer, list[RailSegment | FlightSegment]]],
+) -> TravelPlan:
+    for offer, segments in offer_segments:
+        reference = offer.booking_reference
+        if reference is None or reference.source_id != "fliggy_flyai":
+            continue
+        for segment in segments:
+            plan.booking_redirects.append(
+                build_fliggy_redirect(
+                    reference=reference,
+                    plan_id=plan.plan_id,
+                    segment_id=segment.segment_id,
+                    metadata=offer.data_source,
+                )
+            )
+    return plan
 
 
 def _cabin_options_from_offer(offer: FlightOffer) -> list[CabinOption]:
@@ -339,7 +360,7 @@ def _flight(segment_id: str, flight: str, origin: str, destination: str, day, de
         )
     )
     if not result.offers:
-        source_id = result.attempted_source_ids[-1] if result.attempted_source_ids else "airline_public_query"
+        source_id = result.attempted_source_ids[-1] if result.attempted_source_ids else "fliggy_flyai"
         raise ValueError(f"real flight provider unavailable: {source_id}; {result.failure_message or 'no offers returned'}")
     offer = result.offers[0]
     first_segment = offer.segments[0] if offer.segments else None
@@ -381,7 +402,7 @@ def _real_direct_flight_segment(segment_id: str, flight: str, origin: str, desti
         )
     )
     if not result.offers:
-        source_id = result.attempted_source_ids[-1] if result.attempted_source_ids else "airline_public_query"
+        source_id = result.attempted_source_ids[-1] if result.attempted_source_ids else "fliggy_flyai"
         raise ValueError(f"real flight provider unavailable: {source_id}; {result.failure_message or 'no offers returned'}")
 
     offer = result.offers[0]
@@ -957,7 +978,7 @@ def _legacy_flight_outcomes(result: FlightProviderSearchResult) -> list[FlightPr
             offer_count=0,
             message=result.failure_message or "no flight offers returned",
         )
-        for source_id in (result.attempted_source_ids or ["airline_public_query"])
+        for source_id in (result.attempted_source_ids or ["fliggy_flyai"])
     ]
 
 
@@ -1037,11 +1058,12 @@ def _has_unconfirmed_in_scope_transport(
 
 
 def _rail_provider_error_code(message: str) -> str:
-    if any(marker in message for marker in ("超过每日", "次数", "频率", "限制", "quota", "rate limit", "limit")):
+    lowered = message.lower()
+    if any(marker in lowered for marker in ("超过每日", "次数", "频率", "限制", "quota", "rate limit", "limit")):
         return "RAIL_PROVIDER_RATE_LIMITED"
     if any(marker in message for marker in ("station code missing", "站点编码", "电报码")):
         return "RAIL_PROVIDER_STATION_CODE_MISSING"
-    if "no priced available seats" in message or "缺价" in message or "票价" in message:
+    if any(marker in lowered for marker in ("no priced available seats", "fliggy_price_not_exact", "price_not_exact", "缺价", "票价")):
         return "RAIL_PROVIDER_MISSING_PRICE"
     if message and "empty response" in message and not any(marker in message for marker in ("failed", "error", "Exception", "异常", "失败")):
         return "RAIL_PROVIDER_EMPTY"
@@ -1052,14 +1074,14 @@ def _rail_provider_error_code(message: str) -> str:
 
 def _rail_provider_user_message(error_code: str) -> str:
     if error_code == "RAIL_PROVIDER_RATE_LIMITED":
-        return "12306 公开查询触发调用频率或访问限制，暂时无法验证真实车次、票价和有票席别。"
+        return "飞猪 FlyAI 触发调用频率或访问限制，暂时无法验证真实车次、精确票价和席别。"
     if error_code == "RAIL_PROVIDER_STATION_CODE_MISSING":
-        return "未能从 12306 站名目录匹配完整站点电报码，铁路方案已阻断。"
+        return "未能构造完整的铁路站点查询，铁路方案已阻断。"
     if error_code == "RAIL_PROVIDER_MISSING_PRICE":
-        return "12306 公开查询未返回可同时验证有票和票价的席别，铁路方案已阻断。"
+        return "飞猪 FlyAI 未返回可验证的精确票价与席别，铁路方案已阻断。"
     if error_code == "RAIL_PROVIDER_ERROR":
-        return "12306 公开查询失败，暂时无法验证真实车次、票价和有票席别。"
-    return "12306 公开查询暂未返回可验证的有票直达车次，已阻断铁路直达方案。"
+        return "飞猪 FlyAI 查询失败，暂时无法验证真实车次、精确票价和席别。"
+    return "飞猪 FlyAI 暂未返回可验证的直达车次，已阻断铁路直达方案。"
 
 
 def _record_rail_provider_block(
@@ -1084,7 +1106,7 @@ def _record_rail_provider_block(
     collector.add_missing(missing_component)
     collector.add_warning(user_visible_message)
     collector.add_source_failure(
-        source_id="rail_12306_public_query",
+        source_id="fliggy_flyai",
         adapter_name="RailPlanningProvider",
         failure_class=SourceFailureClass.CORE_FACT_FAILURE,
         handling_strategy=SourceFailureHandlingStrategy.BLOCK_PLAN,
@@ -1112,7 +1134,7 @@ def _record_rail_connection_not_found(collector: PlanningIssueCollector) -> None
         message="provider offers were available for both rail legs but no safe connection passed deterministic validation",
         user_visible_message=user_visible_message,
         impacted_plan_types=[PlanType.TRANSFER_RAIL],
-        source_used_id="rail_12306_public_query",
+        source_used_id="fliggy_flyai",
         fallback_source_id=None,
         fallback_reason=None,
         fallback_used=False,
@@ -1131,9 +1153,9 @@ def _transfer_rail_block_explanation(collector: PlanningIssueCollector) -> tuple
 
 def _direct_rail_block_message(collector: PlanningIssueCollector) -> str:
     for failure in collector.failures:
-        if failure.source_id == "rail_12306_public_query" and failure.error_code != "RAIL_PROVIDER_EMPTY":
+        if failure.source_id == "fliggy_flyai" and failure.error_code != "RAIL_PROVIDER_EMPTY":
             return failure.user_visible_message
-    return "12306 公开查询暂未返回可验证的有票直达车次，动态直达铁路方案已阻断。"
+    return "飞猪数据暂未返回可验证且价格精确的直达车次，动态直达铁路方案已阻断。"
 
 
 def _build_dynamic_direct_rail_plans(
@@ -1267,9 +1289,10 @@ def _build_dynamic_direct_rail_plans(
                 segments,
                 8.0 if pair_index == 1 and built_plan_count == 0 else 7.6,
                 RiskLevel.LOW,
-                "12306 公开查询返回",
-                "车次、时间、票价和席别来自 12306 公开匿名查询；接驳段仅使用地图 Provider 验证结果。",
+                f"{offer.data_source.source_name} 返回",
+                "车次、时间、精确票价和席别来自飞猪 FlyAI；接驳段仅使用地图 Provider 验证结果。",
             )
+            _attach_offer_redirects(plan, [(offer, [rail_segment])])
             built_plan_count += 1
             evaluation = evaluate_plan_constraints(plan, travel_request)
             if evaluation.satisfies_all:
@@ -1414,18 +1437,18 @@ def _build_dynamic_flight_plans(
             ]
         except LocalTransferUnavailable:
             continue
-        plans.append(
-            _plan(
-                f"plan_flight_dynamic_{plan_index}",
-                f"Dynamic flight {flight_segments[0].flight_number}",
-                PlanType.TRANSFER_FLIGHT if is_transfer else PlanType.DIRECT_FLIGHT,
-                segments,
-                7.8 if offer_index == 1 else 7.4,
-                RiskLevel.MEDIUM if is_transfer else RiskLevel.LOW,
-                "Verified flight provider offer",
-                "Flight times and fare come from the enabled flight provider; local transfers use verified map routes only.",
-            )
+        plan = _plan(
+            f"plan_flight_dynamic_{plan_index}",
+            f"Dynamic flight {flight_segments[0].flight_number}",
+            PlanType.TRANSFER_FLIGHT if is_transfer else PlanType.DIRECT_FLIGHT,
+            segments,
+            7.8 if offer_index == 1 else 7.4,
+            RiskLevel.MEDIUM if is_transfer else RiskLevel.LOW,
+            "Verified flight provider offer",
+            "Flight times and fare come from the enabled flight provider; local transfers use verified map routes only.",
         )
+        _attach_offer_redirects(plan, [(offer, flight_segments)])
+        plans.append(plan)
         if len(plans) >= max_plans:
             return plans
 
@@ -1642,6 +1665,13 @@ def _build_dynamic_transfer_rail_plans(
             RiskLevel.MEDIUM,
             "Verified two-leg rail provider offers",
             f"Both rail legs are provider facts and pass the required transfer-time check. {transfer_description}",
+        )
+        _attach_offer_redirects(
+            plan,
+            [
+                (candidate.first_offer, [first_segment]),
+                (candidate.second_offer, [second_segment]),
+            ],
         )
         plan_candidates.append((plan, candidate, batch_index))
 
@@ -1872,18 +1902,24 @@ def _build_dynamic_flight_rail_mixed_plans(
                             ]
                         except LocalTransferUnavailable:
                             continue
-                        plans.append(
-                            _plan(
-                                f"plan_flight_rail_mixed_dynamic_{plan_index}",
-                                f"Dynamic flight-rail via {transfer_station.city_name}",
-                                PlanType.FLIGHT_RAIL_MIXED,
-                                segments,
-                                7.0,
-                                RiskLevel.MEDIUM,
-                                "Verified flight and rail provider offers",
-                                "The flight and rail facts both come from enabled providers and pass a connection-time check.",
-                            )
+                        plan = _plan(
+                            f"plan_flight_rail_mixed_dynamic_{plan_index}",
+                            f"Dynamic flight-rail via {transfer_station.city_name}",
+                            PlanType.FLIGHT_RAIL_MIXED,
+                            segments,
+                            7.0,
+                            RiskLevel.MEDIUM,
+                            "Verified flight and rail provider offers",
+                            "The flight and rail facts both come from enabled providers and pass a connection-time check.",
                         )
+                        _attach_offer_redirects(
+                            plan,
+                            [
+                                (flight_offer, flight_segments),
+                                (rail_result.offers[0], [rail_segment]),
+                            ],
+                        )
+                        plans.append(plan)
                         logger.info(
                             "rail_mixed_flight_rail_plan_created request_id=%s plan_id=%s transfer_city=%s rail_train=%s",
                             travel_request.request_id,
@@ -1979,18 +2015,24 @@ def _build_dynamic_flight_rail_mixed_plans(
                             ]
                         except LocalTransferUnavailable:
                             continue
-                        plans.append(
-                            _plan(
-                                f"plan_flight_rail_mixed_dynamic_{plan_index}",
-                                f"Dynamic rail-flight via {transfer_station.city_name}",
-                                PlanType.FLIGHT_RAIL_MIXED,
-                                segments,
-                                7.0,
-                                RiskLevel.MEDIUM,
-                                "Verified rail and flight provider offers",
-                                "The rail and flight facts both come from enabled providers and pass a connection-time check.",
-                            )
+                        plan = _plan(
+                            f"plan_flight_rail_mixed_dynamic_{plan_index}",
+                            f"Dynamic rail-flight via {transfer_station.city_name}",
+                            PlanType.FLIGHT_RAIL_MIXED,
+                            segments,
+                            7.0,
+                            RiskLevel.MEDIUM,
+                            "Verified rail and flight provider offers",
+                            "The rail and flight facts both come from enabled providers and pass a connection-time check.",
                         )
+                        _attach_offer_redirects(
+                            plan,
+                            [
+                                (rail_result.offers[0], [rail_segment]),
+                                (flight_offer, flight_segments),
+                            ],
+                        )
+                        plans.append(plan)
                         logger.info(
                             "rail_mixed_rail_flight_plan_created request_id=%s plan_id=%s transfer_city=%s rail_train=%s",
                             travel_request.request_id,

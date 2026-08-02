@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -18,6 +19,9 @@ SHANGHAI_TZ = timezone(timedelta(hours=8))
 @pytest.fixture(autouse=True)
 def deterministic_data_source_env(monkeypatch):
     env_example = Path(__file__).resolve().parents[3] / ".env.example"
+    for key in tuple(os.environ):
+        if key.startswith("TRAVEL_SOURCE_"):
+            monkeypatch.delenv(key, raising=False)
     for raw_line in env_example.read_text(encoding="utf-8").splitlines():
         line = raw_line.strip()
         if not line or line.startswith("#") or "=" not in line:

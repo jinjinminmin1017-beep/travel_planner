@@ -58,7 +58,7 @@ export type RouteCostPresentation = {
 export type OfficialRedirectPresentation = {
   helperText: string;
   buttonLabel: string;
-  redirectType: "RAIL_12306" | "AIRLINE";
+  redirectType: "FLIGGY";
   segmentId: string | null;
 };
 
@@ -68,13 +68,6 @@ const PLANNING_STAGES = [
   { label: "比对车次与接驳", threshold: 41, task: "正在比对车次、航班和接驳" },
   { label: "评估并生成方案", threshold: 76, task: "正在评估并生成可行方案" }
 ] as const;
-
-const AIRLINE_NAMES: Record<string, string> = {
-  airline_9c_public_query: "春秋航空",
-  airline_hu_public_query: "海南航空",
-  airline_qw_public_query: "青岛航空",
-  airline_mu_browser_query: "中国东方航空"
-};
 
 export function buildPlanningStagePresentation(progress: number): PlanningStagePresentation {
   const normalizedProgress = Math.max(0, Math.min(100, Math.round(progress)));
@@ -149,21 +142,10 @@ export function buildOfficialRedirectPresentation(plan: TravelPlan): OfficialRed
   const primarySegment = plan.segments.find(
     (segment) => segment.segment_type === "RAIL" || segment.segment_type === "FLIGHT"
   );
-  if (primarySegment?.segment_type === "FLIGHT") {
-    const airlineName = AIRLINE_NAMES[primarySegment.data_source.source_id] ?? null;
-    return {
-      helperText: airlineName
-        ? `点击后将打开${airlineName}官网，仅确认实时班次、余票和价格，不会自动下单或支付。`
-        : "点击后将打开航空公司官网，仅确认实时班次、余票和价格，不会自动下单或支付。",
-      buttonLabel: airlineName ? `前往${airlineName}官网确认` : "前往航空公司官网确认",
-      redirectType: "AIRLINE",
-      segmentId: primarySegment.segment_id
-    };
-  }
   return {
-    helperText: "点击后将打开铁路12306官方渠道，仅确认实时班次、余票和价格，不会自动下单或支付。",
-    buttonLabel: "前往铁路12306确认",
-    redirectType: "RAIL_12306",
+    helperText: "点击后将打开飞猪核验实时班次与价格并完成预订；本系统不会自动下单、支付或保存乘客信息。",
+    buttonLabel: "去飞猪核价并预订",
+    redirectType: "FLIGGY",
     segmentId: primarySegment?.segment_id ?? null
   };
 }
@@ -404,7 +386,7 @@ function asMoney(value: Record<string, unknown>): Money | null {
 export function applyRelaxationToRequest(request: TravelRequest, alternative: RelaxationAlternative): TravelRequest {
   const next: TravelRequest = {
     ...request,
-    schema_version: "1.17",
+    schema_version: "1.18",
     request_id: `req_relax_${Date.now()}`,
     raw_user_input: `${request.raw_user_input}；已确认放宽：${alternative.violations.map((item) => item.user_visible_message).join("；")}`,
     hard_constraints: { ...request.hard_constraints }

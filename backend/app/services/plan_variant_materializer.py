@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from hashlib import sha256
 
+from app.data_sources.redirect_providers import rebind_fliggy_redirects
 from app.models.schemas import RailSegment, SeatOption, TravelPlan, TravelRequest
 from app.services.cost_comfort_risk_engine import (
     rail_seat_comfort_rank,
@@ -86,6 +87,7 @@ def materialize_rail_plan_variant(
                 segment.selected_seat_option_id = selected_by_segment[segment.segment_id].option_id
         digest = sha256(fingerprint.encode("utf-8")).hexdigest()[:10]
         variant.plan_id = f"{plan.plan_id}__{strategy.lower()}_{digest}"
+        rebind_fliggy_redirects(variant, previous_plan_id=plan.plan_id)
         variant.plan_name = f"{plan.plan_name} · {VARIANT_LABELS[strategy]}"
         refresh_plan_variant_scores(variant, plan)
         variants.append(variant)

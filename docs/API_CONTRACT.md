@@ -1,10 +1,10 @@
 # API Contract
 
-更新日期：2026-07-26
+更新日期：2026-08-02
 
 本文只记录已在 `backend/app/main.py` 或 `frontend/src/api/client.ts` 中发现的接口。统一错误结构见 `backend/app/models/schemas.py` 的 `ErrorResponse`。
 
-当前 API schema version 为 `1.17`；文末记录已实现的约束无匹配响应与前端消费规则。
+当前 API schema version 为 `1.18`；V1.18 仅新增 `DataSourceType=OTA` 与 `redirect_type=FLIGGY`，规划请求结构不变。
 
 ## 通用错误响应
 
@@ -209,9 +209,11 @@ Empty 行为：目标段 option_id 在请求时已校验为可用，因此至少
 - URL：`/api/redirect/booking`
 - Request：`BookingRedirectRequest`
 - Response：`BookingRedirectResponse`
-- Error Response：通用 `ErrorResponse`；方案不存在返回 404。
-- 前端调用位置：`frontend/src/api/client.ts` `bookingRedirect()`；`frontend/src/App.tsx` 跳转官方购票或地图导航前调用。
-- 后端实现位置：`backend/app/main.py` `booking_redirect()`；跳转生成在 `backend/app/data_sources/redirect_providers.py`
+- Error Response：通用 `ErrorResponse`；方案不存在返回 404；FLIGGY 跳转的 segment 归属、HTTPS host allowlist 或持久化数据校验失败返回 400。
+- `BookingRedirectRequest` 不接受 URL。`redirect_type=FLIGGY` 时必须提供 `plan_id` 与 `segment_id`，服务端只从持久化计划的 `booking_redirects` 读取响应 `jumpUrl`。
+- FLIGGY redirect 必须与生成它的 plan/segment binding 一致且未过期；不可用时返回手动打开飞猪核价说明，不回退到航司或 12306。
+- 前端调用位置：`frontend/src/api/client.ts` `bookingRedirect()`；铁路与航班 CTA 统一为“去飞猪核价并预订”。
+- 后端实现位置：`backend/app/main.py` `booking_redirect()`；跳转生成与校验在 `backend/app/data_sources/redirect_providers.py`。
 
 ## POST /api/feedback
 
@@ -505,3 +507,13 @@ FLIGHT_PROVIDER_DISABLED
 - 初次规划仍使用现有 `RUNNING/WAITING_SOURCE`；不提前展示伪造的航班骨架数值。
 - 旧 V1.17 响应若只有聚合 `SourceFailure`，前端使用保守“航班暂不可确认”，不得反推为“无航班”。
 - 本规则不改变外部 schema，也不需要数据库迁移；前后端仍需同步发布，以避免后端返回 `PARTIAL` 而旧前端继续隐藏交通方式缺口。
+
+## FlyAI 唯一票务事实源契约（V1.18，代码已实现 / 在线验收阻塞）
+
+- `DataSourceType` 新增 `OTA`；FlyAI 航班和铁路事实统一使用 `source_id=fliggy_flyai`、`source_type=OTA`。
+- `BookingRedirect.redirect_type` 与 `BookingRedirectRequest.redirect_type` 新增 `FLIGGY`；历史 `AIRLINE`、`RAIL_12306` 记录仍可解析，但新计划不再生成这两类票务跳转。
+- 航班 item 必须包含精确 `ticketPrice`（或官方兼容字段 `adultPrice`）、至少一段完整航段、响应实际返回的舱位和 allowlisted HTTPS `jumpUrl`。
+- 铁路 item 必须包含精确 `price`、实际车次/车站/时刻、响应实际返回的席别和 allowlisted HTTPS `jumpUrl`；`3xx`、`5xx`、区间或空价格以 `FLIGGY_PRICE_NOT_EXACT` 拒绝，不进入计划。
+- CLI 非零退出、非空 stderr、超时、非完整 JSON、业务状态失败、体验模式提示或结构漂移全部 fail-closed；错误不触发航司、浏览器 worker 或 12306 fallback。
+- 相同规范化查询使用 60 秒短缓存和 single-flight；日志仅允许 source/命令类型、耗时、退出分类、item 数和响应哈希，不记录 Key、完整 URL 或 stdout。
+- 正式 Key、目标 Windows 环境 exit 0 与 50 样例 cold/warm P50/P95/P99 门禁尚未完成，因此 `.env.example` 保持 `TRAVEL_SOURCE_FLIGGY_FLYAI_ENABLED=false`。

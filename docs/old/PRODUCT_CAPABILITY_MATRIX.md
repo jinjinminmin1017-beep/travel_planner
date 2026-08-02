@@ -26,7 +26,7 @@
 | LLM Intent Parser | 验收通过 / Prompt 待按 V1.2 口径精简 | 已有 Prompt 模板、版本常量、真实 LLM wrapper、一次 repair、语义校验、规则 fallback、LLM 调用审计日志和缺信息追问；架构口径要求 Prompt 只提供最小字段契约与关键枚举，`TravelRequest Schema V1.15` 仅作为后端校验契约。 | `real_llm` 默认禁用时使用规则 fallback；真实 LLM 仍需用户自有 key 与授权后才能启用；不得把完整设计文档或完整 Schema 发送给 LLM。 |
 | 地点解析与节点候选 | 验收通过 | `location_resolver` 已集中管理地点解析、站点候选、机场候选、候选元数据和 Nominatim fallback；Planner 不再维护坐标表。 | 路线规划引擎仍只覆盖已实现城市对；未覆盖城市对会返回清晰不可用和候选节点说明。 |
 | 本地接驳 | 验收通过 | `local_transfer_engine` 已支持 TAXI、SUBWAY、BUS、WALK 可用性判断；真实地图 Provider 返回距离、耗时、费用估算；地图不可用时以 `SourceFailure` 标记并退回内部规则估算；App 可展示接驳上下车/换乘说明并切换重算。 | 完整逐站公交/地铁线路、打车平台实时派单和生产级导航仍依赖授权地图或打车 Provider。 |
-| 铁路规划 | 12306 公开查询 Provider 已接入 / 票源增强待动态化 | Planner 已可按地点解析出的候选站点生成站点对查询，并仅用 `rail_12306_public_query` 返回的真实车次、时刻、席别和票价组装铁路方案；座席必须同时满足可用和有票价，余票字段只用于后端筛选且 App 不展示；`rail_12306_redirect` 可跳转官方入口。 | 多段和票源增强仍按能力缺口阻断且不使用旧模板补造；缺站点码、无票、缺价、限流或页面结构变化时必须阻断对应铁路方案；测试 fixture 不得作为运行时 fallback。 |
+| 铁路规划 | FlyAI 代码完成 / 在线验收阻塞 | Planner 只用 `fliggy_flyai` 返回的真实车次、时刻、精确价格、席别和 `jumpUrl` 组装铁路方案。 | 正式 Key、目标 Windows exit 0 和 50 样例门禁完成前保持禁用；不得回退 12306 或测试 fixture。 |
 | 航班规划 | 自采 Provider 已接入 / 源站审批后启用 | `flight_planning_engine` 已覆盖直飞、中转、多机场组合；Planner 使用 10 套独立官方公开航司契约覆盖 16 个承运人代码，只有真实价格、真实舱位和可售信号均通过技术契约且许可已审批时才生成航班段；OpenSky/天气仅作为风险辅助边界。 | 未启用、未审批、技术契约不完整、源站不可用、缺价、无可售信号或解析失败时必须阻断对应航班方案；不得用 fixture、OpenSky、估算价、报价二次确认假设或按固定价差生成额外舱位作为 fallback。 |
 | 候选方案生成 | 验收通过 | `candidate_generator` 已分层管理原始方案和 LLM 候选池，支持 1-15 条可验证候选、hard constraints 过滤、soft preference 排序/排除，并为被过滤方案生成 MissingPlanExplanation。 | 异步增量候选体验和任务队列仍归入 P2-02/P3-02；不得为凑满候选数量补造方案。 |
 | Cost / Comfort / Risk | 验收通过 | `cost_comfort_risk_engine` 已独立输出 Money 汇总、ComfortScore breakdown/score_vector/score_version、RiskAssessment/RiskItem 和 DataQuality 缺失/警告/置信度；重算路径复用同一费用引擎。 | 后续质量优化可继续细化权重和离线评估，但 LLM 不参与事实计算。 |
@@ -59,29 +59,30 @@
 | `amap_place_search` | MAP | 阻塞于授权 | 禁用 | 地址解析不足时按城市执行高德 POI 关键字搜索。 | 同名候选不经消歧直接选择第一条。 |
 | `open_meteo_forecast` | WEATHER | 验收通过 | 启用 | 天气风险辅助。 | 提供交通票价、余票、路况或交易承诺。 |
 | `opensky_states` | FLIGHT | 验收通过 | 启用 | 航班动态/空域风险辅助。 | 提供航班报价、余票或可售状态。 |
-| `rail_12306_public_query` | RAIL | 验收通过 | 启用 | 低频调用 12306 公开匿名查询能力，返回可验证的车次、时刻、可用席别和票价。 | 登录、绕验证码、逆向签名/加密、占票、下单、支付、抢票、展示余票数量或作为高频商用爬取能力。 |
-| `rail_12306_redirect` | RAIL | 验收通过 | 启用 | 跳转到 12306 官方入口，用户自行确认。 | 自动登录、抢票、占票、下单、支付。 |
-| `airline_official_redirect` | FLIGHT | 验收通过 | 启用 | 跳转到航司官网，用户自行确认。 | 代填敏感账号、自动下单或支付。 |
+| `rail_12306_public_query` | RAIL | 已退役 | 禁用且不可重新配置 | 仅保留历史实现与旧计划审计参考；不在运行时数据源定义、adapter 注册表或默认配置中。 | 不得作为 FlyAI 失败时的 fallback。 |
+| `fliggy_flyai` | OTA | 开发完成 / 在线验收阻塞 | 禁用（待正式 Key） | 通过固定版本官方 FlyAI CLI 同时返回航班与铁路结构化 offer，并使用响应 `jumpUrl` 跳转飞猪核价预订。 | 不调用未公开 HTTP，不自动回退航司或 12306，不保存账号、乘客或支付信息；正式 Key、Windows exit 0 与 50 样例门禁通过前不得启用。 |
+| `rail_12306_redirect` | RAIL | 已退役 | 禁用且不可重新配置 | 仅兼容历史 redirect 类型。 | 不得作为 FlyAI redirect 不可用时的 fallback。 |
+| `airline_official_redirect` | FLIGHT | 已退役 | 禁用且不可重新配置 | 仅兼容历史 redirect 类型。 | 不得作为 FlyAI redirect 不可用时的 fallback。 |
 | `amap_uri_redirect` | MAP | 验收通过 | 启用 | 高德地图 URI 跳转。 | 绕过平台规则调用未授权商业路线 API。 |
 | `amap_route` | MAP | 阻塞于授权 | 禁用 | 拿到用户自有 key 和授权后用于真实路线规划。 | 未授权时启用、商业使用或静默 fallback。 |
 | `baidu_map_route` | MAP | 阻塞于授权 | 禁用 | 拿到用户自有 key 和授权后作为地图路线 Provider。 | 未授权时启用、商业使用或静默 fallback。 |
 | `baidu_uri_redirect` | MAP | 阻塞于授权 | 禁用 | 授权确认后作为百度地图 URI 跳转备选。 | 未审核前在生产启用。 |
 | `airline_mu_public_query` | FLIGHT | 阻塞于授权 | 禁用 | 源站审核通过后低频采集东航官方公开前端报价，只返回有真实价格且有可售/余票信号的舱位。 | 登录、绕验证码、逆向强认证、下单、支付、抢票、缺价补价、无可售信号时生成航班方案或作为 fallback。 |
-| `airline_mu_browser_query` | FLIGHT | 进行中 / 阻塞于授权 | 禁用 | 独立 Playwright worker 复用东航匿名浏览器会话；真实单机场结果页模板和含税 DOM 已确认，只把匹配本次查询且通过严格校验的航班、时刻、舱价和可售信号转换为 `FlightOffer`。 | 未完成许可、目标环境 Chromium 验收和 50 次 benchmark 前启用；不得绕验证码、保存 Cookie/指纹/Token、把挑战或结构变化当作空航班。 |
+| `airline_mu_browser_query` | FLIGHT | 已退役 | 禁用且不可重新配置 | 历史实现仅供审计。 | 不得启动 browser worker 或作为 FlyAI fallback。 |
 | `airline_cz_public_query` | FLIGHT | 阻塞于授权 | 禁用 | 源站审核通过后低频采集南航官方公开前端报价，只返回有真实价格且有可售/余票信号的舱位。 | 登录、绕验证码、逆向强认证、下单、支付、抢票、缺价补价、无可售信号时生成航班方案或作为 fallback。 |
 | `airline_sc_public_query` | FLIGHT | 阻塞于授权 | 禁用 | 源站审核通过后低频采集山航官方公开前端报价，只返回有真实价格且有可售/余票信号的舱位。 | 登录、绕验证码、逆向强认证、下单、支付、抢票、缺价补价、无可售信号时生成航班方案或作为 fallback。 |
 | `airline_ca_public_query` | FLIGHT | 阻塞于授权 | 禁用 | 国航独立契约；许可审批后仍须通过匿名真实库存响应技术门禁。 | 不得把官网入口可达等同于可执行票价契约。 |
 | `airline_hna_micro_public_query` | FLIGHT | 阻塞于授权 | 禁用 | 海航微服务体系独立契约，覆盖 JD/8L/UQ/FU/Y8。 | 不生成或绕过动态密文、指纹、验证码和频控材料。 |
-| `airline_hu_public_query` | FLIGHT | 验收通过 | 启用 | 海航官网匿名 deep-link 会话查询，解析 HU/Y8 等同站销售航班的真实含税总价和舱位。 | 不登录、不绕验证码、不持久化动态会话或长加密材料。 |
+| `airline_hu_public_query` | FLIGHT | 已退役 | 禁用且不可重新配置 | 历史实现仅供审计。 | 不得作为 FlyAI fallback。 |
 | `airline_zh_public_query` | FLIGHT | 阻塞于授权 | 禁用 | 深航独立契约；许可审批后仍须通过匿名真实库存响应技术门禁。 | 不得把 B2C 入口可达等同于可执行票价契约。 |
 | `airline_3u_public_query` | FLIGHT | 阻塞于授权 | 禁用 | 川航独立契约。 | 不绕过 Dingxiang CAPTCHA/ConstID 等风险控制。 |
-| `airline_9c_public_query` | FLIGHT | 验收通过 | 启用 | 春秋航空官网匿名公开航班、票价和舱位查询。 | 不登录、不绕验证码、不下单或支付。 |
+| `airline_9c_public_query` | FLIGHT | 已退役 | 禁用且不可重新配置 | 历史实现仅供审计。 | 不得作为 FlyAI fallback。 |
 | `airline_ho_public_query` | FLIGHT | 阻塞于授权 | 禁用 | 吉祥航空独立契约；已记录查询 endpoint 与 `INVALID_TOKEN` 匿名响应。 | 不伪造 token、blackBox 或绕过 Geetest。 |
-| `airline_qw_public_query` | FLIGHT | 验收通过 | 启用 | 青岛航空官网匿名初始化与公开前端请求算法，返回真实航班、票价和舱位 JSON。 | 不登录、不绕验证码、不复用浏览器 Cookie、不下单或支付。 |
+| `airline_qw_public_query` | FLIGHT | 已退役 | 禁用且不可重新配置 | 历史实现仅供审计。 | 不得作为 FlyAI fallback。 |
 | `variflight_status` | FLIGHT | 阻塞于授权 | 禁用 | 授权后提供商业航班状态/延误风险。 | 未授权时调用或把 OpenSky 结果冒充商业状态。 |
 | `real_llm` | LLM | 阻塞于授权 | 禁用 | 用户自有 key 存在时做解析、推荐选择和解释，并经过 Schema/语义校验。 | 生成车次、航班、价格、余票、路线、购买链接等事实字段。 |
 
-处于“阻塞于授权”且没有可执行 adapter 的航司查询与 VariFlight 仅作为能力待办记录，不进入 `TRAVEL_DATA_SOURCE_IDS`、adapter 运行注册表或 `.env.example`。东航 `airline_mu_browser_query` 已有独立 worker adapter，但因真实验收未完成而以禁用状态进入注册表；春秋、海航和青岛航空已完成实现与审批，并通过代码、配置、测试和在线验收的同一次变更登记。
+旧航司查询、东航 browser worker、12306 查询和旧票务 redirect 均不进入 `TRAVEL_DATA_SOURCE_IDS`、adapter 运行注册表或 `.env.example`。`fliggy_flyai` 是唯一票务事实源，且在在线验收门禁完成前保持禁用。
 
 ## 自动化 Fixture 边界
 

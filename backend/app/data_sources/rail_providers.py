@@ -4,15 +4,15 @@ import json
 import logging
 import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Protocol, cast
+from typing import Any, Literal, Protocol, cast
 
 import httpx
 
-from app.data_sources.config_loader import load_data_source_settings
+from app.data_sources.provider_booking import ProviderBookingReference
 from app.models.schemas import CacheMetadata, DataSourceMetadata, DataSourceType, Money, SeatOption, money, now_timepoint
 
 logger = logging.getLogger("app.rail")
@@ -53,6 +53,7 @@ class RailOffer:
     data_source: DataSourceMetadata
     origin_station_code: str | None = None
     destination_station_code: str | None = None
+    booking_reference: ProviderBookingReference | None = None
 
 
 @dataclass(frozen=True)
@@ -60,6 +61,29 @@ class RailProviderSearchResult:
     offers: list[RailOffer]
     attempted_source_ids: list[str]
     failure_message: str | None = None
+    outcomes: list["RailProviderOutcome"] = field(default_factory=list)
+
+
+RailProviderOutcomeStatus = Literal[
+    "VERIFIED",
+    "EMPTY",
+    "RATE_LIMITED",
+    "TIMEOUT",
+    "FAILED",
+    "INVALID_RESPONSE",
+    "PRICE_NOT_EXACT",
+    "DISABLED",
+]
+
+
+@dataclass(frozen=True)
+class RailProviderOutcome:
+    source_id: str
+    status: RailProviderOutcomeStatus
+    error_code: str | None
+    retryable: bool
+    offer_count: int
+    message: str
 
 
 class RailProvider(Protocol):
@@ -295,28 +319,36 @@ def rail_data_source_metadata(
 
 
 def build_enabled_rail_providers(environment: str | None = None) -> list[RailProvider]:
-    settings = load_data_source_settings(environment).get("rail_12306_public_query")
-    if not settings or not settings.enabled or settings.license_status != "APPROVED":
-        logger.warning(
-            "rail_provider_config_blocked source_id=rail_12306_public_query configured=%s enabled=%s license_status=%s",
-            bool(settings),
-            settings.enabled if settings else None,
-            settings.license_status if settings else None,
-        )
-        return []
-    logger.info("rail_provider_config_enabled source_id=rail_12306_public_query qps_limit=%s", settings.qps_limit)
     from app.data_sources.provider_registry import build_enabled_providers
 
     return [
         cast(RailProvider, provider)
-        for provider in build_enabled_providers({"rail_12306_public_query"}, environment)
+        for provider in build_enabled_providers({"fliggy_flyai_cli"}, environment)
     ]
 
 
 def search_rail_offers_with_enabled_provider_result(request: RailSearchRequest, environment: str | None = None) -> RailProviderSearchResult:
     attempted_source_ids: list[str] = []
     failure_messages: list[str] = []
-    for provider in build_enabled_rail_providers(environment):
+    outcomes: list[RailProviderOutcome] = []
+    providers = build_enabled_rail_providers(environment)
+    if not providers:
+        return RailProviderSearchResult(
+            offers=[],
+            attempted_source_ids=[],
+            failure_message="no enabled approved Fliggy FlyAI ticket provider",
+            outcomes=[
+                RailProviderOutcome(
+                    source_id="fliggy_flyai",
+                    status="DISABLED",
+                    error_code="RAIL_PROVIDER_DISABLED",
+                    retryable=False,
+                    offer_count=0,
+                    message="no enabled approved Fliggy FlyAI ticket provider",
+                )
+            ],
+        )
+    for provider in providers:
         attempted_source_ids.append(provider.source_id)
         try:
             logger.info(
@@ -330,15 +362,47 @@ def search_rail_offers_with_enabled_provider_result(request: RailSearchRequest, 
             offers = provider.search_offers(request)
             if offers:
                 logger.info("rail_provider_search_success source_id=%s offer_count=%s", provider.source_id, len(offers))
-                return RailProviderSearchResult(offers=offers, attempted_source_ids=attempted_source_ids)
+                outcomes.append(RailProviderOutcome(provider.source_id, "VERIFIED", None, False, len(offers), f"verified {len(offers)} rail offers"))
+                return RailProviderSearchResult(offers=offers, attempted_source_ids=attempted_source_ids, outcomes=outcomes)
             failure_messages.append(f"{provider.source_id}: empty response")
+            outcomes.append(RailProviderOutcome(provider.source_id, "EMPTY", "RAIL_PROVIDER_EMPTY", False, 0, "empty response"))
             logger.info("rail_provider_search_empty source_id=%s", provider.source_id)
-        except (httpx.HTTPError, RailProviderError, ValueError) as exc:
+        except (httpx.HTTPError, RailProviderError, RuntimeError, ValueError) as exc:
             failure_messages.append(f"{provider.source_id}: {exc}")
+            outcomes.append(_rail_provider_failure_outcome(provider.source_id, exc))
             logger.warning("rail_provider_search_failure source_id=%s error=%s", provider.source_id, exc)
-    if not attempted_source_ids:
-        logger.warning("rail_provider_search_no_enabled_provider source_id=rail_12306_public_query")
-    return RailProviderSearchResult(offers=[], attempted_source_ids=attempted_source_ids, failure_message="; ".join(failure_messages) or None)
+    return RailProviderSearchResult(
+        offers=[],
+        attempted_source_ids=attempted_source_ids,
+        failure_message="; ".join(failure_messages) or None,
+        outcomes=outcomes,
+    )
+
+
+def _rail_provider_failure_outcome(source_id: str, exc: Exception) -> RailProviderOutcome:
+    message = str(exc).strip() or exc.__class__.__name__
+    lowered = message.lower()
+    if "fliggy_price_not_exact" in lowered:
+        status: RailProviderOutcomeStatus = "PRICE_NOT_EXACT"
+        error_code = "FLIGGY_PRICE_NOT_EXACT"
+        retryable = False
+    elif "fliggy_rate_limited" in lowered or "rate limit" in lowered or "http 429" in lowered:
+        status = "RATE_LIMITED"
+        error_code = "RAIL_PROVIDER_RATE_LIMITED"
+        retryable = True
+    elif isinstance(exc, httpx.TimeoutException) or "timeout" in lowered or "timed out" in lowered:
+        status = "TIMEOUT"
+        error_code = "RAIL_PROVIDER_TIMEOUT"
+        retryable = True
+    elif any(marker in lowered for marker in ("fliggy_invalid_response", "fliggy_invalid_json", "fliggy_business_error")):
+        status = "INVALID_RESPONSE"
+        error_code = "FLIGGY_INVALID_RESPONSE"
+        retryable = True
+    else:
+        status = "FAILED"
+        error_code = "RAIL_PROVIDER_FAILED"
+        retryable = isinstance(exc, httpx.TransportError)
+    return RailProviderOutcome(source_id, status, error_code, retryable, 0, message)
 
 
 def station_code_for_name(station_name: str) -> str | None:
@@ -511,6 +575,7 @@ def _offer_with_cache_metadata(offer: RailOffer, *, cache_hit: bool, ttl_seconds
         data_source=data_source,
         origin_station_code=offer.origin_station_code,
         destination_station_code=offer.destination_station_code,
+        booking_reference=offer.booking_reference,
     )
 
 

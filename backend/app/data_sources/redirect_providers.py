@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import hashlib
 from datetime import timedelta
 from typing import Protocol, cast
 from urllib.parse import parse_qsl, quote, urlencode, urlparse
 from uuid import uuid4
 
+from app.data_sources.provider_booking import ProviderBookingReference
 from app.models.schemas import (
     BookingRedirect,
     BookingRedirectRequest,
@@ -115,6 +117,8 @@ class BaiduUriRedirectProvider:
 
 
 def create_booking_redirect(request: BookingRedirectRequest, plan: TravelPlan, environment: str | None = None) -> BookingRedirect:
+    if request.redirect_type == "FLIGGY":
+        return _stored_fliggy_redirect(request, plan)
     provider = _select_provider(request.redirect_type, environment)
     if provider:
         try:
@@ -124,20 +128,80 @@ def create_booking_redirect(request: BookingRedirectRequest, plan: TravelPlan, e
     return _fallback_redirect(request.redirect_type)
 
 
+def build_fliggy_redirect(
+    *,
+    reference: ProviderBookingReference,
+    plan_id: str,
+    segment_id: str,
+    metadata: DataSourceMetadata,
+) -> BookingRedirect:
+    _assert_fliggy_url(reference.redirect_url)
+    generated_at = TimePoint(
+        datetime=reference.fetched_at,
+        timezone="Asia/Shanghai",
+        source_timezone="Asia/Shanghai",
+    )
+    binding = _redirect_binding(plan_id, segment_id)
+    return BookingRedirect(
+        redirect_id=f"fliggy_{binding}_{reference.item_fingerprint[:16]}",
+        redirect_type="FLIGGY",
+        url_available=True,
+        url=reference.redirect_url,
+        fallback_instruction="请打开飞猪按当前路线手动核验实时价格并预订。本系统不代下单、不支付、不保存账号或乘客信息。",
+        data_source=metadata,
+        generated_at=generated_at,
+        expires_at=_expires_at(generated_at),
+    )
+
+
+def rebind_fliggy_redirects(plan: TravelPlan, *, previous_plan_id: str) -> TravelPlan:
+    for redirect in plan.booking_redirects:
+        if redirect.redirect_type != "FLIGGY":
+            continue
+        matching_segment_ids = [
+            segment.segment_id
+            for segment in plan.segments
+            if redirect.redirect_id.startswith(f"fliggy_{_redirect_binding(previous_plan_id, segment.segment_id)}_")
+        ]
+        if len(matching_segment_ids) != 1:
+            raise RedirectProviderError("FlyAI redirect cannot be rebound to exactly one segment")
+        old_binding = _redirect_binding(previous_plan_id, matching_segment_ids[0])
+        suffix = redirect.redirect_id.removeprefix(f"fliggy_{old_binding}_")
+        redirect.redirect_id = f"fliggy_{_redirect_binding(plan.plan_id, matching_segment_ids[0])}_{suffix}"
+    return plan
+
+
+def _stored_fliggy_redirect(request: BookingRedirectRequest, plan: TravelPlan) -> BookingRedirect:
+    if request.segment_id is None:
+        raise RedirectProviderError("FLIGGY redirect requires segment_id")
+    _target_segment(plan, request.segment_id)
+    binding = _redirect_binding(plan.plan_id, request.segment_id)
+    redirect = next(
+        (
+            item
+            for item in plan.booking_redirects
+            if item.redirect_type == "FLIGGY" and item.redirect_id.startswith(f"fliggy_{binding}_")
+        ),
+        None,
+    )
+    if redirect is None or not redirect.url_available or not redirect.url:
+        return _fallback_redirect("FLIGGY")
+    _assert_fliggy_url(redirect.url)
+    if redirect.expires_at and redirect.expires_at.datetime <= now_timepoint().datetime:
+        return _fallback_redirect("FLIGGY")
+    return redirect
+
+
 def _select_provider(redirect_type: str, environment: str | None = None) -> BookingRedirectProvider | None:
     from app.data_sources.provider_registry import build_enabled_providers
 
     providers = {
         cast(BookingRedirectProvider, provider).source_id: cast(BookingRedirectProvider, provider)
         for provider in build_enabled_providers(
-            {"rail_12306_redirect", "airline_official_redirect", "amap_uri_redirect", "baidu_uri_redirect"},
+            {"amap_uri_redirect", "baidu_uri_redirect"},
             environment,
         )
     }
-    if redirect_type == "RAIL_12306" and "rail_12306_redirect" in providers:
-        return providers["rail_12306_redirect"]
-    if redirect_type == "AIRLINE" and "airline_official_redirect" in providers:
-        return providers["airline_official_redirect"]
     if redirect_type in {"MAP_NAVIGATION", "RIDE_HAILING"}:
         if "amap_uri_redirect" in providers:
             return providers["amap_uri_redirect"]
@@ -178,6 +242,7 @@ def _fallback_redirect(redirect_type: str) -> BookingRedirect:
     labels = {
         "RAIL_12306": "12306 官方网站或 App",
         "AIRLINE": "对应航司官网或 App",
+        "FLIGGY": "飞猪 App 或网站",
         "MAP_NAVIGATION": "高德/百度地图",
         "RIDE_HAILING": "打车平台",
     }
@@ -237,3 +302,20 @@ def _assert_redirect_only_url(url: str) -> None:
     lowered = " ".join(values).lower()
     if any(fragment in lowered for fragment in forbidden_fragments):
         raise RedirectProviderError("redirect URL contains transaction or credential parameters")
+
+
+def _assert_fliggy_url(url: str) -> None:
+    from app.data_sources.config_loader import FlyAICliSourceSettings, load_data_source_settings
+
+    parsed = urlparse(url)
+    hostname = (parsed.hostname or "").lower().strip(".")
+    settings = load_data_source_settings().get("fliggy_flyai")
+    allowed_hosts = settings.redirect_allowed_hosts if isinstance(settings, FlyAICliSourceSettings) else ()
+    if parsed.scheme != "https" or not any(hostname == host or hostname.endswith(f".{host}") for host in allowed_hosts):
+        raise RedirectProviderError("FlyAI redirect URL is not allowlisted HTTPS")
+    if parsed.username or parsed.password:
+        raise RedirectProviderError("FlyAI redirect URL contains credentials")
+
+
+def _redirect_binding(plan_id: str, segment_id: str) -> str:
+    return hashlib.sha256(f"{plan_id}\x1f{segment_id}".encode("utf-8")).hexdigest()[:16]

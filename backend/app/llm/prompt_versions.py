@@ -1,4 +1,4 @@
-SCHEMA_VERSION = "1.17"
+SCHEMA_VERSION = "1.18"
 
 INTENT_PARSER_PROMPT_VERSION = "intent_parser_prompt_v1.0"
 RECOMMENDATION_PROMPT_VERSION = "recommendation_prompt_v1.0"

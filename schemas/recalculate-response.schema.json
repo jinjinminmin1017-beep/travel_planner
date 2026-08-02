@@ -62,6 +62,7 @@
           "enum": [
             "RAIL_12306",
             "AIRLINE",
+            "FLIGGY",
             "MAP_NAVIGATION",
             "RIDE_HAILING"
           ],
@@ -641,6 +642,7 @@
         "WEATHER",
         "TAXI",
         "LLM",
+        "OTA",
         "INTERNAL_CALCULATION"
       ],
       "title": "DataSourceType",
@@ -650,8 +652,8 @@
       "additionalProperties": false,
       "properties": {
         "schema_version": {
-          "const": "1.17",
-          "default": "1.17",
+          "const": "1.18",
+          "default": "1.18",
           "title": "Schema Version",
           "type": "string"
         },
@@ -826,8 +828,8 @@
       "additionalProperties": false,
       "properties": {
         "schema_version": {
-          "const": "1.17",
-          "default": "1.17",
+          "const": "1.18",
+          "default": "1.18",
           "title": "Schema Version",
           "type": "string"
         },
@@ -1613,8 +1615,8 @@
       "additionalProperties": false,
       "properties": {
         "schema_version": {
-          "const": "1.17",
-          "default": "1.17",
+          "const": "1.18",
+          "default": "1.18",
           "title": "Schema Version",
           "type": "string"
         },
@@ -1651,8 +1653,8 @@
       "additionalProperties": false,
       "properties": {
         "schema_version": {
-          "const": "1.17",
-          "default": "1.17",
+          "const": "1.18",
+          "default": "1.18",
           "title": "Schema Version",
           "type": "string"
         },
@@ -2228,8 +2230,8 @@
       "additionalProperties": false,
       "properties": {
         "schema_version": {
-          "const": "1.17",
-          "default": "1.17",
+          "const": "1.18",
+          "default": "1.18",
           "title": "Schema Version",
           "type": "string"
         },
@@ -2382,8 +2384,8 @@
       "additionalProperties": false,
       "properties": {
         "schema_version": {
-          "const": "1.17",
-          "default": "1.17",
+          "const": "1.18",
+          "default": "1.18",
           "title": "Schema Version",
           "type": "string"
         },
@@ -2528,8 +2530,8 @@
       "additionalProperties": false,
       "properties": {
         "schema_version": {
-          "const": "1.17",
-          "default": "1.17",
+          "const": "1.18",
+          "default": "1.18",
           "title": "Schema Version",
           "type": "string"
         },
@@ -2727,8 +2729,8 @@
   "additionalProperties": false,
   "properties": {
     "schema_version": {
-      "const": "1.17",
-      "default": "1.17",
+      "const": "1.18",
+      "default": "1.18",
       "title": "Schema Version",
       "type": "string"
     },
@@ -2803,5 +2805,5 @@
   "title": "RecalculateResponse",
   "type": "object",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "x-schema-version": "1.17"
+  "x-schema-version": "1.18"
 }

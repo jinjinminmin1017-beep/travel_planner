@@ -20,9 +20,9 @@ def test_exported_schema_files_are_full_pydantic_artifacts():
         payload = json.loads(path.read_text(encoding="utf-8"))
         expected = model.model_json_schema(ref_template="#/$defs/{model}")
         expected["$schema"] = "https://json-schema.org/draft/2020-12/schema"
-        expected["x-schema-version"] = "1.17"
+        expected["x-schema-version"] = "1.18"
         assert payload == expected
-        assert payload["x-schema-version"] == "1.17"
+        assert payload["x-schema-version"] == "1.18"
         assert payload["title"] == model.model_json_schema()["title"]
         if "$defs" in expected:
             assert "$defs" in payload
@@ -31,7 +31,7 @@ def test_exported_schema_files_are_full_pydantic_artifacts():
 def test_travel_request_schema_forbids_unknown_fields():
     payload = json.loads((ROOT / "schemas" / "travel-request.schema.json").read_text(encoding="utf-8"))
     assert payload["additionalProperties"] is False
-    assert payload["properties"]["schema_version"]["const"] == "1.17"
+    assert payload["properties"]["schema_version"]["const"] == "1.18"
 
 
 def test_p0_02_contract_enums_match_schema_v1_17():

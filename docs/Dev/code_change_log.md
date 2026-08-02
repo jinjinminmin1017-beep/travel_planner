@@ -541,3 +541,25 @@
   - Python compileall 与 `git diff --check`：通过。
   - Ruff：虚拟环境未安装 `ruff`，项目当前无法执行该检查。
 - 兼容性：外部 API schema 保持 V1.17；无数据库迁移；航班 Provider、航班配置、限流和 browser worker 无 diff。
+
+## 2026-08-02 FlyAI P0
+
+- 任务：完成 ARC-20260802-01 飞猪 FlyAI 唯一票务事实源代码开发；在线验收保持阻塞。
+- 代码提交：见本次提交。
+- 修改内容：
+  - 根目录固定 `@fly-ai/flyai-cli@1.0.16`；新增 fail-closed CLI client，使用 `shell=False` 参数数组、子进程环境传 Key、输入白名单、总超时、严格 stdout JSON/exit/stderr/business/体验模式门禁和脱敏日志。
+  - 新增共用 `fliggy_flyai` OTA Provider，解析直飞/中转航班和铁路 item，只接收精确 Decimal 人民币价格、响应实际舱位/席别与 allowlisted HTTPS `jumpUrl`；相同查询使用 60 秒缓存和 single-flight。
+  - 航班与铁路聚合增加 VERIFIED、EMPTY、RATE_LIMITED、TIMEOUT、FAILED、INVALID_RESPONSE、PRICE_NOT_EXACT、DISABLED outcome；FlyAI 失败不触发航司、browser worker 或 12306 fallback。
+  - Provider offer 携带 item fingerprint、获取时间和 URL reference；Planner 生成 plan/segment-bound `FLIGGY` redirect，接口只从持久化计划读取并校验归属、allowlist 与过期时间。
+  - 外部合同升级到 V1.18，新增 `DataSourceType.OTA` 和 `redirect_type=FLIGGY`；同步后端、JSON Schema、前端类型、LLM schema version 与 API 文档。
+  - 前端铁路/航班 CTA 统一为“去飞猪核价并预订”，约束无匹配页识别 FlyAI 票务失败；旧票务源从 ENV 模板、settings model 注册、Provider 注册表、运行聚合与默认启动脚本移除。
+  - 新增脱敏航班/铁路 fixture、CLI 红灯、精确价格、缓存、解析、URL allowlist、plan-bound redirect 和发布 benchmark 测试/脚本。
+- 验证：
+  - `.\.venv\Scripts\python -m pytest backend\app\tests -q`：269 passed。
+  - `npm --prefix frontend run typecheck`：通过。
+  - `npm --prefix frontend run test:helpers`：26 passed。
+  - `npm --prefix frontend run build`：Web、iOS、Android 导出通过。
+  - Python compileall、18 个 schema 重导出稳定性、`git diff --check`、敏感信息扫描与 public 配置检查：通过。
+  - `@fly-ai/flyai-cli` 安装版本核对：1.0.16。
+- 阻塞：仓库根目录 `.env` 未检测到非空 `TRAVEL_SOURCE_FLIGGY_FLYAI_API_KEY`；secret 配置检查与 50 样例 benchmark 明确返回阻塞。无 Key 的 Windows CLI 探测在输出体验模式 JSON 后发生 libuv assertion 并非零退出，按门禁不得忽略。
+- 兼容性：外部 API 升级到 V1.18；规划请求结构和数据库 schema 不变。历史 `AIRLINE` / `RAIL_12306` redirect 类型仍可解析，但新计划只生成 `FLIGGY`，旧票务源不可通过 ENV 重新启用。

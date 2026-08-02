@@ -19,6 +19,7 @@ from uuid import uuid4
 
 import httpx
 
+from app.data_sources.provider_booking import ProviderBookingReference
 from app.models.schemas import CacheMetadata, DataSourceMetadata, DataSourceType, Money, money, now_timepoint
 
 logger = logging.getLogger("app.flight")
@@ -172,9 +173,19 @@ class FlightOffer:
     data_source: DataSourceMetadata
     cabin_options: list[FlightOfferCabinOption]
     evidence_id: str
+    booking_reference: ProviderBookingReference | None = None
 
 
-FlightProviderOutcomeStatus = Literal["VERIFIED", "EMPTY", "RATE_LIMITED", "TIMEOUT", "FAILED", "DISABLED"]
+FlightProviderOutcomeStatus = Literal[
+    "VERIFIED",
+    "EMPTY",
+    "RATE_LIMITED",
+    "TIMEOUT",
+    "FAILED",
+    "INVALID_RESPONSE",
+    "PRICE_NOT_EXACT",
+    "DISABLED",
+]
 
 
 @dataclass(frozen=True)
@@ -882,15 +893,7 @@ def build_enabled_flight_providers(environment: str | None = None) -> list[Fligh
     from app.data_sources.provider_registry import build_enabled_providers
 
     providers: list[FlightOfferProvider] = []
-    for provider in build_enabled_providers(
-        {
-            "spring_airlines_public_query",
-            "hainan_airlines_public_query",
-            "qingdao_airlines_public_query",
-            "browser_airline_flight",
-        },
-        environment,
-    ):
+    for provider in build_enabled_providers({"fliggy_flyai_cli"}, environment):
         query_scope = getattr(provider, "query_scope", None)
         if query_scope not in {"CITY", "AIRPORT"}:
             logger.error(
@@ -924,6 +927,25 @@ def _provider_search_requests(
         if query_scope not in {"CITY", "AIRPORT"}:
             query_scope = request.query_scope
         return [request.for_query_scope(cast(FlightQueryScope, query_scope))]
+    if getattr(provider, "uses_city_names", False):
+        return [
+            FlightSearchRequest(
+                origin_iata=request.allowed_origin_airport_iatas[0] if request.allowed_origin_airport_iatas else "",
+                destination_iata=request.allowed_destination_airport_iatas[0] if request.allowed_destination_airport_iatas else "",
+                departure_date=request.departure_date,
+                origin_city_name=request.origin_city_name,
+                destination_city_name=request.destination_city_name,
+                adults=request.adults,
+                currency_code=request.currency_code,
+                max_results=request.max_results,
+                non_stop=request.non_stop,
+                query_scope="CITY",
+                origin_city_code=request.origin_city_code,
+                destination_city_code=request.destination_city_code,
+                allowed_origin_airport_iatas=request.allowed_origin_airport_iatas,
+                allowed_destination_airport_iatas=request.allowed_destination_airport_iatas,
+            )
+        ]
     if query_scope == "CITY":
         city_query_codes = getattr(provider, "city_query_codes", {})
         origin_city_code = city_query_codes.get(request.origin_city_name.strip())
@@ -1033,15 +1055,15 @@ def search_flight_offers_with_enabled_provider_result(
         return FlightProviderSearchResult(
             offers=[],
             attempted_source_ids=[],
-            failure_message="no enabled approved official-airline flight provider",
+            failure_message="no enabled approved Fliggy FlyAI ticket provider",
             outcomes=[
                 FlightProviderOutcome(
-                    source_id="airline_public_query",
+                    source_id="fliggy_flyai",
                     status="DISABLED",
                     error_code="FLIGHT_PROVIDER_DISABLED",
                     retryable=False,
                     offer_count=0,
-                    message="no enabled approved official-airline flight provider",
+                    message="no enabled approved Fliggy FlyAI ticket provider",
                 )
             ],
         )
@@ -1064,7 +1086,7 @@ def search_flight_offers_with_enabled_provider_result(
         for provider_request in provider_requests:
             try:
                 provider_offers.extend(provider.search_offers(provider_request))
-            except (httpx.HTTPError, FlightProviderError, ValueError, KeyError) as exc:
+            except (httpx.HTTPError, FlightProviderError, RuntimeError, ValueError, KeyError) as exc:
                 provider_failures.append(_flight_provider_failure_outcome(provider.source_id, exc))
                 logger.warning(
                     "flight_provider_search_failure source_id=%s query_scope=%s route=%s->%s error=%s",
@@ -1119,13 +1141,21 @@ def search_flight_offers_with_enabled_provider_result(
 def _flight_provider_failure_outcome(source_id: str, exc: Exception) -> FlightProviderOutcome:
     message = str(exc).strip() or exc.__class__.__name__
     lowered = message.lower()
-    if isinstance(exc, httpx.TimeoutException) or any(marker in lowered for marker in ("timeout", "timed out")):
-        status: FlightProviderOutcomeStatus = "TIMEOUT"
-        error_code = "FLIGHT_PROVIDER_TIMEOUT"
-        retryable = True
-    elif "rate limit" in lowered or "http 429" in lowered:
+    if "fliggy_price_not_exact" in lowered:
+        status: FlightProviderOutcomeStatus = "PRICE_NOT_EXACT"
+        error_code = "FLIGGY_PRICE_NOT_EXACT"
+        retryable = False
+    elif "fliggy_rate_limited" in lowered or "rate limit" in lowered or "http 429" in lowered:
         status = "RATE_LIMITED"
         error_code = "FLIGHT_PROVIDER_RATE_LIMITED"
+        retryable = True
+    elif any(marker in lowered for marker in ("fliggy_invalid_response", "fliggy_invalid_json", "fliggy_business_error")):
+        status = "INVALID_RESPONSE"
+        error_code = "FLIGGY_INVALID_RESPONSE"
+        retryable = True
+    elif isinstance(exc, httpx.TimeoutException) or any(marker in lowered for marker in ("timeout", "timed out")):
+        status = "TIMEOUT"
+        error_code = "FLIGHT_PROVIDER_TIMEOUT"
         retryable = True
     elif any(marker in lowered for marker in ("challenge", "captcha", "anti-bot", "waf")):
         status = "FAILED"
@@ -2282,6 +2312,7 @@ def _offer_with_cache_metadata(offer: FlightOffer, *, cache_hit: bool, ttl_secon
         data_source=data_source,
         cabin_options=cabins,
         evidence_id=offer.evidence_id,
+        booking_reference=offer.booking_reference,
     )
 
 

@@ -1,0 +1,60 @@
+{
+  "status": 0,
+  "message": "success",
+  "systemMessage": "",
+  "data": {
+    "itemList": [
+      {
+        "ticketPrice": "420.50",
+        "jumpUrl": "https://router.feizhu.com/flight/item-001",
+        "journeys": [
+          {
+            "journeyType": "direct",
+            "segments": [
+              {
+                "marketingTransportNo": "MU5511",
+                "depStationCode": "SHA",
+                "arrStationCode": "TAO",
+                "depStationName": "Shanghai Hongqiao",
+                "arrStationName": "Qingdao Jiaodong",
+                "depDateTime": "2026-08-20 08:30:00",
+                "arrDateTime": "2026-08-20 10:05:00",
+                "duration": "1h35m",
+                "seatClassName": "Economy"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "adultPrice": "530.00",
+        "jumpUrl": "https://router.feizhu.com/flight/item-002",
+        "journeys": [
+          {
+            "journeyType": "connecting",
+            "segments": [
+              {
+                "marketingTransportNo": "CZ3102",
+                "depStationCode": "SHA",
+                "arrStationCode": "WUH",
+                "depDateTime": "2026-08-20 07:00:00",
+                "arrDateTime": "2026-08-20 08:55:00",
+                "duration": "1h55m",
+                "seatClassName": "Economy"
+              },
+              {
+                "marketingTransportNo": "CZ8735",
+                "depStationCode": "WUH",
+                "arrStationCode": "TAO",
+                "depDateTime": "2026-08-20 10:10:00",
+                "arrDateTime": "2026-08-20 12:15:00",
+                "duration": "2h05m",
+                "seatClassName": "Economy"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

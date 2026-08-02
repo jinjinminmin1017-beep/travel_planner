@@ -51,16 +51,11 @@ RELEVANT_SOURCE_IDS = [
     "nominatim_geocode",
     "opensky_states",
     "open_meteo_forecast",
-    "rail_12306_public_query",
-    "rail_12306_redirect",
-    "airline_official_redirect",
-    "airline_9c_public_query",
-    "airline_hu_public_query",
-    "airline_qw_public_query",
+    "fliggy_flyai",
     "amap_uri_redirect",
 ]
-PUBLIC_SMOKE_PROVIDERS = ["map", "geocode", "flight", "flight-status", "weather", "redirect"]
-SECRET_SMOKE_PROVIDERS: list[str] = []
+PUBLIC_SMOKE_PROVIDERS = ["map", "geocode", "flight-status", "weather", "redirect"]
+SECRET_SMOKE_PROVIDERS = ["flight", "rail"]
 
 
 def _env(name: str, default: str) -> str:
@@ -167,7 +162,10 @@ def smoke_geocode() -> bool:
 
 
 def smoke_flight() -> bool:
-    print("航班官方公开采集 Provider live smoke:")
+    print("飞猪 FlyAI 航班 Provider live smoke:")
+    if not _enabled_ok("fliggy_flyai"):
+        print("- SKIP/FAIL: fliggy_flyai 未处于 OK 状态")
+        return False
     request = FlightSearchRequest(
         origin_iata=_env("LIVE_SMOKE_FLIGHT_ORIGIN", "SHA"),
         destination_iata=_env("LIVE_SMOKE_FLIGHT_DESTINATION", "CAN"),
@@ -186,6 +184,9 @@ def smoke_flight() -> bool:
     first = result.offers[0]
     if not first.cabin_options:
         print(f"- FAIL: 航班 offer 没有可售舱位。source={first.data_source.source_id}, offer_id={first.offer_id}")
+        return False
+    if first.booking_reference is None:
+        print("- FAIL: 航班 offer 没有 FlyAI booking reference")
         return False
     first_segment = first.segments[0] if first.segments else None
     route = f"{first_segment.origin_iata}->{first_segment.destination_iata}" if first_segment else "unknown route"
@@ -239,9 +240,9 @@ def smoke_weather() -> bool:
 
 
 def smoke_rail() -> bool:
-    print("12306 公开查询铁路 Provider live smoke:")
-    if not _enabled_ok("rail_12306_public_query"):
-        print("- SKIP/FAIL: rail_12306_public_query 未处于 OK 状态")
+    print("飞猪 FlyAI 铁路 Provider live smoke:")
+    if not _enabled_ok("fliggy_flyai"):
+        print("- SKIP/FAIL: fliggy_flyai 未处于 OK 状态")
         return False
     request = RailSearchRequest(
         train_number=_env("LIVE_SMOKE_RAIL_TRAIN_NUMBER", ""),
@@ -254,6 +255,9 @@ def smoke_rail() -> bool:
         print(f"- FAIL: 未返回铁路 offer。attempted={result.attempted_source_ids}, reason={result.failure_message}")
         return False
     first = result.offers[0]
+    if first.booking_reference is None:
+        print("- FAIL: 铁路 offer 没有 FlyAI booking reference")
+        return False
     seat = first.seat_options[0]
     print(f"- OK: {first.data_source.source_id}, {first.train_number}, {first.origin_station}->{first.destination_station}, {seat.seat_type} {seat.price.display_text}")
     return True
@@ -263,8 +267,6 @@ def smoke_redirect() -> bool:
     print("Redirect-only live smoke:")
     plan = _sample_redirect_plan()
     checks = [
-        ("RAIL_12306", "seg_rail", "rail_12306_redirect"),
-        ("AIRLINE", "seg_flight", "airline_official_redirect"),
         ("MAP_NAVIGATION", "seg_transfer", "amap_uri_redirect"),
     ]
     ok = True
@@ -342,7 +344,7 @@ def main() -> int:
         "--provider",
         action="append",
         choices=("map", "geocode", "flight", "flight-status", "weather", "rail", "redirect"),
-        help="Provider to check. Repeatable. Defaults to all. Rail is opt-in for low-frequency 12306 public query smoke.",
+        help="Provider to check. Repeatable. FlyAI flight/rail checks run only in secret/full tiers or when explicitly selected.",
     )
     parser.add_argument("--status", action="store_true", help="Print provider status summary before smoke checks.")
     args = parser.parse_args()

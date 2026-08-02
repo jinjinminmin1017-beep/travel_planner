@@ -46,33 +46,7 @@ SOURCE_DEFINITIONS: dict[str, SourceDefinition] = {
     "baidu_uri_redirect": SourceDefinition("Baidu URI Redirect", DataSourceType.MAP, "A", "PENDING_REVIEW"),
     "opensky_states": SourceDefinition("OpenSky Network States API", DataSourceType.FLIGHT, "B", "PUBLIC_READ_ONLY_RATE_LIMITED"),
     "open_meteo_forecast": SourceDefinition("Open-Meteo Forecast API", DataSourceType.WEATHER, "B", "PUBLIC_READ_ONLY_RATE_LIMITED"),
-    "airline_official_redirect": SourceDefinition("Airline Official Redirect", DataSourceType.FLIGHT, "A", "REDIRECT_ONLY"),
-    "airline_9c_public_query": SourceDefinition(
-        "Spring Airlines Official Public Flight Query",
-        DataSourceType.FLIGHT,
-        "A",
-        "PUBLIC_AIRLINE_FRONTEND_QUERY",
-    ),
-    "airline_hu_public_query": SourceDefinition(
-        "Hainan Airlines Official Public Flight Query",
-        DataSourceType.FLIGHT,
-        "A",
-        "PUBLIC_AIRLINE_FRONTEND_QUERY",
-    ),
-    "airline_qw_public_query": SourceDefinition(
-        "Qingdao Airlines Official Public Flight Query",
-        DataSourceType.FLIGHT,
-        "A",
-        "PUBLIC_AIRLINE_FRONTEND_QUERY",
-    ),
-    "airline_mu_browser_query": SourceDefinition(
-        "China Eastern Official Browser Flight Query",
-        DataSourceType.FLIGHT,
-        "A",
-        "OFFICIAL_AIRLINE_BROWSER_QUERY",
-    ),
-    "rail_12306_redirect": SourceDefinition("12306 Official Redirect", DataSourceType.RAIL, "S", "REDIRECT_ONLY"),
-    "rail_12306_public_query": SourceDefinition("12306 Public Ticket Query", DataSourceType.RAIL, "S", "PUBLIC_ANONYMOUS_QUERY"),
+    "fliggy_flyai": SourceDefinition("Fliggy FlyAI", DataSourceType.OTA, "A", "OFFICIAL_CLI"),
     "real_llm": SourceDefinition("Real LLM Provider", DataSourceType.LLM, "A", "DISABLED_BY_DEFAULT"),
 }
 
@@ -206,6 +180,26 @@ class BrowserFlightSourceSettings(DataSourceSettings):
         return self
 
 
+class FlyAICliSourceSettings(DataSourceSettings):
+    api_key: SecretStr | None = None
+    executable: str | None = None
+    timeout_seconds: float = Field(default=30.0, gt=0)
+    cache_ttl_seconds: int = Field(default=60, ge=60)
+    redirect_allowed_hosts: tuple[str, ...] = ()
+
+    @model_validator(mode="after")
+    def validate_cli_fields(self) -> "FlyAICliSourceSettings":
+        if self.enabled and self.qps_limit <= 0:
+            raise ValueError("QPS_LIMIT")
+        if self.enabled and self.api_key is None:
+            raise ValueError("API_KEY")
+        if self.enabled and not self.executable:
+            raise ValueError("EXECUTABLE")
+        if self.enabled and not self.redirect_allowed_hosts:
+            raise ValueError("REDIRECT_ALLOWED_HOSTS")
+        return self
+
+
 class NominatimSourceSettings(HttpSourceSettings):
     user_agent: str | None = None
 
@@ -240,13 +234,7 @@ ADAPTER_SETTINGS_MODELS: dict[str, type[DataSourceSettings]] = {
     "baidu_uri_redirect": RedirectSourceSettings,
     "opensky_states": HttpSourceSettings,
     "open_meteo_forecast": HttpSourceSettings,
-    "airline_official_redirect": RedirectSourceSettings,
-    "spring_airlines_public_query": FlightSourceSettings,
-    "hainan_airlines_public_query": FlightSourceSettings,
-    "qingdao_airlines_public_query": FlightSourceSettings,
-    "browser_airline_flight": BrowserFlightSourceSettings,
-    "rail_12306_redirect": RedirectSourceSettings,
-    "rail_12306_public_query": RailSourceSettings,
+    "fliggy_flyai_cli": FlyAICliSourceSettings,
     "real_llm": RealLlmSourceSettings,
 }
 
@@ -263,6 +251,9 @@ FLIGHT_ENV_SUFFIXES = HTTP_ENV_SUFFIXES | frozenset({"USER_AGENT", "CACHE_TTL_SE
 BROWSER_FLIGHT_ENV_SUFFIXES = COMMON_ENV_SUFFIXES | frozenset(
     {"QPS_LIMIT", "WORKER_URL", "WORKER_ALLOWED_HOSTS", "TIMEOUT_SECONDS", "CACHE_TTL_SECONDS"}
 )
+FLYAI_CLI_ENV_SUFFIXES = COMMON_ENV_SUFFIXES | frozenset(
+    {"QPS_LIMIT", "API_KEY", "EXECUTABLE", "TIMEOUT_SECONDS", "CACHE_TTL_SECONDS", "REDIRECT_ALLOWED_HOSTS"}
+)
 REAL_LLM_ENV_SUFFIXES = CREDENTIALED_HTTP_ENV_SUFFIXES | frozenset(
     {"MODEL", "MAX_TOKENS", "THINKING_DISABLED"}
 )
@@ -278,13 +269,7 @@ ADAPTER_ENV_SUFFIXES: dict[str, frozenset[str]] = {
     "baidu_uri_redirect": COMMON_ENV_SUFFIXES,
     "opensky_states": HTTP_ENV_SUFFIXES,
     "open_meteo_forecast": HTTP_ENV_SUFFIXES,
-    "airline_official_redirect": COMMON_ENV_SUFFIXES,
-    "spring_airlines_public_query": FLIGHT_ENV_SUFFIXES,
-    "hainan_airlines_public_query": FLIGHT_ENV_SUFFIXES,
-    "qingdao_airlines_public_query": FLIGHT_ENV_SUFFIXES,
-    "browser_airline_flight": BROWSER_FLIGHT_ENV_SUFFIXES,
-    "rail_12306_redirect": COMMON_ENV_SUFFIXES,
-    "rail_12306_public_query": RAIL_ENV_SUFFIXES,
+    "fliggy_flyai_cli": FLYAI_CLI_ENV_SUFFIXES,
     "real_llm": REAL_LLM_ENV_SUFFIXES,
 }
 ALL_ENV_SUFFIXES = frozenset().union(*ADAPTER_ENV_SUFFIXES.values())
@@ -360,7 +345,7 @@ def get_data_source_settings(source_id: str, environment: str | None = None) -> 
 
 def required_secret_envs(source_id: str) -> tuple[str, ...]:
     source = get_data_source_settings(source_id)
-    if isinstance(source, (CredentialedHttpSourceSettings, RealLlmSourceSettings)):
+    if isinstance(source, (CredentialedHttpSourceSettings, FlyAICliSourceSettings, RealLlmSourceSettings)):
         return (_source_env_name(source_id, "API_KEY"),)
     return ()
 
@@ -369,7 +354,7 @@ def has_required_secret(source_id: str, environment: str | None = None) -> bool:
     source = get_data_source_settings(source_id, environment)
     if source is None:
         return False
-    return not isinstance(source, CredentialedHttpSourceSettings) or source.api_key is not None
+    return not isinstance(source, (CredentialedHttpSourceSettings, FlyAICliSourceSettings)) or source.api_key is not None
 
 
 def secret_value(value: SecretStr | None) -> str | None:
@@ -526,6 +511,26 @@ def _parse_source_settings(
                     ),
                 }
             )
+        if issubclass(model, FlyAICliSourceSettings):
+            payload.update(
+                {
+                    "api_key": SecretStr(raw["API_KEY"]) if raw.get("API_KEY") else None,
+                    "executable": raw.get("EXECUTABLE"),
+                    "timeout_seconds": _parse_float(
+                        source_id,
+                        "TIMEOUT_SECONDS",
+                        raw.get("TIMEOUT_SECONDS", "30"),
+                        minimum=0.001,
+                    ),
+                    "cache_ttl_seconds": _parse_int(
+                        source_id,
+                        "CACHE_TTL_SECONDS",
+                        raw.get("CACHE_TTL_SECONDS", "60"),
+                        minimum=60,
+                    ),
+                    "redirect_allowed_hosts": _parse_csv(raw.get("REDIRECT_ALLOWED_HOSTS"), lower=True),
+                }
+            )
         if issubclass(model, RailSourceSettings):
             payload["cache_ttl_seconds"] = _parse_int(
                 source_id,
@@ -615,6 +620,15 @@ def _validate_adapter_payload(
             missing.append("WORKER_URL")
         if not payload.get("worker_allowed_hosts"):
             missing.append("WORKER_ALLOWED_HOSTS")
+    if issubclass(model, FlyAICliSourceSettings):
+        if qps_limit <= 0:
+            missing.append("QPS_LIMIT")
+        if payload.get("api_key") is None:
+            missing.append("API_KEY")
+        if not payload.get("executable"):
+            missing.append("EXECUTABLE")
+        if not payload.get("redirect_allowed_hosts"):
+            missing.append("REDIRECT_ALLOWED_HOSTS")
     if missing:
         raise DataSourceConfigurationError(
             f"{source_id}: missing keys {', '.join(_source_env_name(source_id, item) for item in missing)}"
