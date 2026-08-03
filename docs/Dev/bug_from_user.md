@@ -37,3 +37,25 @@
 - 问题根因：Windows 启动配置指向无扩展名的 `node_modules/.bin/flyai` POSIX shim，Python `subprocess.run(shell=False)` 无法执行该文件并返回 `FileNotFoundError / WinError 2`；同目录的 Windows `flyai.cmd` 可以启动。
 - 解决方式：在 `scripts/device-debug.ps1` 启动后端前默认启用 FlyAI，把 `node_modules\.bin\flyai.cmd` 的绝对路径写入子进程环境并校验固定依赖存在；保留 `-SkipFlyAI` 回退开关。
 - 问题修改提交：`3a272a7`。
+
+## 2026-08-02 真机调试行程规划因 FlyAI CLI 异常退出而失败
+
+- 用户提问时间：2026-08-02。
+- 问题描述：修复 CLI 启动路径后再次规划上海格林公馆到江苏宜兴，异步任务 `job_4860d87f88f9` 最终为 `FAILED`，方案数为 0。
+- 直接根因：当前 Windows 10、Node 24.14.0、`@fly-ai/flyai-cli@1.0.16` 组合中，航班和铁路命令均以 `3221226505` 异常退出；后端按严格门禁拒绝非零退出进程的 stdout，因此没有可验证票务事实。
+- 放大因素：一次请求累计 33 次同类 FlyAI 失败，缺少 job/source 级确定性崩溃熔断；数据源状态接口仍按静态配置把 FlyAI 显示为 OK 并伪造当前时间为最近成功时间。
+- 架构结论：不能忽略非零退出；需优先修复 CLI 成功路径的强制退出竞态，再增加启动 readiness、运行时健康状态和来源级熔断。切换 Node/OS 仅作为诊断或临时规避手段，不再作为首要修复。
+- 任务文档：`docs/Dev/task_from_arc_for_dev_20260802_flyai_windows_runtime.md`、`docs/Test/task_from_arc_for_test_20260802_flyai_windows_runtime.md`。
+- 状态：代码修复完成；目标环境 50+50 在线发布门禁未通过。
+
+### Core dump 补充结论
+
+- 2026-08-02 23:58 使用无 Key 最小铁路查询和 ProcDump 捕获了同码 full dump；无 Key 与正式请求均为 `0xC0000409`，排除 API Key 为直接原因。
+- stderr：`Assertion failed: !(handle->flags & UV_HANDLE_CLOSING), file src\win\async.c, line 76`。
+- 崩溃线程：`V8Worker -> WebAssembly BackgroundCompileJob -> NodePlatform::PostDelayedTaskOnWorkerThreadImpl -> DelayedTaskScheduler::PostDelayedTask -> uv_async_send -> abort`。
+- 同时主线程：`ReallyExit -> Environment::Exit -> DefaultProcessExitHandler -> NodePlatform::Shutdown -> WorkerThreadsTaskRunner::Shutdown -> uv_thread_join`。
+- CLI bundle 已确认航班、铁路成功分支在输出 JSON 后直接调用 `process.exit(0)`；该强制退出与尚未完成的 V8 background compile 形成 shutdown race，是直接根因。
+- 更正方案：优先由 FlyAI 上游把成功路径改为设置 `process.exitCode=0` 并返回、等待自然排空；环境兼容矩阵降为验证手段，不再作为第一根因修复。
+- 解决方式：对固定 `@fly-ai/flyai-cli@1.0.16`、官方 bundle SHA 和补丁后 SHA 实施构建期精确补丁；认证 Windows runtime 直接以 Node `--single-threaded` 无 shell 参数数组执行 patched bundle；真机启动前增加 bundle 校验与航班/铁路 readiness。后端新增 fatal/ordinary exit、stderr、timeout、rate limit、business/JSON 分类，共享来源级立即/阈值熔断、短冷却、半开恢复和真实 runtime health registry。
+- 问题修改提交：`2d632d7`、`526bbca`。
+- 修复验证：真实 readiness 曾完成航班、铁路 exit 0；100 次在线低频门禁未再出现 `3221226505`，证明 fatal shutdown race 已消除。门禁仍因 16 次上游普通 exit 1、1 次业务错误及随后的 36 次保护性熔断而失败；门禁后再次 readiness 被普通 exit 1 正确阻止，当前不得发布为稳定真实票务环境。

@@ -578,3 +578,25 @@
   - `.\.venv\Scripts\python -m pytest backend\app\tests\test_fliggy_flyai.py backend\app\tests\test_data_sources.py -q`：30 passed。
   - `git diff --check`：通过。
 - 兼容性：外部 API、数据库与前端无变化；未发起真实 FlyAI 票务查询。
+
+## 2026-08-03 08:27:00 +08:00
+
+- 任务：完成 FlyAI CLI 强制退出竞态、来源级熔断与真实运行健康状态开发；在线 50+50 发布门禁保持失败。
+- 代码提交：`2d632d7`、`526bbca`。
+- 修改内容：
+  - 根目录新增固定版本/官方 SHA/补丁 SHA 三重校验的 FlyAI 构建期补丁，只精确替换航班和铁路成功 action 的 `process.exit(0)`；任何版本、片段或 hash 漂移均 fail-fast。
+  - Windows 认证运行时直接通过 Node `--single-threaded` 执行 patched bundle，不经 shell；CLI client 自动解析 `.cmd` shim，同时拒绝未认证的锁定包产物；相对 executable 锚定项目根目录，支持从非根工作目录启动。
+  - 真机调试增加静态 bundle 校验与真实航班/铁路 readiness；`-SkipFlyAI` 明确关闭票务源，不能显示为 OK。
+  - CLI client 增加 fatal process exit、普通非零退出、stderr、timeout、rate limit、business error、invalid JSON/response 和体验模式分类，继续拒绝非零退出的全部 stdout。
+  - 新增共享 runtime health registry 与分类熔断：fatal 首次失败立即打开，timeout/rate limit 等使用独立阈值；跨 job 短冷却、半开只允许单 probe，成功后恢复。
+  - 数据源状态改用真实运行事件，不再以状态查询时间伪造 `last_success_at`；Provider 降级不影响 `/api/health` liveness。
+  - 航班/铁路 outcome 将 runtime/circuit 错误映射为现有稳定失败语义，FlyAI 失败不触发旧航司、12306、browser worker 或模拟事实。
+  - benchmark 改为航班、铁路各至少 50 个低频样本，统计成功数、失败分类及 cold/warm P50/P95/P99，任何失败都会使发布门禁失败。
+- 验证：
+  - 后端全量 pytest：277 passed；FlyAI/状态/API 定向回归：85 passed。
+  - 前端 helper tests：26 passed；TypeScript typecheck 通过；Web/iOS/Android Expo export 通过。
+  - Schema export diff、Python compileall、Node/PowerShell 语法、bundle patch hash、secret 配置、`git diff --check` 和真实 Key 泄漏扫描：通过。
+  - 真实 readiness：修复后航班 10 items / 1344ms，铁路 10 items / 1375ms，均 exit 0；100 次门禁后再次 readiness 遇到普通 exit 1 并按设计阻止真实票务模式启动。
+  - 在线门禁：航班 24/50、铁路 23/50 成功；16 次普通非零退出、1 次业务错误、36 次保护性熔断；无 fatal exit。cold P50/P95/P99=1251.63/1458.92/2005.20ms，warm=0.65/0.78/1.13ms。
+- 发布结论：代码任务完成，Windows `0xC0000409` 竞态与单 job 故障放大已修复；上游普通 exit 1/业务稳定性未达到全成功门禁，生产真实票务发布继续阻塞。
+- 兼容性：外部 API schema 保持 V1.18；无数据库迁移；状态字段语义由配置投影修正为真实运行事件。
