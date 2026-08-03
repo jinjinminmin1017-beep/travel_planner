@@ -145,6 +145,19 @@ def test_cli_resolves_certified_windows_runtime_without_using_shell():
     assert calls[0]["shell"] is False
 
 
+def test_cli_anchors_installed_relative_executable_to_project_root():
+    project_root = Path(__file__).resolve().parents[3]
+    client = FlyAIClient(
+        api_key="secret",
+        executable="node_modules/.bin/flyai",
+        timeout_seconds=3,
+        runner=lambda argv, **_kwargs: subprocess.CompletedProcess(argv, 0, stdout="", stderr=""),
+    )
+
+    assert Path(client.executable).is_absolute()
+    assert Path(client.executable).is_relative_to(project_root)
+
+
 def test_cli_rejects_uncertified_locked_bundle(tmp_path):
     node_modules = tmp_path / "node_modules"
     shim = node_modules / ".bin" / ("flyai.cmd" if os.name == "nt" else "flyai")

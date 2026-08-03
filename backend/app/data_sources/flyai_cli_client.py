@@ -318,13 +318,18 @@ def _validated_location(value: str, field_name: str) -> str:
 
 
 def _resolved_executable(executable: str) -> str:
-    if os.name != "nt":
-        return executable
     path = Path(executable)
+    if not path.is_absolute():
+        project_candidate = Path(__file__).resolve().parents[3] / path
+        windows_project_candidate = project_candidate.with_suffix(".cmd")
+        if project_candidate.is_file() or (os.name == "nt" and windows_project_candidate.is_file()):
+            path = project_candidate
+    if os.name != "nt":
+        return str(path)
     if path.suffix:
-        return executable
+        return str(path)
     windows_shim = path.with_suffix(".cmd")
-    return str(windows_shim) if windows_shim.is_file() else executable
+    return str(windows_shim) if windows_shim.is_file() else str(path)
 
 
 def _certified_bundle_if_present(executable: str) -> Path | None:
