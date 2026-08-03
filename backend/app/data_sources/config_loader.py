@@ -3,13 +3,25 @@ from __future__ import annotations
 import os
 import re
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Literal, Mapping
 from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
 
-from app.models.schemas import DataSourceConfig, DataSourceRuntimeStatus, DataSourceType, now_timepoint
+from app.data_sources.runtime_health import RuntimeHealthSnapshot, runtime_health_registry
+from app.models.schemas import (
+    DataSourceConfig,
+    DataSourceRuntimeStatus,
+    DataSourceType,
+    PlanType,
+    SourceFailure,
+    SourceFailureClass,
+    SourceFailureHandlingStrategy,
+    TimePoint,
+    now_timepoint,
+)
 
 BASE_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = BASE_DIR.parents[2]
@@ -375,9 +387,13 @@ def runtime_statuses(environment: str | None = None) -> list[DataSourceRuntimeSt
     snapshot = load_data_source_settings(environment)
     statuses: list[DataSourceRuntimeStatus] = []
     for source in snapshot.sources:
+        runtime_snapshot = runtime_health_registry.snapshot(source.source_id)
+        active_runtime_snapshot = runtime_snapshot if source.enabled else None
         degraded_reason: str | None = None
         if source.enabled and source.license_status != "APPROVED":
             degraded_reason = "data source license is not approved"
+        elif active_runtime_snapshot is not None and _runtime_is_degraded(active_runtime_snapshot):
+            degraded_reason = _runtime_degraded_reason(active_runtime_snapshot)
         health_status = "DEGRADED" if degraded_reason else ("OK" if source.enabled else "DISABLED")
         statuses.append(
             DataSourceRuntimeStatus(
@@ -390,14 +406,67 @@ def runtime_statuses(environment: str | None = None) -> list[DataSourceRuntimeSt
                 authority_level=source.authority_level,
                 license_status=source.license_status,
                 commercial_allowed=source.commercial_allowed,
-                last_success_at=now_timepoint() if source.enabled and not degraded_reason else None,
-                last_failure_at=now_timepoint() if degraded_reason else None,
-                latest_failure=None,
-                average_latency_ms=None,
+                last_success_at=_runtime_timepoint(active_runtime_snapshot.last_success_at) if active_runtime_snapshot else None,
+                last_failure_at=_runtime_timepoint(active_runtime_snapshot.last_failure_at) if active_runtime_snapshot else None,
+                latest_failure=_runtime_source_failure(source.source_id, active_runtime_snapshot) if active_runtime_snapshot else None,
+                average_latency_ms=active_runtime_snapshot.average_latency_ms if active_runtime_snapshot else None,
                 checked_at=now_timepoint(),
             )
         )
     return statuses
+
+
+def _runtime_is_degraded(snapshot: RuntimeHealthSnapshot) -> bool:
+    if snapshot.circuit_state != "CLOSED":
+        return True
+    return snapshot.last_event_succeeded is False
+
+
+def _runtime_degraded_reason(snapshot: RuntimeHealthSnapshot) -> str:
+    if snapshot.circuit_state != "CLOSED":
+        return f"provider runtime circuit is {snapshot.circuit_state.lower()}"
+    return f"provider runtime reported {snapshot.latest_failure_kind or 'failure'}"
+
+
+def _runtime_timepoint(value: datetime | None) -> TimePoint | None:
+    if value is None:
+        return None
+    return TimePoint(datetime=value, timezone="Asia/Shanghai", source_timezone="Asia/Shanghai")
+
+
+def _runtime_source_failure(source_id: str, snapshot: RuntimeHealthSnapshot) -> SourceFailure | None:
+    if snapshot.last_failure_at is None or snapshot.latest_error_code is None:
+        return None
+    occurred_at = _runtime_timepoint(snapshot.last_failure_at)
+    if occurred_at is None:
+        return None
+    return SourceFailure(
+        failure_id=f"runtime_{source_id}",
+        request_id="runtime_health",
+        trace_id="runtime_health",
+        correlation_id="runtime_health",
+        source_id=source_id,
+        adapter_name="FlyAIClient" if source_id == "fliggy_flyai" else "ProviderRuntime",
+        handling_strategy=SourceFailureHandlingStrategy.BLOCK_PLAN,
+        error_code=snapshot.latest_error_code,
+        retry_count=max(0, snapshot.consecutive_failures - 1),
+        source_used_id=source_id,
+        fallback_source_id=None,
+        fallback_reason=None,
+        fallback_used=False,
+        failure_class=SourceFailureClass.CORE_FACT_FAILURE,
+        message=f"provider runtime failure: {snapshot.latest_failure_kind or 'UNKNOWN'}",
+        final_handling_strategy=SourceFailureHandlingStrategy.BLOCK_PLAN,
+        impacted_plan_types=[
+            PlanType.DIRECT_RAIL,
+            PlanType.TRANSFER_RAIL,
+            PlanType.DIRECT_FLIGHT,
+            PlanType.TRANSFER_FLIGHT,
+            PlanType.FLIGHT_RAIL_MIXED,
+        ],
+        user_visible_message="飞猪票务数据暂不可确认，请稍后重试。",
+        occurred_at=occurred_at,
+    )
 
 
 def registered_source_env_keys(environ: Mapping[str, str]) -> set[str]:

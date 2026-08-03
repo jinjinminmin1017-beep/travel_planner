@@ -14,6 +14,7 @@ from app.data_sources.config_loader import (
 )
 from app.data_sources.llm_providers import OpenAICompatibleLLMProvider
 from app.data_sources.provider_registry import ADAPTER_REGISTRY, validate_enabled_provider_factories
+from app.data_sources.runtime_health import runtime_health_registry
 from app.models.schemas import DataSourceConfig
 from scripts.check_real_api_config import validate_env_example_sync, validate_public_tier
 
@@ -75,6 +76,13 @@ def _reload() -> None:
     reset_data_source_settings_cache()
 
 
+@pytest.fixture(autouse=True)
+def _reset_runtime_health():
+    runtime_health_registry.reset()
+    yield
+    runtime_health_registry.reset()
+
+
 def test_env_only_defaults_register_expected_sources_for_dev_and_test():
     for environment in ("DEV", "TEST"):
         configs = {config.source_id: config for config in load_data_source_configs(environment)}
@@ -115,6 +123,41 @@ def test_enabled_pending_license_is_degraded_after_valid_configuration(monkeypat
     assert status.enabled is True
     assert status.health_status == "DEGRADED"
     assert status.degraded_reason == "data source license is not approved"
+
+
+def test_flyai_runtime_failure_and_recovery_drive_real_status_fields(monkeypatch):
+    monkeypatch.setenv("TRAVEL_SOURCE_FLIGGY_FLYAI_ENABLED", "true")
+    monkeypatch.setenv("TRAVEL_SOURCE_FLIGGY_FLYAI_LICENSE_STATUS", "APPROVED")
+    monkeypatch.setenv("TRAVEL_SOURCE_FLIGGY_FLYAI_API_KEY", "test-key")
+    monkeypatch.setenv("TRAVEL_SOURCE_FLIGGY_FLYAI_EXECUTABLE", "flyai")
+    _reload()
+
+    never_called = {item.source_id: item for item in runtime_statuses()}["fliggy_flyai"]
+    assert never_called.health_status == "OK"
+    assert never_called.last_success_at is None
+    assert never_called.last_failure_at is None
+
+    runtime_health_registry.record_failure(
+        "fliggy_flyai",
+        failure_kind="FATAL_PROCESS_EXIT",
+        error_code="FLIGGY_FATAL_PROCESS_EXIT",
+        retryable=True,
+        latency_ms=42,
+    )
+    degraded = {item.source_id: item for item in runtime_statuses()}["fliggy_flyai"]
+    assert degraded.health_status == "DEGRADED"
+    assert degraded.last_success_at is None
+    assert degraded.last_failure_at is not None
+    assert degraded.latest_failure is not None
+    assert degraded.latest_failure.error_code == "FLIGGY_FATAL_PROCESS_EXIT"
+    assert degraded.latest_failure.message == "provider runtime failure: FATAL_PROCESS_EXIT"
+    assert degraded.average_latency_ms == 42
+
+    runtime_health_registry.record_success("fliggy_flyai", 18)
+    recovered = {item.source_id: item for item in runtime_statuses()}["fliggy_flyai"]
+    assert recovered.health_status == "OK"
+    assert recovered.last_success_at is not None
+    assert recovered.last_failure_at is not None
 
 
 def test_unknown_source_key_fails_without_echoing_value(monkeypatch):

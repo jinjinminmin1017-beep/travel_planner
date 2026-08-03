@@ -1169,6 +1169,19 @@ def _flight_provider_failure_outcome(source_id: str, exc: Exception) -> FlightPr
         status = "FAILED"
         error_code = "FLIGHT_PARSER_REJECTED_ALL"
         retryable = False
+    elif any(
+        marker in lowered
+        for marker in (
+            "fliggy_fatal_process_exit",
+            "fliggy_non_zero_exit",
+            "fliggy_execution_failed",
+            "fliggy_stderr",
+            "fliggy_circuit_open",
+        )
+    ):
+        status = "FAILED"
+        error_code = "FLIGHT_PROVIDER_FAILED"
+        retryable = True
     elif isinstance(exc, httpx.TransportError):
         status = "FAILED"
         error_code = "FLIGHT_PROVIDER_FAILED"

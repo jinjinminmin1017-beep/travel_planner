@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -18,6 +19,7 @@ from app.data_sources.fliggy_flyai_provider import (
 from app.data_sources.flyai_cli_client import FlyAIClient, FlyAIClientError, FlyAICommandResult
 from app.data_sources.rail_providers import RailSearchRequest, _rail_provider_failure_outcome
 from app.data_sources.redirect_providers import create_booking_redirect
+from app.data_sources.runtime_health import RuntimeCircuitOpenError, RuntimeHealthRegistry, runtime_health_registry
 from app.models.schemas import (
     BookingRedirectRequest,
     PlanType,
@@ -63,10 +65,12 @@ def _clear_provider_state():
     _COMMAND_CACHE.clear()
     _IN_FLIGHT.clear()
     _LAST_CALL_AT.clear()
+    runtime_health_registry.reset()
     yield
     _COMMAND_CACHE.clear()
     _IN_FLIGHT.clear()
     _LAST_CALL_AT.clear()
+    runtime_health_registry.reset()
 
 
 def _provider(payload: dict, *, cache_ttl_seconds: int = 60) -> tuple[FliggyFlyAIProvider, _FixtureClient]:
@@ -112,6 +116,51 @@ def test_cli_uses_argument_vector_and_child_environment_without_secret_leakage()
     assert call["timeout"] == 3
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Windows shim resolution is Windows-specific")
+def test_cli_resolves_certified_windows_runtime_without_using_shell():
+    project_root = Path(__file__).resolve().parents[3]
+    shim = project_root / "node_modules" / ".bin" / "flyai.cmd"
+    bundle = project_root / "node_modules" / "@fly-ai" / "flyai-cli" / "dist" / "flyai-bundle.cjs"
+    calls: list[dict] = []
+
+    def runner(argv, **kwargs):
+        calls.append({"argv": argv, **kwargs})
+        return subprocess.CompletedProcess(
+            argv,
+            0,
+            stdout=json.dumps({"status": 0, "message": "success", "systemMessage": "", "data": {"itemList": []}}),
+            stderr="",
+        )
+
+    client = FlyAIClient(
+        api_key="secret",
+        executable=str(shim.with_suffix("")),
+        timeout_seconds=3,
+        runner=runner,
+    )
+    client.search_train(origin="上海", destination="北京", departure_date=date(2026, 8, 20))
+
+    assert client.executable == str(shim)
+    assert calls[0]["argv"][1:3] == ["--single-threaded", str(bundle)]
+    assert calls[0]["shell"] is False
+
+
+def test_cli_rejects_uncertified_locked_bundle(tmp_path):
+    node_modules = tmp_path / "node_modules"
+    shim = node_modules / ".bin" / ("flyai.cmd" if os.name == "nt" else "flyai")
+    shim.parent.mkdir(parents=True)
+    shim.write_text("", encoding="utf-8")
+    package_root = node_modules / "@fly-ai" / "flyai-cli"
+    (package_root / "dist").mkdir(parents=True)
+    (package_root / "package.json").write_text(json.dumps({"version": "1.0.16"}), encoding="utf-8")
+    (package_root / "dist" / "flyai-bundle.cjs").write_text("uncertified", encoding="utf-8")
+
+    with pytest.raises(FlyAIClientError) as error:
+        FlyAIClient(api_key="secret", executable=str(shim), timeout_seconds=3)
+
+    assert error.value.code == "FLIGGY_RUNTIME_NOT_CERTIFIED"
+
+
 @pytest.mark.parametrize(
     ("returncode", "stderr", "message", "system_message", "expected_code"),
     [
@@ -132,6 +181,112 @@ def test_cli_fails_closed_on_process_and_experience_mode_signals(returncode, std
         client.search_train(origin="Shanghai", destination="Beijing", departure_date=date(2026, 8, 20))
     assert error.value.code == expected_code
     assert "secret" not in str(error.value)
+
+
+def test_cli_classifies_fatal_exit_and_short_circuits_cross_family_calls():
+    monotonic_now = [0.0]
+    wall_clock_now = [datetime(2026, 8, 3, tzinfo=timezone.utc)]
+    registry = RuntimeHealthRegistry(
+        monotonic=lambda: monotonic_now[0],
+        wall_clock=lambda: wall_clock_now[0],
+    )
+    calls = 0
+    success_payload = {"status": 0, "message": "success", "systemMessage": "", "data": {"itemList": []}}
+
+    def runner(argv, **_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return subprocess.CompletedProcess(
+                argv,
+                3221226505,
+                stdout=json.dumps(success_payload),
+                stderr="Assertion failed: !(handle->flags & UV_HANDLE_CLOSING), file src\\win\\async.c",
+            )
+        return subprocess.CompletedProcess(argv, 0, stdout=json.dumps(success_payload), stderr="")
+
+    client = FlyAIClient(
+        api_key="secret",
+        executable="flyai",
+        timeout_seconds=3,
+        runner=runner,
+        runtime_registry=registry,
+    )
+    with pytest.raises(FlyAIClientError) as fatal_error:
+        client.search_flight(origin="上海", destination="北京", departure_date=date(2026, 8, 20), non_stop=True)
+    assert fatal_error.value.code == "FLIGGY_FATAL_PROCESS_EXIT"
+    assert fatal_error.value.failure_kind == "FATAL_PROCESS_EXIT"
+
+    with pytest.raises(FlyAIClientError) as circuit_error:
+        client.search_train(origin="上海虹桥", destination="北京南", departure_date=date(2026, 8, 20))
+    assert circuit_error.value.code == "FLIGGY_CIRCUIT_OPEN"
+    assert calls == 1
+    assert registry.snapshot("fliggy_flyai").circuit_state == "OPEN"  # type: ignore[union-attr]
+
+    monotonic_now[0] = 31.0
+    wall_clock_now[0] = datetime(2026, 8, 3, 0, 1, tzinfo=timezone.utc)
+    client.search_train(origin="上海虹桥", destination="北京南", departure_date=date(2026, 8, 20))
+    recovered = registry.snapshot("fliggy_flyai")
+    assert calls == 2
+    assert recovered is not None and recovered.circuit_state == "CLOSED"
+    assert recovered.last_success_at == wall_clock_now[0]
+
+
+def test_runtime_registry_allows_only_one_half_open_probe_and_uses_distinct_thresholds():
+    monotonic_now = [0.0]
+    registry = RuntimeHealthRegistry(monotonic=lambda: monotonic_now[0])
+    registry.record_failure(
+        "fliggy_flyai",
+        failure_kind="FATAL_PROCESS_EXIT",
+        error_code="FLIGGY_FATAL_PROCESS_EXIT",
+        retryable=True,
+        latency_ms=10,
+    )
+    monotonic_now[0] = 31.0
+    registry.before_call("fliggy_flyai")
+    with pytest.raises(RuntimeCircuitOpenError):
+        registry.before_call("fliggy_flyai")
+
+    timeout_registry = RuntimeHealthRegistry(monotonic=lambda: monotonic_now[0])
+    for _ in range(2):
+        timeout_registry.record_failure(
+            "fliggy_flyai",
+            failure_kind="TIMEOUT",
+            error_code="FLIGGY_TIMEOUT",
+            retryable=True,
+            latency_ms=30_000,
+        )
+    assert timeout_registry.snapshot("fliggy_flyai").circuit_state == "CLOSED"  # type: ignore[union-attr]
+    timeout_registry.record_failure(
+        "fliggy_flyai",
+        failure_kind="TIMEOUT",
+        error_code="FLIGGY_TIMEOUT",
+        retryable=True,
+        latency_ms=30_000,
+    )
+    assert timeout_registry.snapshot("fliggy_flyai").circuit_state == "OPEN"  # type: ignore[union-attr]
+
+
+def test_cli_classifies_timeout_and_invalid_json_without_exposing_output():
+    def timeout_runner(argv, **_kwargs):
+        raise subprocess.TimeoutExpired(argv, 3)
+
+    timeout_client = FlyAIClient(api_key="secret", executable="flyai", timeout_seconds=3, runner=timeout_runner)
+    with pytest.raises(FlyAIClientError) as timeout_error:
+        timeout_client.search_train(origin="上海", destination="北京", departure_date=date(2026, 8, 20))
+    assert timeout_error.value.code == "FLIGGY_TIMEOUT"
+    assert timeout_error.value.failure_kind == "TIMEOUT"
+
+    runtime_health_registry.reset()
+
+    def invalid_runner(argv, **_kwargs):
+        return subprocess.CompletedProcess(argv, 0, stdout="not-json-sensitive-output", stderr="")
+
+    invalid_client = FlyAIClient(api_key="secret", executable="flyai", timeout_seconds=3, runner=invalid_runner)
+    with pytest.raises(FlyAIClientError) as invalid_error:
+        invalid_client.search_train(origin="上海", destination="北京", departure_date=date(2026, 8, 20))
+    assert invalid_error.value.code == "FLIGGY_INVALID_JSON"
+    assert "not-json-sensitive-output" not in str(invalid_error.value)
 
 
 def test_flight_provider_parses_direct_and_connecting_items_and_reuses_cache():

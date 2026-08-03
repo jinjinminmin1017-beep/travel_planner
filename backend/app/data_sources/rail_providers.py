@@ -398,6 +398,19 @@ def _rail_provider_failure_outcome(source_id: str, exc: Exception) -> RailProvid
         status = "INVALID_RESPONSE"
         error_code = "FLIGGY_INVALID_RESPONSE"
         retryable = True
+    elif any(
+        marker in lowered
+        for marker in (
+            "fliggy_fatal_process_exit",
+            "fliggy_non_zero_exit",
+            "fliggy_execution_failed",
+            "fliggy_stderr",
+            "fliggy_circuit_open",
+        )
+    ):
+        status = "FAILED"
+        error_code = "RAIL_PROVIDER_FAILED"
+        retryable = True
     else:
         status = "FAILED"
         error_code = "RAIL_PROVIDER_FAILED"

@@ -3,9 +3,11 @@ from copy import deepcopy
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.data_sources.config_loader import reset_data_source_settings_cache
 from app.data_sources.flight_providers import FlightProviderSearchResult
 from app.data_sources.map_providers import AmapRouteProvider, MapRouteProviderResult
 from app.data_sources.rail_providers import RailProviderSearchResult
+from app.data_sources.runtime_health import runtime_health_registry
 from app.models.schemas import LLMRecommendationOutput, RecommendationSlot, RecommendationSlotStatus, RecommendationType
 from app.core import security
 from app.services import store
@@ -49,6 +51,36 @@ def test_health_and_data_source_status():
     admin_body = admin_status.json()
     assert admin_body["sources"]
     assert "qps_limit" not in admin_body["sources"][0]
+
+
+def test_provider_runtime_degradation_does_not_change_app_liveness(monkeypatch):
+    monkeypatch.setenv("TRAVEL_SOURCE_FLIGGY_FLYAI_ENABLED", "true")
+    monkeypatch.setenv("TRAVEL_SOURCE_FLIGGY_FLYAI_LICENSE_STATUS", "APPROVED")
+    monkeypatch.setenv("TRAVEL_SOURCE_FLIGGY_FLYAI_API_KEY", "test-key")
+    monkeypatch.setenv("TRAVEL_SOURCE_FLIGGY_FLYAI_EXECUTABLE", "flyai")
+    reset_data_source_settings_cache()
+    runtime_health_registry.reset()
+    runtime_health_registry.record_failure(
+        "fliggy_flyai",
+        failure_kind="FATAL_PROCESS_EXIT",
+        error_code="FLIGGY_FATAL_PROCESS_EXIT",
+        retryable=True,
+        latency_ms=25,
+    )
+    try:
+        health = client.get("/api/health")
+        status = client.get("/api/data-sources/status")
+
+        assert health.status_code == 200
+        assert health.json()["status"] == "OK"
+        flyai = next(item for item in status.json()["sources"] if item["source_id"] == "fliggy_flyai")
+        assert flyai["health_status"] == "DEGRADED"
+        assert flyai["last_success_at"] is None
+        assert flyai["last_failure_at"] is not None
+        assert flyai["latest_failure"]["error_code"] == "FLIGGY_FATAL_PROCESS_EXIT"
+    finally:
+        runtime_health_registry.reset()
+        reset_data_source_settings_cache()
 
 
 def test_observability_metrics_are_read_only_and_aggregate_requests():

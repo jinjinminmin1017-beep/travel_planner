@@ -2,6 +2,10 @@
   "name": "travel-planner-runtime-tools",
   "version": "0.1.0",
   "private": true,
+  "scripts": {
+    "postinstall": "node scripts/patch_flyai_cli.mjs",
+    "verify:flyai-cli": "node scripts/patch_flyai_cli.mjs --check"
+  },
   "dependencies": {
     "@fly-ai/flyai-cli": "1.0.16"
   }

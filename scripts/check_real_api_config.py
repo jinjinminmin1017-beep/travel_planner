@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import subprocess
 import sys
 from pathlib import Path
 
@@ -130,7 +131,27 @@ def validate_secret_tier(selected_sources: list[str]) -> list[str]:
         failures.append("ticket: fliggy_flyai API key is missing")
     if status.health_status != "OK":
         failures.append(f"ticket: fliggy_flyai status is {status.health_status}")
+    failures.extend(validate_flyai_bundle_gate())
     return failures
+
+
+def validate_flyai_bundle_gate() -> list[str]:
+    try:
+        completed = subprocess.run(
+            ["node", str(ROOT / "scripts" / "patch_flyai_cli.mjs"), "--check"],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=15,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return ["ticket: FlyAI CLI bundle patch gate could not be executed"]
+    if completed.returncode != 0:
+        return ["ticket: FlyAI CLI bundle is not the certified patched artifact"]
+    return []
 
 
 def validate_full_tier() -> list[str]:

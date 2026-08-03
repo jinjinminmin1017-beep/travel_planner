@@ -18,6 +18,7 @@ $FrontendDir = Join-Path $RootDir "frontend"
 $LogsDir = Join-Path $RootDir "logs"
 $PythonExe = Join-Path $RootDir ".venv\Scripts\python.exe"
 $NpmExe = (Get-Command npm.cmd -ErrorAction SilentlyContinue).Source
+$NodeExe = (Get-Command node.exe -ErrorAction SilentlyContinue).Source
 $FlyAIExecutable = Join-Path $RootDir "node_modules\.bin\flyai.cmd"
 
 if (-not (Test-Path $PythonExe)) {
@@ -25,6 +26,9 @@ if (-not (Test-Path $PythonExe)) {
 }
 if (-not $NpmExe) {
   throw "npm.cmd was not found in PATH."
+}
+if (-not $NodeExe) {
+  throw "node.exe was not found in PATH."
 }
 if (-not (Test-Path $FrontendDir)) {
   throw "Frontend directory not found at $FrontendDir."
@@ -36,6 +40,20 @@ if (-not $SkipBackend -and -not $SkipFlyAI -and -not (Test-Path -LiteralPath $Fl
 if (-not $SkipBackend -and -not $SkipFlyAI) {
   $env:TRAVEL_SOURCE_FLIGGY_FLYAI_ENABLED = "true"
   $env:TRAVEL_SOURCE_FLIGGY_FLYAI_EXECUTABLE = $FlyAIExecutable
+  & $NodeExe (Join-Path $RootDir "scripts\patch_flyai_cli.mjs") --check
+  if ($LASTEXITCODE -ne 0) {
+    throw "FlyAI CLI build patch verification failed. Run npm install from $RootDir and retry."
+  }
+  $readinessOutput = & $PythonExe (Join-Path $RootDir "scripts\check_flyai_readiness.py") --executable $FlyAIExecutable 2>&1
+  if ($LASTEXITCODE -ne 0) {
+    Write-Host ($readinessOutput -join [Environment]::NewLine)
+    throw "FlyAI readiness probe failed. Fix the reported runtime issue or pass -SkipFlyAI for explicit no-ticket UI debugging."
+  }
+  Write-Host ($readinessOutput -join [Environment]::NewLine)
+}
+elseif (-not $SkipBackend -and $SkipFlyAI) {
+  $env:TRAVEL_SOURCE_FLIGGY_FLYAI_ENABLED = "false"
+  Write-Host "FlyAI disabled: starting explicit no-ticket UI debug mode."
 }
 
 New-Item -ItemType Directory -Force -Path $LogsDir | Out-Null

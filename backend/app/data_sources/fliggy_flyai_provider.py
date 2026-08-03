@@ -22,6 +22,7 @@ from app.data_sources.flight_providers import (
 from app.data_sources.flyai_cli_client import FlyAIClient, FlyAIClientError, FlyAICommandResult
 from app.data_sources.provider_booking import ProviderBookingReference
 from app.data_sources.rail_providers import RailOffer, RailSearchRequest
+from app.data_sources.runtime_health import RuntimeHealthRegistry, runtime_health_registry
 from app.models.schemas import CacheMetadata, DataSourceMetadata, DataSourceType, Money, SeatOption, TimePoint
 
 SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
@@ -61,6 +62,7 @@ class FliggyFlyAIProvider:
         qps_limit: int,
         cache_ttl_seconds: int,
         redirect_allowed_hosts: tuple[str, ...],
+        runtime_registry: RuntimeHealthRegistry = runtime_health_registry,
     ) -> None:
         if qps_limit <= 0:
             raise FliggyFlyAIProviderError("FLIGGY_CONFIGURATION_ERROR: QPS limit must be positive")
@@ -70,6 +72,7 @@ class FliggyFlyAIProvider:
         self.qps_limit = qps_limit
         self.cache_ttl_seconds = cache_ttl_seconds
         self.redirect_allowed_hosts = tuple(host.lower().strip(".") for host in redirect_allowed_hosts)
+        self._runtime_registry = runtime_registry
 
     @overload
     def search_offers(self, request: FlightSearchRequest) -> list[FlightOffer]: ...
@@ -119,6 +122,7 @@ class FliggyFlyAIProvider:
                 continue
         if items and not offers:
             code = "FLIGGY_PRICE_NOT_EXACT" if rejected_price == len(items) else "FLIGGY_INVALID_RESPONSE"
+            self._record_invalid_provider_response(cached, code)
             raise FliggyFlyAIProviderError(f"{code}: all FlyAI flight items were rejected")
         return sorted(
             offers,
@@ -158,6 +162,7 @@ class FliggyFlyAIProvider:
             offers.append(offer)
         if items and not offers:
             code = "FLIGGY_PRICE_NOT_EXACT" if rejected_price == len(items) else "FLIGGY_INVALID_RESPONSE"
+            self._record_invalid_provider_response(cached, code)
             raise FliggyFlyAIProviderError(f"{code}: all FlyAI rail items were rejected")
         return sorted(offers, key=lambda offer: offer.departure_at)
 
@@ -204,6 +209,15 @@ class FliggyFlyAIProvider:
             if previous is not None and now - previous < interval:
                 time.sleep(interval - (now - previous))
             _LAST_CALL_AT[self.source_id] = time.monotonic()
+
+    def _record_invalid_provider_response(self, cached: _CachedCommand, error_code: str) -> None:
+        self._runtime_registry.record_failure(
+            self.source_id,
+            failure_kind="INVALID_RESPONSE",
+            error_code=error_code,
+            retryable=error_code != "FLIGGY_PRICE_NOT_EXACT",
+            latency_ms=cached.result.elapsed_ms,
+        )
 
     def _flight_offer(self, item: Any, cached: _CachedCommand) -> FlightOffer:
         item_dict = _item_dict(item)
