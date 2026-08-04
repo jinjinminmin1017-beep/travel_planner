@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 from collections import Counter
 from threading import RLock
 from typing import Any
@@ -15,6 +16,11 @@ _PLANNING_LATENCY_SAMPLES: dict[str, list[float]] = {
     "final_result_latency_ms": [],
 }
 _PLANNING_DEADLINE_OUTCOMES: Counter[str] = Counter()
+_RAIL_RUNTIME_SAMPLES: dict[str, list[float]] = {
+    "local_search_latency_ms": [],
+    "inventory_verification_latency_ms": [],
+}
+_RAIL_RUNTIME_COUNTERS: Counter[str] = Counter()
 _METRICS_LOCK = RLock()
 
 
@@ -51,6 +57,31 @@ def metrics_snapshot() -> dict[str, Any]:
             for name, samples in _PLANNING_LATENCY_SAMPLES.items()
         }
         deadline_outcomes = dict(_PLANNING_DEADLINE_OUTCOMES)
+        rail_runtime = {
+            name: _summarize_samples(samples)
+            for name, samples in _RAIL_RUNTIME_SAMPLES.items()
+        }
+        rail_counters = dict(_RAIL_RUNTIME_COUNTERS)
+    rail_coverage: list[dict[str, Any]] = []
+    try:
+        from app.data_sources.config_loader import load_rail_timetable_settings
+        from app.services.rail_timetable_store import RailTimetableStore
+
+        settings = load_rail_timetable_settings()
+        if settings.snapshot_enabled:
+            rail_coverage = [
+                {
+                    "service_date": item.service_date.isoformat(),
+                    "status": item.status,
+                    "completed_at": item.completed_at.isoformat() if item.completed_at else None,
+                    "service_count": item.service_count,
+                    "stop_count": item.stop_count,
+                    "fresh": item.fresh,
+                }
+                for item in RailTimetableStore().coverage(freshness_hours=settings.freshness_hours)
+            ]
+    except (OSError, RuntimeError, ValueError, sqlite3.Error):
+        rail_coverage = []
     return {
         "generated_at": now_timepoint().model_dump(mode="json"),
         "counters": dict(_COUNTERS),
@@ -59,6 +90,9 @@ def metrics_snapshot() -> dict[str, Any]:
         "app_event_links": list(_APP_EVENT_LINKS[-50:]),
         "planning_latency_ms": planning_latency,
         "planning_deadline_outcomes": deadline_outcomes,
+        "rail_timetable_coverage": rail_coverage,
+        "rail_runtime": rail_runtime,
+        "rail_runtime_counters": rail_counters,
     }
 
 
@@ -102,6 +136,37 @@ def record_async_planning_metrics(
         _COUNTERS["planning_location_cache_hits"] += location_cache_hits
         _COUNTERS["planning_location_cache_misses"] += location_cache_misses
         _PLANNING_DEADLINE_OUTCOMES[deadline_outcome] += 1
+
+
+def record_rail_local_search_metrics(
+    *,
+    elapsed_ms: float,
+    candidate_count: int,
+    scanned_leg_count: int,
+) -> None:
+    with _METRICS_LOCK:
+        _RAIL_RUNTIME_SAMPLES["local_search_latency_ms"].append(elapsed_ms)
+        del _RAIL_RUNTIME_SAMPLES["local_search_latency_ms"][:-200]
+        _RAIL_RUNTIME_COUNTERS["local_searches"] += 1
+        _RAIL_RUNTIME_COUNTERS["local_candidates"] += candidate_count
+        _RAIL_RUNTIME_COUNTERS["local_scanned_legs"] += scanned_leg_count
+
+
+def record_rail_inventory_metrics(
+    *,
+    elapsed_ms: float,
+    queried_group_count: int,
+    external_call_count: int,
+    budget_exhausted: bool,
+) -> None:
+    with _METRICS_LOCK:
+        _RAIL_RUNTIME_SAMPLES["inventory_verification_latency_ms"].append(elapsed_ms)
+        del _RAIL_RUNTIME_SAMPLES["inventory_verification_latency_ms"][:-200]
+        _RAIL_RUNTIME_COUNTERS["inventory_verifications"] += 1
+        _RAIL_RUNTIME_COUNTERS["inventory_queried_groups"] += queried_group_count
+        _RAIL_RUNTIME_COUNTERS["inventory_external_calls"] += external_call_count
+        if budget_exhausted:
+            _RAIL_RUNTIME_COUNTERS["inventory_budget_exhausted"] += 1
 
 
 def record_app_event(

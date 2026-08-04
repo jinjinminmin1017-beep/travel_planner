@@ -439,7 +439,8 @@ def station_candidates_for_location(place: str, limit: int = 3, environment: str
         point = None
     if not city:
         return []
-    return [_station_candidate(record, point) for record in _rank_nodes(STATIONS, city, point)[:limit]]
+    ranked = _rank_station_nodes(place, city, point)
+    return [_station_candidate(record, point, match_type=match_type) for record, match_type in ranked[:limit]]
 
 
 def airport_candidates_for_location(place: str, limit: int = 2, environment: str | None = None) -> list[AirportCandidate]:
@@ -571,16 +572,21 @@ def nearby_transit_stop(place: str, mode: TransportMode, side: str) -> str:
     return f"{place}附近公交站"
 
 
-def _station_candidate(record: NodeRecord, origin_point: GeoPoint | None) -> StationCandidate:
+def _station_candidate(
+    record: NodeRecord,
+    origin_point: GeoPoint | None,
+    *,
+    match_type: str = "CITY",
+) -> StationCandidate:
     distance = _distance_meters(origin_point, record.point) if origin_point and _has_coordinates(record.point) else None
     if distance is None:
         transfer_minutes = 0
         transfer_cost = None
-        ranking_reasons = [f"城市匹配：{record.city_name}", f"枢纽优先级：{record.hub_rank}", "站点目录未提供可验证坐标，暂按枢纽等级排序。"]
+        ranking_reasons = [f"匹配类型：{match_type}", f"城市匹配：{record.city_name}", f"枢纽优先级：{record.hub_rank}", "站点目录未提供可验证坐标。"]
     else:
         transfer_minutes = max(12, int(distance / 550))
         transfer_cost = money(max(600, int(distance / 1000 * 250)), estimated=True)
-        ranking_reasons = [f"城市匹配：{record.city_name}", f"枢纽优先级：{record.hub_rank}", f"距输入地点约 {round(distance / 1000, 1)} km"]
+        ranking_reasons = [f"匹配类型：{match_type}", f"城市匹配：{record.city_name}", f"枢纽优先级：{record.hub_rank}", f"距输入地点约 {round(distance / 1000, 1)} km"]
     return StationCandidate(
         station_id=record.node_id,
         station_name=record.node_name,
@@ -613,6 +619,50 @@ def _airport_candidate(record: NodeRecord, origin_point: GeoPoint | None) -> Air
         ranking_reasons=ranking_reasons,
         data_source=_node_data_source(record, DataSourceType.FLIGHT),
     )
+
+
+def _rank_station_nodes(place: str, city: str, point: GeoPoint | None) -> list[tuple[NodeRecord, str]]:
+    normalized_place = _normalize(place)
+    exact: list[NodeRecord] = []
+    strong: list[NodeRecord] = []
+    for node in STATIONS:
+        if node.city_name != city:
+            continue
+        node_is_generic_city_station = _normalize(node.node_name) == _normalize(city)
+        names = {
+            _normalize(node.node_name),
+            _normalize(f"{node.node_name}站"),
+            *{_normalize(alias) for alias in node.aliases},
+        }
+        if normalized_place in names and (not node_is_generic_city_station or place.strip().endswith("站")):
+            exact.append(node)
+        elif not node_is_generic_city_station and any(
+            name and len(name) >= 2 and name in normalized_place for name in names
+        ):
+            strong.append(node)
+    weak = _rank_nodes(STATIONS, city, point)
+    ranked: list[tuple[NodeRecord, str]] = []
+    seen: set[str] = set()
+    for match_type, records in (("EXPLICIT_STATION", exact), ("DISTRICT_STRONG", strong), ("CITY", weak)):
+        ordered_records = (
+            records
+            if match_type == "CITY"
+            else sorted(
+                records,
+                key=lambda item: (
+                    _distance_meters(point, item.point) if point and _has_coordinates(item.point) else 0,
+                    item.hub_rank,
+                    item.node_name,
+                ),
+            )
+        )
+        for node in ordered_records:
+            key = _normalize(node.node_name)
+            if key in seen:
+                continue
+            seen.add(key)
+            ranked.append((node, match_type))
+    return ranked
 
 
 def _rank_nodes(nodes: tuple[NodeRecord, ...], city: str, point: GeoPoint | None) -> list[NodeRecord]:

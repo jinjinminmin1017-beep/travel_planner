@@ -41,7 +41,9 @@ def test_planning_nodes_cover_supported_and_known_unsupported_routes():
     assert unsupported.supported is False
     assert unsupported.route_key == "成都_深圳"
     assert unsupported.start_station == "成都东"
-    assert unsupported.end_station == "深圳北"
+    assert unsupported.end_station == "福田"
+    futian = next(candidate for candidate in unsupported.station_candidates if candidate.station_name == "福田")
+    assert "DISTRICT_STRONG" in futian.ranking_reasons[0]
 
 
 def test_wuhan_destination_generates_station_and_airport_candidates():

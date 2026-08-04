@@ -32,6 +32,9 @@
 - `backend/app/services/task_queue.py`：异步任务期限、Provider 超时、并发和渐进结果开关；期限默认处于观测模式。
 - `backend/app/services/local_transfer_engine.py`：规划请求内地点解析与地图路线复用，缓存键覆盖规范化坐标、方式、Provider 链和环境。
 - `backend/app/services/rail_connection_matcher.py`：铁路两段完整 offer 的确定性连接匹配、同站身份校验、跨站动态换乘门槛与诊断指标。
+- `backend/app/services/rail_timetable_store.py`：SQLite 服务日批次、幂等写入、完整性门禁、原子激活、覆盖和保留清理。
+- `backend/app/services/rail_route_search.py`：只查询 ACTIVE 快照的直达与一次换乘路线搜索；不包含价格、余票或跳转事实。
+- `backend/app/services/rail_inventory_verifier.py`：按日期与站点对分组调用 FlyAI，把本地候选转换为可发布票务 offer。
 - `backend/app/services/offer_preselection.py`：对完整铁路 Provider offer 元数据进行约束感知分桶和稳定排序，完整计划与最近备选使用独立有界预算。
 - `backend/app/services/constraints/`：V1.16 分类型约束计算、安全门禁、Pareto 筛选和最近备选选择。
 - `backend/app/data_sources/`：地图、地理编码、铁路、航班、天气、LLM、跳转和数据源配置适配器。
@@ -41,6 +44,7 @@
   - `flight_providers.py`：航班请求构造、逐来源 outcome 聚合与 FlyAI offer 接入；已区分 VERIFIED、EMPTY、RATE_LIMITED、TIMEOUT、FAILED、INVALID_RESPONSE、PRICE_NOT_EXACT、DISABLED。
   - `flyai_cli_client.py`、`fliggy_flyai_provider.py`：固定版本官方 FlyAI CLI 的 fail-closed 子进程边界，以及共用的航班/铁路精确价格解析、60 秒缓存、single-flight、item fingerprint 和 allowlisted `jumpUrl`。
   - `provider_booking.py`：Provider 内部 booking reference；只在规划阶段生成 plan/segment-bound `FLIGGY` redirect。
+  - `rail_12306_timetable_provider.py`：低频、可暂停的当前时刻表导入适配器；不注册为在线票务 Provider。
   - `browser_worker_client.py`、`browser_flight_providers.py`：历史兼容代码，不在配置模型、Provider 注册表或默认启动脚本中。
 - `backend/app/core/`：请求上下文、安全策略、日志配置。
 - `backend/app/data/`：本地数据目录，如交通节点和目的地资产。
@@ -48,6 +52,8 @@
 - `backend/app/tests/`：后端 pytest 测试。
 - `schemas/`：导出的 API/schema JSON Schema。
 - `scripts/`：启动、schema 导出、Provider 配置检查、live smoke、数据导入、质量评估脚本。
+  - `scripts/import_12306_timetable.py`：15 天 bootstrap、每日 refresh、checkpoint/resume 和 dry-run。
+  - `scripts/install_rail_timetable_refresh.ps1`：Windows 每日刷新任务的安装、检查和卸载。
 - `docs/`：产品任务拆分、架构索引、API 合同和历史文档归档。
 - `mock_data/`：路线 mock 数据目录。
 - `.github/workflows/`：CI 工作流。
@@ -84,6 +90,7 @@
 - TTL 缓存服务：`backend/app/services/cache_store.py`。
 - 运行时 store：`backend/app/services/store.py`。
 - 默认 SQLite 路径配置：`.env.example` 中的 `TRAVEL_SQLITE_PATH=logs/travel_planner.sqlite3`。
+- 铁路快照使用同一 SQLite，新增按服务日管理的 `rail_timetable_batch`、`rail_service`、`rail_stop_time`；运行与回滚见 `docs/RAIL_TIMETABLE_OPERATIONS.md`。
 - `fliggy_flyai` 是航班与铁路唯一运行时票务事实源；旧航司、浏览器航司、12306 查询和旧票务 redirect 已从配置模型、注册表与 `.env.example` 移除，不存在自动 fallback。
 - Redis/PostgreSQL 尚未实现，当前不提供对应运行配置。
 
@@ -110,4 +117,7 @@
 - Provider 配置检查：`.\.venv\Scripts\python scripts\check_real_api_config.py --tier public`
 - 公开 live smoke：`.\.venv\Scripts\python scripts\live_smoke_real_apis.py --tier public`
 - FlyAI 航班/铁路 live smoke：`.\.venv\Scripts\python scripts\live_smoke_real_apis.py --tier secret --provider flight --provider rail`
+- 铁路时刻表 POC：`.\.venv\Scripts\python scripts\import_12306_timetable.py --date-from <未来日期> --days 1 --train-number G1 --dry-run`
+- 铁路 15 天 bootstrap：`.\.venv\Scripts\python scripts\import_12306_timetable.py --mode bootstrap --days 15 --resume`
+- 铁路每日 refresh：`.\.venv\Scripts\python scripts\import_12306_timetable.py --mode refresh --days 15 --resume`
 - 春秋航空匿名查询验证：`docs/flight_provider_evidence/2026-07-18/spring_airlines_anonymous_query.md`

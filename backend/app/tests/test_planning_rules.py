@@ -156,7 +156,7 @@ def test_non_sample_route_uses_dynamic_direct_rail_without_old_families():
 
     rail_direct = plans[0]
     rail_segment = next(segment for segment in rail_direct.segments if hasattr(segment, "origin_station"))
-    assert rail_segment.origin_station == "北京西"
+    assert rail_segment.origin_station == "北京朝阳"
     assert rail_segment.destination_station == "广州南"
 
 

@@ -1173,7 +1173,7 @@ def test_non_sample_route_uses_beijing_guangzhou_provider_network():
 
     direct_rail = _first_dynamic_rail_plan(body["plans"])
     rail_segment = next(segment for segment in direct_rail["segments"] if segment["segment_type"] == "RAIL")
-    assert rail_segment["origin_station"] == "北京西"
+    assert rail_segment["origin_station"] in {"北京朝阳", "北京西"}
     assert rail_segment["destination_station"] == "广州南"
     assert "广州南" in rail_segment["stop_sequence"]
     assert "上海虹桥" not in rail_segment["origin_station"] + rail_segment["destination_station"]
@@ -1192,7 +1192,7 @@ def test_known_city_pair_uses_dynamic_rail_provider_search():
     dynamic_rail = next(plan for plan in body["plans"] if plan["plan_id"].startswith("plan_rail_direct_dynamic"))
     rail_segment = next(segment for segment in dynamic_rail["segments"] if segment["segment_type"] == "RAIL")
     assert rail_segment["origin_station"] == "成都东"
-    assert rail_segment["destination_station"] == "深圳北"
+    assert rail_segment["destination_station"] == "福田"
     assert "route_coverage" not in body["missing_components"]
 
 

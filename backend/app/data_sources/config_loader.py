@@ -33,6 +33,72 @@ AuthorityLevel = Literal["S", "A", "B", "C"]
 EnvironmentName = Literal["DEV", "TEST", "PROD"]
 
 
+@dataclass(frozen=True)
+class RailTimetableSettings:
+    snapshot_enabled: bool
+    local_routing_enabled: bool
+    refresh_enabled: bool
+    horizon_days: int
+    refresh_at: str
+    retention_days: int
+    freshness_hours: int
+    import_interval_seconds: float
+
+
+def load_rail_timetable_settings(environ: Mapping[str, str] | None = None) -> RailTimetableSettings:
+    values = environ if environ is not None else os.environ
+    if environ is None:
+        load_project_env()
+    snapshot_enabled = _parse_runtime_bool(values.get("TRAVEL_RAIL_TIMETABLE_SNAPSHOT_ENABLED"), False)
+    local_routing_enabled = _parse_runtime_bool(values.get("TRAVEL_RAIL_LOCAL_ROUTING_ENABLED"), False)
+    refresh_enabled = _parse_runtime_bool(values.get("TRAVEL_RAIL_TIMETABLE_REFRESH_ENABLED"), False)
+    if local_routing_enabled and not snapshot_enabled:
+        raise DataSourceConfigurationError(
+            "TRAVEL_RAIL_LOCAL_ROUTING_ENABLED requires TRAVEL_RAIL_TIMETABLE_SNAPSHOT_ENABLED"
+        )
+    horizon_days = _parse_runtime_int(
+        "TRAVEL_RAIL_TIMETABLE_HORIZON_DAYS",
+        values.get("TRAVEL_RAIL_TIMETABLE_HORIZON_DAYS"),
+        default=15,
+        minimum=1,
+    )
+    retention_days = _parse_runtime_int(
+        "TRAVEL_RAIL_TIMETABLE_RETENTION_DAYS",
+        values.get("TRAVEL_RAIL_TIMETABLE_RETENTION_DAYS"),
+        default=45,
+        minimum=horizon_days,
+    )
+    freshness_hours = _parse_runtime_int(
+        "TRAVEL_RAIL_TIMETABLE_FRESHNESS_HOURS",
+        values.get("TRAVEL_RAIL_TIMETABLE_FRESHNESS_HOURS"),
+        default=36,
+        minimum=1,
+    )
+    import_interval_seconds = _parse_runtime_float(
+        "TRAVEL_RAIL_TIMETABLE_IMPORT_INTERVAL_SECONDS",
+        values.get("TRAVEL_RAIL_TIMETABLE_IMPORT_INTERVAL_SECONDS"),
+        default=1.5,
+        minimum=1.0,
+    )
+    refresh_at = (values.get("TRAVEL_RAIL_TIMETABLE_REFRESH_AT") or "03:30").strip()
+    try:
+        datetime.strptime(refresh_at, "%H:%M")
+    except ValueError as exc:
+        raise DataSourceConfigurationError(
+            "TRAVEL_RAIL_TIMETABLE_REFRESH_AT must use local HH:mm format"
+        ) from exc
+    return RailTimetableSettings(
+        snapshot_enabled=snapshot_enabled,
+        local_routing_enabled=local_routing_enabled,
+        refresh_enabled=refresh_enabled,
+        horizon_days=horizon_days,
+        refresh_at=refresh_at,
+        retention_days=retention_days,
+        freshness_hours=freshness_hours,
+        import_interval_seconds=import_interval_seconds,
+    )
+
+
 class DataSourceConfigurationError(ValueError):
     """A fail-closed configuration error that never includes secret values."""
 
@@ -796,6 +862,41 @@ def _parse_csv(value: str | None, *, lower: bool = False) -> tuple[str, ...]:
     if lower:
         return tuple(item.lower().strip(".") for item in items)
     return items
+
+
+def _parse_runtime_bool(value: str | None, default: bool) -> bool:
+    if value is None or not value.strip():
+        return default
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise DataSourceConfigurationError(f"invalid boolean runtime setting: {value!r}")
+
+
+def _parse_runtime_int(name: str, value: str | None, *, default: int, minimum: int) -> int:
+    if value is None or not value.strip():
+        return default
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise DataSourceConfigurationError(f"{name} must be an integer") from exc
+    if parsed < minimum:
+        raise DataSourceConfigurationError(f"{name} must be at least {minimum}")
+    return parsed
+
+
+def _parse_runtime_float(name: str, value: str | None, *, default: float, minimum: float) -> float:
+    if value is None or not value.strip():
+        return default
+    try:
+        parsed = float(value)
+    except ValueError as exc:
+        raise DataSourceConfigurationError(f"{name} must be numeric") from exc
+    if parsed < minimum:
+        raise DataSourceConfigurationError(f"{name} must be at least {minimum}")
+    return parsed
 
 
 def _host_matches_allowed_hosts(hostname: str, allowed_hosts: tuple[str, ...]) -> bool:

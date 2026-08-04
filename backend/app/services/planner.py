@@ -11,6 +11,7 @@ from typing import Callable
 from uuid import uuid4
 
 from app.core.context import RequestContext
+from app.data_sources.config_loader import load_rail_timetable_settings
 from app.data_sources.flight_providers import (
     FlightOffer,
     FlightProviderOutcome,
@@ -22,7 +23,12 @@ from app.data_sources.flight_providers import (
     search_flight_offers_with_enabled_provider_result,
 )
 from app.data_sources.map_providers import estimate_route_with_enabled_provider_result
-from app.data_sources.rail_providers import RailOffer, RailSearchRequest, search_rail_offers_with_enabled_provider_result
+from app.data_sources.rail_providers import (
+    RailOffer,
+    RailSearchRequest,
+    search_rail_offers_with_enabled_provider_result,
+    station_code_for_name,
+)
 from app.data_sources.redirect_providers import build_fliggy_redirect
 from app.models.schemas import (
     AirportCandidate,
@@ -100,7 +106,9 @@ from app.services.rail_connection_matcher import (
     rail_connection_matcher_v2_enabled,
     rail_connection_policy_from_env,
 )
+from app.services.rail_inventory_verifier import RailInventoryVerifier
 from app.services.rail_planning_engine import RailPlanSpec, TicketEnhancementSpec
+from app.services.rail_route_search import RailRouteSearch
 from app.services.recommendation import recommend_with_validation
 from app.services.result_set_preferences import apply_rail_seat_to_result_set
 from app.services.store import get_response_for_plan, update_plan
@@ -700,6 +708,146 @@ def _dynamic_station_names(route_nodes, city: str, limit: int = 2) -> list[str]:
         if candidate.city_name == city and candidate.station_name not in names:
             names.append(candidate.station_name)
     return names[:limit]
+
+
+@dataclass(frozen=True)
+class LocalRailBuildResult:
+    plans: list[TravelPlan]
+    snapshot_used: bool
+
+
+def _build_local_snapshot_rail_plans(
+    *,
+    travel_request: TravelRequest,
+    route_nodes,
+    origin_text: str,
+    destination_text: str,
+    origin_city: str,
+    destination_city: str,
+    taxi,
+    collector: PlanningIssueCollector,
+) -> LocalRailBuildResult:
+    settings = load_rail_timetable_settings()
+    if not settings.snapshot_enabled or not settings.local_routing_enabled:
+        return LocalRailBuildResult([], False)
+    origin_candidates = [
+        candidate
+        for candidate in route_nodes.station_candidates
+        if candidate.city_name == origin_city and station_code_for_name(candidate.station_name)
+    ]
+    destination_candidates = [
+        candidate
+        for candidate in route_nodes.station_candidates
+        if candidate.city_name == destination_city and station_code_for_name(candidate.station_name)
+    ]
+    origin_codes = [station_code_for_name(candidate.station_name) for candidate in origin_candidates]
+    destination_codes = [station_code_for_name(candidate.station_name) for candidate in destination_candidates]
+    search_result = RailRouteSearch().search(
+        service_date=travel_request.travel_date,
+        origin_station_codes=[code for code in origin_codes if code],
+        destination_station_codes=[code for code in destination_codes if code],
+        freshness_hours=settings.freshness_hours,
+        max_candidates=24,
+        min_transfer_minutes=rail_connection_policy_from_env().min_same_station_transfer_minutes,
+        max_transfer_wait_minutes=rail_connection_policy_from_env().max_transfer_wait_minutes,
+        origin_relevance={code: index for index, code in enumerate(origin_codes) if code},
+        destination_relevance={code: index for index, code in enumerate(destination_codes) if code},
+        preferred_departure_at=(
+            travel_request.preferred_departure_time.datetime
+            if travel_request.preferred_departure_time is not None
+            else None
+        ),
+    )
+    if not search_result.snapshot_available:
+        logger.info(
+            "rail_local_snapshot_unavailable request_id=%s service_date=%s fallback=real_time_discovery",
+            travel_request.request_id,
+            travel_request.travel_date.isoformat(),
+        )
+        return LocalRailBuildResult([], False)
+    if not search_result.candidates:
+        collector.add_missing("rail_local_no_schedule")
+        collector.add_warning("本地有效铁路快照已查询完成，但当前站点范围内没有直达或一次换乘车次。")
+        logger.info(
+            "rail_local_snapshot_empty request_id=%s service_date=%s scanned_leg_count=%s",
+            travel_request.request_id,
+            travel_request.travel_date.isoformat(),
+            search_result.diagnostics.scanned_leg_count,
+        )
+        return LocalRailBuildResult([], True)
+    verification = RailInventoryVerifier().verify(
+        search_result.candidates,
+        max_groups=3,
+        total_budget_seconds=90,
+    )
+    available = [item for item in verification.candidates if item.status == "AVAILABLE"]
+    if not available:
+        reason_codes = [item.reason_code for item in verification.candidates[:3]]
+        collector.add_missing("rail_inventory_verification")
+        _record_rail_provider_block(
+            collector,
+            failure_messages=reason_codes or ["FlyAI inventory verification returned no publishable offer"],
+            missing_component="rail_inventory_verification",
+            impacted_plan_types=[PlanType.DIRECT_RAIL, PlanType.TRANSFER_RAIL],
+        )
+        return LocalRailBuildResult([], True)
+    plans: list[TravelPlan] = []
+    for item in available[:3]:
+        plan_index = len(plans) + 1
+        rail_segments = [
+            _rail_segment_from_offer(f"seg_rail_local_{plan_index}_{leg_index}", offer)
+            for leg_index, offer in enumerate(item.offers, start=1)
+        ]
+        try:
+            segments = [
+                taxi(
+                    f"seg_origin_station_local_{plan_index}",
+                    origin_text,
+                    f"{item.offers[0].origin_station}站",
+                    38,
+                    7800,
+                ),
+                *rail_segments,
+                taxi(
+                    f"seg_station_dest_local_{plan_index}",
+                    f"{item.offers[-1].destination_station}站",
+                    destination_text,
+                    32,
+                    6200,
+                ),
+            ]
+        except LocalTransferUnavailable:
+            continue
+        direct = len(item.offers) == 1
+        plan = _plan(
+            f"plan_rail_local_{'direct' if direct else 'transfer'}_{plan_index}",
+            (
+                f"本地时刻表候选 · {item.offers[0].train_number}"
+                if direct
+                else f"本地时刻表换乘 · {' / '.join(offer.train_number for offer in item.offers)}"
+            ),
+            PlanType.DIRECT_RAIL if direct else PlanType.TRANSFER_RAIL,
+            segments,
+            8.0 if direct else 7.2,
+            RiskLevel.LOW if direct else RiskLevel.MEDIUM,
+            "本地运行图筛选并经飞猪实时核票",
+            "本地快照只用于路线候选；车次时刻、精确价格、席别和跳转均已由飞猪 FlyAI 实时验证。",
+        )
+        _attach_offer_redirects(
+            plan,
+            [(offer, [segment]) for offer, segment in zip(item.offers, rail_segments, strict=True)],
+        )
+        plans.append(plan)
+    logger.info(
+        "rail_local_planner_complete request_id=%s schedule_candidate_count=%s queried_group_count=%s external_call_count=%s available_count=%s plan_count=%s",
+        travel_request.request_id,
+        len(search_result.candidates),
+        verification.diagnostics.queried_group_count,
+        verification.diagnostics.external_call_count,
+        verification.diagnostics.available_count,
+        len(plans),
+    )
+    return LocalRailBuildResult(plans, True)
 
 
 def _dynamic_airport_candidates(route_nodes, city: str, limit: int = 2) -> list[AirportCandidate]:
@@ -2293,7 +2441,23 @@ def build_plans(
         day.isoformat(),
     )
 
+    local_rail_snapshot_used = False
+
     def build_direct_rail() -> list[TravelPlan]:
+        nonlocal local_rail_snapshot_used
+        local_result = _build_local_snapshot_rail_plans(
+            travel_request=travel_request,
+            route_nodes=route_nodes,
+            origin_text=origin,
+            destination_text=destination,
+            origin_city=origin_city,
+            destination_city=destination_city,
+            taxi=taxi,
+            collector=collector,
+        )
+        if local_result.snapshot_used:
+            local_rail_snapshot_used = True
+            return local_result.plans
         return _build_dynamic_direct_rail_plans(
             travel_request=travel_request,
             route_nodes=route_nodes,
@@ -2369,6 +2533,7 @@ def build_plans(
     if (
         TransportMode.RAIL in generation_modes
         and not dynamic_rail_plans
+        and not local_rail_snapshot_used
         and not collector.has_rail_rate_limit()
         and allow_new_branch("TRANSFER_RAIL")
     ):
@@ -2397,6 +2562,7 @@ def build_plans(
         {TransportMode.RAIL, TransportMode.FLIGHT}.issubset(generation_modes)
         and not dynamic_rail_plans
         and not dynamic_flight_plans
+        and not local_rail_snapshot_used
         and not collector.has_rail_rate_limit()
         and allow_new_branch("FLIGHT_RAIL_MIXED")
     ):

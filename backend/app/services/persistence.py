@@ -65,6 +65,9 @@ def init_persistence() -> None:
             )
             """
         )
+    from app.services.rail_timetable_store import ensure_rail_timetable_schema
+
+    ensure_rail_timetable_schema(path)
 
 
 def save_travel_response(response: TravelPlanResponse) -> None:

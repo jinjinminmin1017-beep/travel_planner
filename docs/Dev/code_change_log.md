@@ -600,3 +600,24 @@
   - 在线门禁：航班 24/50、铁路 23/50 成功；16 次普通非零退出、1 次业务错误、36 次保护性熔断；无 fatal exit。cold P50/P95/P99=1251.63/1458.92/2005.20ms，warm=0.65/0.78/1.13ms。
 - 发布结论：代码任务完成，Windows `0xC0000409` 竞态与单 job 故障放大已修复；上游普通 exit 1/业务稳定性未达到全成功门禁，生产真实票务发布继续阻塞。
 - 兼容性：外部 API schema 保持 V1.18；无数据库迁移；状态字段语义由配置投影修正为真实运行事件。
+
+## 2026-08-04 23:42:17 +08:00
+
+- 任务：实现本地铁路时刻表快照、直达/一次换乘搜索和 FlyAI 实时核票链路。
+- 代码提交：见本次提交。
+- 修改内容：
+  - 新增默认关闭的铁路快照、本地路由、每日刷新、15 天窗口、新鲜度、保留期和低频间隔配置；非 dry-run 导入与系统调度入口均受开关约束。
+  - 新增 12306 当前日期车次发现与完整经停适配器、原子 checkpoint、查询级 resume、临时错误有限退避，以及 429/验证码/访问控制立即暂停门禁。
+  - 新增三张 SQLite 快照表、服务日 STAGING/ACTIVE/FAILED/RETIRED 批次、幂等 upsert、完整性与跨日单调门禁、原子激活、差异复制和历史清理。
+  - 新增依赖索引的直达/一次换乘搜索、跨日第二程、有界候选与诊断；修正宜兴、福田、北京朝阳等明确/区县强匹配优先级。
+  - 新增按日期/起终站分组的 FlyAI 核票器，区分 AVAILABLE、SOLD_OUT、NOT_ON_SALE、PROVIDER_UNAVAILABLE；最多查询 3 组，失败路径 fail-closed。
+  - Planner 在快照有效时使用本地候选并只发布 FlyAI 已验证方案；快照不可用回退旧实时路径，本地确认无车不重复外部发现；生成 plan/segment-bound 飞猪跳转。
+  - 新增覆盖率、新鲜度、批次、搜索与核票分位数/计数指标，以及 Windows Task Scheduler、cron/systemd、bootstrap/refresh/resume/rollback 运维说明。
+- 验证：
+  - `python -m pytest backend/app/tests -q`：290 passed。
+  - 前端 helper tests：26 passed；TypeScript typecheck 通过；Web/iOS/Android Expo export 通过。
+  - Python compileall、PowerShell AST、schema export/diff、`git diff --check` 与硬编码 Secret 扫描通过；Ruff 未安装，无法执行。
+  - 真实 G1 dry-run：发现与完整经停查询 HTTP 200，`DRY_RUN_COMPLETE`。
+  - 15 天 bootstrap 受控续跑：checkpoint 保留 103 个已完成发现查询、4959 个去重车次和下一前缀 `D10`；随后遇到 12306 访问控制并安全暂停，未激活不完整批次。
+- 阻塞：首次 D0～D+14 全量 ACTIVE 建库尚未完成；必须等待 12306 访问控制恢复后从 checkpoint 继续，禁止自动绕过。
+- 兼容性：外部 API schema 保持 V1.18；新增 SQLite 表不改写既有计划、响应和反馈表；功能开关默认关闭。
