@@ -652,3 +652,13 @@
   - checkpoint 在复制完成后立即原子写入，保留旧 FAILED 批次用于审计，不修改 ACTIVE 快照。
 - 验证：新增 FAILED 批次本地恢复测试；后端全量 pytest 291 passed；Python compileall 与 `git diff --check` 通过；真实续跑已越过原 C119 失败点。
 - 兼容性：不修改外部 API 或 SQLite schema；不增加网络并发、请求频率或访问控制重试。
+
+## 2026-08-05 09:16:00 +08:00
+
+- 任务：补齐真实铁路 bootstrap 遇到的当前官方站点目录缺口。
+- 代码提交：`5bfecb3`。
+- 修改内容：
+  - 使用既有目录导入脚本仅刷新 12306 铁路站点，保留内部种子与 OurAirports 数据；铁路站点总数更新为 3397。
+  - 新增的西安东站来自当前官方 `station_name.js`，telecode 为 `XDY`；不猜测站码、不允许空站码入库。
+- 验证：`station_code_for_name('西安东') == 'XDY'`；目录/地点/铁路定向测试 31 passed；后端全量 pytest 291 passed；`git diff --check` 通过。
+- 兼容性：不修改外部 API、SQLite schema、机场目录或访问控制策略。
