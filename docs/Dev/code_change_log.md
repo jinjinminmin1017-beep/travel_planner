@@ -631,3 +631,13 @@
   - 增加 C1017 同型 `station_no=01、07` 的解析回归，验证本地结果为 `1、2`；不补造中间停站，不放宽完整性门禁。
 - 验证：真实 C1017 诊断请求 HTTP 200；后端全量 pytest 290 passed；Python compileall 与 `git diff --check` 通过。
 - 兼容性：不修改外部 API、SQLite schema、票务事实边界或访问控制策略。
+
+## 2026-08-05 09:08:00 +08:00
+
+- 任务：修复真实铁路 bootstrap 的终到站伪发车时间冲突。
+- 代码提交：`7b4022a`。
+- 修改内容：
+  - 首站 arrival 与末站 departure 按服务边界归一为空，避免 12306 终到站残留 `start_time` 被误写为本地事实。
+  - 中间站到发时间和跨日时间单调性校验保持不变；增加末站 `arrival=11:32, start=11:31` 的 fail-safe 回归。
+- 验证：真实 C119 诊断请求 HTTP 200，并确认香格里拉终到站 `arrival=14:25, start=14:24`；后端全量 pytest 290 passed；Python compileall 与 `git diff --check` 通过。
+- 兼容性：不修改外部 API、数据库 schema、访问控制和批次激活门禁。
