@@ -641,3 +641,14 @@
   - 中间站到发时间和跨日时间单调性校验保持不变；增加末站 `arrival=11:32, start=11:31` 的 fail-safe 回归。
 - 验证：真实 C119 诊断请求 HTTP 200，并确认香格里拉终到站 `arrival=14:25, start=14:24`；后端全量 pytest 290 passed；Python compileall 与 `git diff --check` 通过。
 - 兼容性：不修改外部 API、数据库 schema、访问控制和批次激活门禁。
+
+## 2026-08-05 09:12:00 +08:00
+
+- 任务：避免真实铁路 bootstrap 在确定性失败修复后重复消耗已完成详情请求。
+- 代码提交：`bef100c`。
+- 修改内容：
+  - 新增同服务日批次间的事务型详情批量复制，按 500 个车次分块，复制 service/stop 数据并只在末尾刷新批次统计。
+  - `--resume` 遇到 FAILED 批次时创建新 STAGING 批次，只复制 checkpoint 标记完成且来源批次实际存在的稳定车次；失败车次和缺失键不复制，从首个未完成任务继续。
+  - checkpoint 在复制完成后立即原子写入，保留旧 FAILED 批次用于审计，不修改 ACTIVE 快照。
+- 验证：新增 FAILED 批次本地恢复测试；后端全量 pytest 291 passed；Python compileall 与 `git diff --check` 通过；真实续跑已越过原 C119 失败点。
+- 兼容性：不修改外部 API 或 SQLite schema；不增加网络并发、请求频率或访问控制重试。
