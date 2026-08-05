@@ -220,7 +220,7 @@ def test_12306_provider_exact_discovery_and_complete_stops() -> None:
                 "from_station": "北京南",
                 "station_train_code": "G1",
                 "to_station": "上海虹桥",
-                "total_num": "2",
+                "total_num": "3",
                 "train_no": "24000000G10L",
             },
             {
@@ -247,12 +247,20 @@ def test_12306_provider_exact_discovery_and_complete_stops() -> None:
                     "arrive_day_diff": "0",
                 },
                 {
+                    "station_name": "南京",
+                    "station_train_code": "G1",
+                    "station_no": "04",
+                    "arrive_time": "23:56",
+                    "start_time": "00:02",
+                    "arrive_day_diff": "0",
+                },
+                {
                     "station_name": "上海虹桥",
                     "station_train_code": "G1",
                     "station_no": "07",
-                    "arrive_time": "11:32",
-                    "start_time": "11:31",
-                    "arrive_day_diff": "0",
+                    "arrive_time": "05:32",
+                    "start_time": "05:31",
+                    "arrive_day_diff": "1",
                 },
             ]
         },
@@ -270,8 +278,10 @@ def test_12306_provider_exact_discovery_and_complete_stops() -> None:
     service = provider.fetch_complete_service(discovered[0])
     assert service.origin_station_code == "VNP"
     assert service.destination_station_code == "AOH"
-    assert len(service.stops) == 2
-    assert [stop.stop_sequence for stop in service.stops] == [1, 2]
+    assert len(service.stops) == 3
+    assert [stop.stop_sequence for stop in service.stops] == [1, 2, 3]
+    assert service.stops[1].arrival_day_offset == 0
+    assert service.stops[1].departure_day_offset == 1
     assert service.stops[-1].departure_time is None
 
 

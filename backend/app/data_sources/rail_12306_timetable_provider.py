@@ -417,6 +417,13 @@ def _parse_stop_row(value: Any, fallback_sequence: int, *, is_last: bool) -> Rai
     # arrival (C119 returned 14:24 after a 14:25 arrival). A terminal station
     # has no departure in our service model, regardless of that source noise.
     departure = None if is_last else _clock_or_none(value.get("start_time"))
+    departure_day_offset = day_offset
+    # arrive_day_diff belongs to the arrival event. For an intermediate stop
+    # spanning midnight (D10 at Nanjing: 23:56 arrival, 00:02 departure), the
+    # departure is on the following day even though the row has no separate
+    # departure-day field.
+    if arrival is not None and departure is not None and _clock_minutes(departure) < _clock_minutes(arrival):
+        departure_day_offset += 1
     return RailStopTimeInput(
         # queryTrainInfo may retain the parent service's sparse station_no values
         # after a train-number change (for example 01 -> 07 for a two-stop C1017
@@ -427,7 +434,7 @@ def _parse_stop_row(value: Any, fallback_sequence: int, *, is_last: bool) -> Rai
         arrival_time=arrival,
         arrival_day_offset=day_offset,
         departure_time=departure,
-        departure_day_offset=day_offset,
+        departure_day_offset=departure_day_offset,
     )
 
 
@@ -440,3 +447,8 @@ def _clock_or_none(value: Any) -> str | None:
     except ValueError as exc:
         raise RailTimetableProviderError(f"invalid 12306 stop time: {text}") from exc
     return text
+
+
+def _clock_minutes(value: str) -> int:
+    parsed = datetime.strptime(value, "%H:%M")
+    return parsed.hour * 60 + parsed.minute
