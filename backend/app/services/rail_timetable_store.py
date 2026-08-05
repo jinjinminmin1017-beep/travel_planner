@@ -282,6 +282,79 @@ class RailTimetableStore:
         self.upsert_service(target_batch_id, service)
         return True
 
+    def copy_services(
+        self,
+        source_batch_id: str,
+        target_batch_id: str,
+        train_nos_internal: Sequence[str],
+    ) -> set[str]:
+        requested = tuple(dict.fromkeys(value.strip() for value in train_nos_internal if value.strip()))
+        if not requested:
+            return set()
+        copied: set[str] = set()
+        with _connect(self.path) as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            source = conn.execute(
+                "SELECT service_date FROM rail_timetable_batch WHERE batch_id = ?",
+                (source_batch_id,),
+            ).fetchone()
+            target = conn.execute(
+                "SELECT service_date, status FROM rail_timetable_batch WHERE batch_id = ?",
+                (target_batch_id,),
+            ).fetchone()
+            if source is None or target is None:
+                raise RailTimetableStoreError("source and target batches are required for service copy")
+            if target[1] != "STAGING":
+                raise RailTimetableStoreError("copied rail services require a STAGING target batch")
+            if source[0] != target[0]:
+                raise RailTimetableStoreError("source and target batch dates must match")
+            for offset in range(0, len(requested), 500):
+                chunk = requested[offset : offset + 500]
+                placeholders = ",".join("?" for _ in chunk)
+                rows = conn.execute(
+                    f"""
+                    SELECT service_id, service_date, train_no_internal, train_number,
+                           origin_station_code, destination_station_code,
+                           summary_fingerprint, fetched_at
+                      FROM rail_service
+                     WHERE batch_id = ? AND train_no_internal IN ({placeholders})
+                    """,
+                    (source_batch_id, *chunk),
+                ).fetchall()
+                for row in rows:
+                    target_service_id = _service_id(target_batch_id, str(row[2]))
+                    conn.execute(
+                        """
+                        INSERT INTO rail_service(
+                          service_id, batch_id, service_date, train_no_internal, train_number,
+                          origin_station_code, destination_station_code, summary_fingerprint, fetched_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(batch_id, train_no_internal) DO UPDATE SET
+                          train_number = excluded.train_number,
+                          origin_station_code = excluded.origin_station_code,
+                          destination_station_code = excluded.destination_station_code,
+                          summary_fingerprint = excluded.summary_fingerprint,
+                          fetched_at = excluded.fetched_at
+                        """,
+                        (target_service_id, target_batch_id, *row[1:]),
+                    )
+                    conn.execute("DELETE FROM rail_stop_time WHERE service_id = ?", (target_service_id,))
+                    conn.execute(
+                        """
+                        INSERT INTO rail_stop_time(
+                          service_id, stop_sequence, station_code, arrival_time,
+                          arrival_day_offset, departure_time, departure_day_offset
+                        )
+                        SELECT ?, stop_sequence, station_code, arrival_time,
+                               arrival_day_offset, departure_time, departure_day_offset
+                          FROM rail_stop_time WHERE service_id = ?
+                        """,
+                        (target_service_id, row[0]),
+                    )
+                    copied.add(str(row[2]))
+            self._refresh_batch_counts(conn, target_batch_id)
+        return copied
+
     def active_service_fingerprints(self, service_date: date) -> tuple[str | None, dict[str, str]]:
         with _connect(self.path) as conn:
             batch = conn.execute(

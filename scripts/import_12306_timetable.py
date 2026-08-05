@@ -159,6 +159,7 @@ def _import_date(
         }
 
     batch_id = _resume_or_begin_batch(store, service_date, date_state, resume)
+    _save_checkpoint(checkpoint_path, checkpoint)
     completed = set(str(value) for value in date_state.get("completed_train_nos", []))
     active_batch_id, active_fingerprints = store.active_service_fingerprints(service_date)
     try:
@@ -219,13 +220,23 @@ def _resume_or_begin_batch(
     resume: bool,
 ) -> str:
     existing_id = str(date_state.get("batch_id") or "")
+    failed_source_id: str | None = None
+    previously_completed = tuple(str(value) for value in date_state.get("completed_train_nos", []))
     if resume and existing_id:
         existing = store.get_batch(existing_id)
         if existing and existing.status == "STAGING" and existing.service_date == service_date:
             return existing.batch_id
+        if existing and existing.status == "FAILED" and existing.service_date == service_date:
+            failed_source_id = existing.batch_id
     batch_id = store.begin_batch(service_date, SOURCE_VERSION)
     date_state["batch_id"] = batch_id
-    date_state["completed_train_nos"] = []
+    copied = (
+        store.copy_services(failed_source_id, batch_id, previously_completed)
+        if failed_source_id and previously_completed
+        else set()
+    )
+    date_state["completed_train_nos"] = sorted(copied)
+    date_state["status"] = "STAGING"
     return batch_id
 
 

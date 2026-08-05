@@ -52,7 +52,7 @@ from app.services.rail_timetable_store import (
     RailTimetableStore,
     RailTimetableStoreError,
 )
-from scripts.import_12306_timetable import _mark_checkpoint_paused
+from scripts.import_12306_timetable import _mark_checkpoint_paused, _resume_or_begin_batch
 
 
 UTC = timezone.utc
@@ -120,6 +120,28 @@ def test_batch_cleanup_keeps_active_and_one_previous_success_and_failure(tmp_pat
     assert statuses.count("ACTIVE") == 1
     assert statuses.count("RETIRED") == 1
     assert statuses.count("FAILED") == 1
+
+
+def test_failed_batch_resume_copies_completed_services_without_network(tmp_path: Path) -> None:
+    store = RailTimetableStore(tmp_path / "rail.sqlite3")
+    service_date = date.today()
+    failed_batch = store.begin_batch(service_date, "fixture-v1")
+    service = _service(service_date, "G1", "A", "B", "08:00", "10:00")
+    store.upsert_service(failed_batch, service)
+    store.fail_batch(failed_batch, "later service failed")
+    date_state = {
+        "batch_id": failed_batch,
+        "completed_train_nos": [service.train_no_internal, "missing_service"],
+        "status": "FAILED",
+    }
+
+    resumed_batch = _resume_or_begin_batch(store, service_date, date_state, resume=True)
+
+    resumed = store.get_batch(resumed_batch)
+    assert resumed is not None
+    assert resumed.status == "STAGING"
+    assert resumed.service_count == 1
+    assert date_state["completed_train_nos"] == [service.train_no_internal]
 
 
 def test_store_rejects_non_monotonic_cross_midnight_service(tmp_path: Path) -> None:
