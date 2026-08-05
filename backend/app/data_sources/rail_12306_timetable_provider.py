@@ -246,7 +246,10 @@ class Rail12306TimetableProvider:
         rows = data.get("data") if isinstance(data, dict) else None
         if not isinstance(rows, list) or len(rows) < 2:
             raise RailTimetableProviderError("12306 train detail returned fewer than two stops")
-        stops = tuple(_parse_stop_row(row, index) for index, row in enumerate(rows, start=1))
+        stops = tuple(
+            _parse_stop_row(row, index, is_last=index == len(rows))
+            for index, row in enumerate(rows, start=1)
+        )
         train_numbers = {
             str(row.get("station_train_code") or "").strip().upper()
             for row in rows
@@ -400,7 +403,7 @@ def _discovery_from_state(value: Any, service_date: date) -> DiscoveredRailServi
     )
 
 
-def _parse_stop_row(value: Any, fallback_sequence: int) -> RailStopTimeInput:
+def _parse_stop_row(value: Any, fallback_sequence: int, *, is_last: bool) -> RailStopTimeInput:
     if not isinstance(value, dict):
         raise RailTimetableProviderError("12306 train detail stop is not an object")
     station_name = str(value.get("station_name") or "").strip()
@@ -409,8 +412,11 @@ def _parse_stop_row(value: Any, fallback_sequence: int) -> RailStopTimeInput:
         raise RailTimetableProviderError(f"station code missing for timetable stop: {station_name or '<empty>'}")
     day_text = str(value.get("arrive_day_diff") or "0").strip()
     day_offset = int(day_text) if day_text.isdigit() else 0
-    arrival = _clock_or_none(value.get("arrive_time"))
-    departure = _clock_or_none(value.get("start_time"))
+    arrival = None if fallback_sequence == 1 else _clock_or_none(value.get("arrive_time"))
+    # Some terminal rows contain a stale start_time that can even precede the
+    # arrival (C119 returned 14:24 after a 14:25 arrival). A terminal station
+    # has no departure in our service model, regardless of that source noise.
+    departure = None if is_last else _clock_or_none(value.get("start_time"))
     return RailStopTimeInput(
         # queryTrainInfo may retain the parent service's sparse station_no values
         # after a train-number change (for example 01 -> 07 for a two-stop C1017
