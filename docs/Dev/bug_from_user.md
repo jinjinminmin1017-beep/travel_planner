@@ -95,3 +95,12 @@
 - 解决方式：中间站到发时间均存在且出发时钟早于到达时钟时，仅把该站出发日偏移增加 1；跨站全程单调门禁、首末站边界和批次完整性门禁保持严格。
 - 问题修改提交：`a0402c8`。
 - 验证：真实 D10 低频诊断请求 HTTP 200，确认南京站原始字段为 `23:56 / 00:02 / arrive_day_diff=0`；铁路定向测试 14 passed；后端全量测试首次为 290 passed、1 个无关异步规划用例失败，单独重跑该用例 1 passed；Python compileall 与 `git diff --check` 通过。
+
+## 2026-08-05 Bootstrap resume 重复处理已激活日期
+
+- 用户提问时间：2026-08-05。
+- 问题描述：2026-08-04 已成为含 9857 趟车的 ACTIVE 批次；次日发现遇到访问控制并冷却后，整窗 `--resume` 从窗口首日重新进入详情流程，产生新的 STAGING 批次并重复请求 51 趟首日详情。
+- 问题根因：`_resume_or_begin_batch()` 只识别 STAGING 和 FAILED checkpoint 批次，没有把 SQLite 中已经 ACTIVE 的服务日视为 bootstrap 的终态；它创建新批次并清空 checkpoint 的完成集合，导致从首趟重新抓取。
+- 解决方式：非 refresh 的 bootstrap resume 在任何发现或详情网络调用前，以 SQLite ACTIVE 批次为权威；命中后修复 checkpoint 的 batch、状态、计数和完成集合，直接返回并继续下一服务日。Refresh 模式仍会按原设计刷新 ACTIVE 日期。
+- 问题修改提交：`88d68c8`。
+- 验证：新增损坏 checkpoint + 已有 ACTIVE 批次的零网络回归；铁路定向测试 15 passed，后端全量测试 292 passed，Python compileall 与 `git diff --check` 通过。

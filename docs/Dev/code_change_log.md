@@ -673,3 +673,14 @@
   - 扩展 Provider 回归 fixture，同时覆盖稀疏来源站序、跨午夜停站和终到站伪发车字段。
 - 验证：真实 D10 单次低频详情请求 HTTP 200；铁路定向测试 14 passed；后端全量测试 290 passed、1 个无关异步规划用例首次失败且单独重跑 1 passed；Python compileall 与 `git diff --check` 通过。
 - 兼容性：不修改外部 API、SQLite schema、请求频率、并发度或访问控制策略。
+
+## 2026-08-05 17:05:00 +08:00
+
+- 任务：修复首次建库整窗 `--resume` 重复处理已 ACTIVE 服务日。
+- 代码提交：`88d68c8`。
+- 修改内容：
+  - Bootstrap resume 在发现和详情请求前查询 SQLite ACTIVE；已激活日期直接跳过，并用 ACTIVE batch 修复 checkpoint 的批次、状态、计数和完成车次集合。
+  - Refresh 模式不走跳过分支，保留既有差异刷新语义；新鲜度查询接口允许调用方显式选择“不做新鲜度过滤”，其他本地路由调用仍保留原新鲜度门禁。
+  - 增加已 ACTIVE + 损坏 checkpoint 场景的零网络回归，确保不会再次创建重复详情请求。
+- 验证：铁路定向测试 15 passed；后端全量测试 292 passed；Python compileall 与 `git diff --check` 通过。
+- 兼容性：不修改外部 API 或 SQLite schema；减少重复网络请求，不改变低频间隔、并发度或访问控制策略。
