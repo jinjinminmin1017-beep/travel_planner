@@ -59,3 +59,12 @@
 - 解决方式：对固定 `@fly-ai/flyai-cli@1.0.16`、官方 bundle SHA 和补丁后 SHA 实施构建期精确补丁；认证 Windows runtime 直接以 Node `--single-threaded` 无 shell 参数数组执行 patched bundle；真机启动前增加 bundle 校验与航班/铁路 readiness。后端新增 fatal/ordinary exit、stderr、timeout、rate limit、business/JSON 分类，共享来源级立即/阈值熔断、短冷却、半开恢复和真实 runtime health registry。
 - 问题修改提交：`2d632d7`、`526bbca`。
 - 修复验证：真实 readiness 曾完成航班、铁路 exit 0；100 次在线低频门禁未再出现 `3221226505`，证明 fatal shutdown race 已消除。门禁仍因 16 次上游普通 exit 1、1 次业务错误及随后的 36 次保护性熔断而失败；门禁后再次 readiness 被普通 exit 1 正确阻止，当前不得发布为稳定真实票务环境。
+
+## 2026-08-05 铁路时刻表详情因稀疏站序无法入库
+
+- 用户提问时间：2026-08-05。
+- 问题描述：首次 15 天铁路时刻表建库完成 2026-08-04 的 9857 趟车发现后，详情导入在第 17 趟 C1017 失败，批次状态为 FAILED，错误为 `stop_sequence must be contiguous and start at 1`。
+- 问题根因：12306 `queryTrainInfo` 对部分车次保留父级服务的稀疏 `station_no`；C1017 的两行有效响应实际为 `01、07`。解析器直接把来源序号写入本地 `stop_sequence`，与本地表要求的相对、连续、从 1 开始的站序冲突。
+- 解决方式：仍严格保留 12306 返回的行顺序，但把本地 `stop_sequence` 规范化为响应内从 1 开始的连续序号；不补造缺失停站，不放宽服务数、时间或批次完整性门禁；增加 `01、07 -> 1、2` 回归测试。
+- 问题修改提交：`a8c7081`。
+- 验证：真实 C1017 低频诊断请求 HTTP 200，并确认来源站序为 `01、07`；后端全量测试 290 passed。
