@@ -52,7 +52,7 @@ from app.services.rail_timetable_store import (
     RailTimetableStore,
     RailTimetableStoreError,
 )
-from scripts.import_12306_timetable import _mark_checkpoint_paused, _resume_or_begin_batch
+from scripts.import_12306_timetable import _import_date, _mark_checkpoint_paused, _resume_or_begin_batch
 
 
 UTC = timezone.utc
@@ -142,6 +142,55 @@ def test_failed_batch_resume_copies_completed_services_without_network(tmp_path:
     assert resumed.status == "STAGING"
     assert resumed.service_count == 1
     assert date_state["completed_train_nos"] == [service.train_no_internal]
+
+
+def test_bootstrap_resume_skips_active_date_and_repairs_checkpoint_without_network(tmp_path: Path) -> None:
+    store = RailTimetableStore(tmp_path / "rail.sqlite3")
+    service_date = date.today()
+    active_batch = store.begin_batch(service_date, "fixture-v1")
+    service = _service(service_date, "G1", "A", "B", "08:00", "10:00")
+    store.upsert_service(active_batch, service)
+    store.activate_batch(active_batch)
+    checkpoint_path = tmp_path / "checkpoint.json"
+    checkpoint = {
+        "version": 1,
+        "dates": {
+            service_date.isoformat(): {
+                "batch_id": "orphan-staging",
+                "completed_train_nos": [],
+                "status": "STAGING",
+                "discovery": {
+                    "status": "COMPLETE",
+                    "services": {service.train_no_internal: {}},
+                },
+            }
+        },
+    }
+
+    class NoNetworkProvider:
+        def discover_services(self, *_args, **_kwargs):
+            raise AssertionError("an ACTIVE bootstrap date must not make network requests")
+
+    summary = _import_date(
+        service_date=service_date,
+        provider=NoNetworkProvider(),  # type: ignore[arg-type]
+        store=store,
+        checkpoint=checkpoint,
+        checkpoint_path=checkpoint_path,
+        resume=True,
+        dry_run=False,
+        train_numbers=(),
+        prefixes=("G", "D", "C"),
+        max_discovery_queries=None,
+        max_trains=None,
+        refresh=False,
+    )
+
+    repaired = checkpoint["dates"][service_date.isoformat()]
+    assert summary["already_active"] is True
+    assert repaired["batch_id"] == active_batch
+    assert repaired["status"] == "ACTIVE"
+    assert repaired["completed_train_nos"] == [service.train_no_internal]
 
 
 def test_store_rejects_non_monotonic_cross_midnight_service(tmp_path: Path) -> None:

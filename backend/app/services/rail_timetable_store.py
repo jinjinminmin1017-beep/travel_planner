@@ -445,7 +445,7 @@ class RailTimetableStore:
                 (_utc_now().isoformat(), message.strip()[:500], batch_id),
             )
 
-    def active_batch(self, service_date: date, *, freshness_hours: int) -> RailTimetableBatch | None:
+    def active_batch(self, service_date: date, *, freshness_hours: int | None) -> RailTimetableBatch | None:
         with _connect(self.path) as conn:
             row = conn.execute(
                 """
@@ -459,7 +459,7 @@ class RailTimetableStore:
         batch = _batch_from_row(row) if row else None
         if batch is None or batch.completed_at is None:
             return None
-        if batch.completed_at < _utc_now() - timedelta(hours=freshness_hours):
+        if freshness_hours is not None and batch.completed_at < _utc_now() - timedelta(hours=freshness_hours):
             return None
         return batch
 

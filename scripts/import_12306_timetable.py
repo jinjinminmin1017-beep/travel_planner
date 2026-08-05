@@ -123,6 +123,31 @@ def _import_date(
         date_key,
         {"batch_id": None, "completed_train_nos": [], "status": "PENDING"},
     )
+    if resume and not dry_run and not refresh:
+        active = store.active_batch(service_date, freshness_hours=None)
+        if active is not None:
+            discovery_state = date_state.get("discovery")
+            discovery_services = discovery_state.get("services") if isinstance(discovery_state, dict) else None
+            if isinstance(discovery_services, dict) and len(discovery_services) == active.service_count:
+                date_state["completed_train_nos"] = sorted(str(value) for value in discovery_services)
+            date_state.update(
+                {
+                    "batch_id": active.batch_id,
+                    "status": "ACTIVE",
+                    "service_count": active.service_count,
+                    "stop_count": active.stop_count,
+                }
+            )
+            _save_checkpoint(checkpoint_path, checkpoint)
+            return {
+                "service_date": date_key,
+                "discovered_count": active.service_count,
+                "service_count": active.service_count,
+                "stop_count": active.stop_count,
+                "query_count": 0,
+                "activated": False,
+                "already_active": True,
+            }
     if train_numbers:
         discovered, diagnostics = provider.discover_exact_services(service_date, train_numbers)
     else:
