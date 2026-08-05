@@ -246,6 +246,7 @@ class Rail12306TimetableProvider:
         rows = data.get("data") if isinstance(data, dict) else None
         if not isinstance(rows, list) or len(rows) < 2:
             raise RailTimetableProviderError("12306 train detail returned fewer than two stops")
+        rows = _reconcile_extra_detail_rows(rows, discovered)
         stops = tuple(
             _parse_stop_row(row, index, is_last=index == len(rows))
             for index, row in enumerate(rows, start=1)
@@ -438,6 +439,49 @@ def _parse_stop_row(value: Any, fallback_sequence: int, *, is_last: bool) -> Rai
     )
 
 
+def _reconcile_extra_detail_rows(rows: list[Any], discovered: DiscoveredRailService) -> list[Any]:
+    expected = discovered.total_stop_count
+    if expected is None or len(rows) <= expected:
+        return rows
+    excess = len(rows) - expected
+    if expected < 2 or excess > len(rows) - 2:
+        raise RailTimetableProviderError("12306 train detail stop count exceeds discovery without safe reconciliation")
+    first = rows[0]
+    if not isinstance(first, dict):
+        raise RailTimetableProviderError("12306 train detail stop is not an object")
+    origin_departure = _clock_or_none(first.get("start_time"))
+    if origin_departure is None:
+        raise RailTimetableProviderError("12306 extra-stop reconciliation requires an origin departure time")
+    origin_minutes = _clock_minutes(origin_departure)
+    deviations: dict[int, int] = {}
+    for index, row in enumerate(rows[1:], start=1):
+        if not isinstance(row, dict):
+            raise RailTimetableProviderError("12306 train detail stop is not an object")
+        arrival = _clock_or_none(row.get("arrive_time"))
+        running_minutes = _duration_minutes_or_none(row.get("running_time"))
+        day_text = str(row.get("arrive_day_diff") or "0").strip()
+        if arrival is None or running_minutes is None or not day_text.isdigit():
+            raise RailTimetableProviderError("12306 extra-stop reconciliation lacks timing evidence")
+        elapsed_minutes = int(day_text) * 24 * 60 + _clock_minutes(arrival) - origin_minutes
+        deviations[index] = abs(elapsed_minutes - running_minutes)
+    removable = sorted(range(1, len(rows) - 1), key=lambda index: deviations[index], reverse=True)
+    dropped = set(removable[:excess])
+    if len(dropped) != excess:
+        raise RailTimetableProviderError("12306 train detail has too many unexplained intermediate stops")
+    kept_deviations = [value for index, value in deviations.items() if index not in dropped]
+    dropped_deviations = [deviations[index] for index in dropped]
+    if not dropped_deviations or min(dropped_deviations) < 30 or any(value > 15 for value in kept_deviations):
+        raise RailTimetableProviderError("12306 train detail extra stops cannot be reconciled unambiguously")
+    logger.warning(
+        "rail_timetable_detail_extra_rows_reconciled train_number=%s expected=%s returned=%s dropped=%s",
+        discovered.train_number,
+        expected,
+        len(rows),
+        len(dropped),
+    )
+    return [row for index, row in enumerate(rows) if index not in dropped]
+
+
 def _clock_or_none(value: Any) -> str | None:
     text = str(value or "").strip()
     if text in {"", "----", "--"}:
@@ -452,3 +496,11 @@ def _clock_or_none(value: Any) -> str | None:
 def _clock_minutes(value: str) -> int:
     parsed = datetime.strptime(value, "%H:%M")
     return parsed.hour * 60 + parsed.minute
+
+
+def _duration_minutes_or_none(value: Any) -> int | None:
+    text = str(value or "").strip()
+    parts = text.split(":")
+    if len(parts) != 2 or not all(part.isdigit() for part in parts):
+        return None
+    return int(parts[0]) * 60 + int(parts[1])

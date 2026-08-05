@@ -334,6 +334,78 @@ def test_12306_provider_exact_discovery_and_complete_stops() -> None:
     assert service.stops[-1].departure_time is None
 
 
+def test_12306_provider_reconciles_one_proven_parent_service_stop() -> None:
+    search_payload = {
+        "data": [
+            {
+                "date": "20260812",
+                "from_station": "北京南",
+                "station_train_code": "C824",
+                "to_station": "上海虹桥",
+                "total_num": "3",
+                "train_no": "950000C8240B",
+            }
+        ]
+    }
+    detail_payload = {
+        "status": True,
+        "httpstatus": 200,
+        "data": {
+            "data": [
+                {
+                    "station_name": "北京南",
+                    "station_train_code": "C824",
+                    "station_no": "01",
+                    "arrive_time": "----",
+                    "start_time": "15:12",
+                    "arrive_day_diff": "0",
+                    "running_time": "00:00",
+                },
+                {
+                    "station_name": "苏州",
+                    "station_train_code": "C824",
+                    "station_no": "02",
+                    "arrive_time": "16:44",
+                    "start_time": "16:46",
+                    "arrive_day_diff": "0",
+                    "running_time": "00:27",
+                },
+                {
+                    "station_name": "南京",
+                    "station_train_code": "C824",
+                    "station_no": "03",
+                    "arrive_time": "15:57",
+                    "start_time": "15:59",
+                    "arrive_day_diff": "0",
+                    "running_time": "00:50",
+                },
+                {
+                    "station_name": "上海虹桥",
+                    "station_train_code": "C824",
+                    "station_no": "04",
+                    "arrive_time": "17:08",
+                    "start_time": "18:25",
+                    "arrive_day_diff": "0",
+                    "running_time": "02:01",
+                },
+            ]
+        },
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = search_payload if "train/search" in str(request.url) else detail_payload
+        return httpx.Response(200, json=payload, headers={"content-type": "application/json"})
+
+    provider = Rail12306TimetableProvider(client=httpx.Client(transport=httpx.MockTransport(handler)), interval_seconds=1)
+    provider._wait_for_interval = lambda: None  # type: ignore[method-assign]
+    discovered, _ = provider.discover_exact_services(date(2026, 8, 12), ("C824",))
+    service = provider.fetch_complete_service(discovered[0])
+
+    assert len(service.stops) == 3
+    assert [stop.stop_sequence for stop in service.stops] == [1, 2, 3]
+    assert service.stops[1].station_code == "NJH"
+
+
 def test_12306_provider_pauses_on_rate_limit() -> None:
     provider = Rail12306TimetableProvider(
         client=httpx.Client(transport=httpx.MockTransport(lambda _request: httpx.Response(429))),
