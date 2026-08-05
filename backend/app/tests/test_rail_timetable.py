@@ -227,7 +227,7 @@ def test_12306_provider_exact_discovery_and_complete_stops() -> None:
                 {
                     "station_name": "上海虹桥",
                     "station_train_code": "G1",
-                    "station_no": "02",
+                    "station_no": "07",
                     "arrive_time": "11:32",
                     "start_time": "----",
                     "arrive_day_diff": "0",
@@ -249,6 +249,7 @@ def test_12306_provider_exact_discovery_and_complete_stops() -> None:
     assert service.origin_station_code == "VNP"
     assert service.destination_station_code == "AOH"
     assert len(service.stops) == 2
+    assert [stop.stop_sequence for stop in service.stops] == [1, 2]
 
 
 def test_12306_provider_pauses_on_rate_limit() -> None:

@@ -407,14 +407,16 @@ def _parse_stop_row(value: Any, fallback_sequence: int) -> RailStopTimeInput:
     station_code = station_code_for_name(station_name)
     if not station_name or not station_code:
         raise RailTimetableProviderError(f"station code missing for timetable stop: {station_name or '<empty>'}")
-    sequence_text = str(value.get("station_no") or "").strip()
-    sequence = int(sequence_text) if sequence_text.isdigit() else fallback_sequence
     day_text = str(value.get("arrive_day_diff") or "0").strip()
     day_offset = int(day_text) if day_text.isdigit() else 0
     arrival = _clock_or_none(value.get("arrive_time"))
     departure = _clock_or_none(value.get("start_time"))
     return RailStopTimeInput(
-        stop_sequence=sequence,
+        # queryTrainInfo may retain the parent service's sparse station_no values
+        # after a train-number change (for example 01 -> 07 for a two-stop C1017
+        # response). Our snapshot sequence is relative to the returned service, so
+        # normalize it to a contiguous 1-based order before the store validates it.
+        stop_sequence=fallback_sequence,
         station_code=station_code,
         arrival_time=arrival,
         arrival_day_offset=day_offset,
