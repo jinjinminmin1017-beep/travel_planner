@@ -695,3 +695,14 @@
   - 增加 C824 同型 3 站发现、4 行详情回归，验证父级残留行被移除且本地站序重新连续化。
 - 验证：真实 C824 低频诊断 HTTP 200；铁路定向测试 16 passed；后端全量测试 293 passed；Python compileall 与 `git diff --check` 通过。
 - 兼容性：不修改外部 API、SQLite schema、请求间隔、并发度或访问控制策略。
+
+## 2026-08-06 08:05:00 +08:00
+
+- 任务：避免 Windows 短暂文件共享冲突中断铁路 checkpoint 原子保存。
+- 代码提交：`2fae4e7`。
+- 修改内容：
+  - checkpoint 仍先完整写入同目录 `.tmp`，再执行原子 replace；仅对 Windows `PermissionError` 增加最多 6 次、50～800ms 的有界指数退避。
+  - 持续占用达到重试上限后继续明确失败；不捕获其他磁盘、权限或数据错误，不降低 checkpoint JSON 完整性。
+  - 增加两次瞬时共享冲突后成功的回归测试，验证最终文件可读。
+- 验证：铁路定向测试 17 passed；后端全量测试 294 passed；Python compileall 与 `git diff --check` 通过。
+- 兼容性：不修改外部 API、SQLite schema、12306 请求频率、并发度或访问控制策略。
