@@ -52,7 +52,12 @@ from app.services.rail_timetable_store import (
     RailTimetableStore,
     RailTimetableStoreError,
 )
-from scripts.import_12306_timetable import _import_date, _mark_checkpoint_paused, _resume_or_begin_batch
+from scripts.import_12306_timetable import (
+    _import_date,
+    _mark_checkpoint_paused,
+    _resume_or_begin_batch,
+    _save_checkpoint,
+)
 
 
 UTC = timezone.utc
@@ -191,6 +196,27 @@ def test_bootstrap_resume_skips_active_date_and_repairs_checkpoint_without_netwo
     assert repaired["batch_id"] == active_batch
     assert repaired["status"] == "ACTIVE"
     assert repaired["completed_train_nos"] == [service.train_no_internal]
+
+
+def test_checkpoint_atomic_replace_retries_temporary_windows_sharing_violation(monkeypatch, tmp_path: Path) -> None:
+    checkpoint_path = tmp_path / "checkpoint.json"
+    original_replace = Path.replace
+    attempts = 0
+
+    def flaky_replace(source: Path, target: Path) -> Path:
+        nonlocal attempts
+        attempts += 1
+        if attempts < 3:
+            raise PermissionError(5, "fixture sharing violation")
+        return original_replace(source, target)
+
+    monkeypatch.setattr(Path, "replace", flaky_replace)
+    monkeypatch.setattr("scripts.import_12306_timetable.time.sleep", lambda _seconds: None)
+
+    _save_checkpoint(checkpoint_path, {"version": 1, "dates": {}})
+
+    assert attempts == 3
+    assert checkpoint_path.read_text(encoding="utf-8")
 
 
 def test_store_rejects_non_monotonic_cross_midnight_service(tmp_path: Path) -> None:

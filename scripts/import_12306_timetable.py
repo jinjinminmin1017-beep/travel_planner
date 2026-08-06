@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
@@ -278,7 +279,17 @@ def _save_checkpoint(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(f"{path.suffix}.tmp")
     temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
-    temporary.replace(path)
+    for attempt in range(6):
+        try:
+            temporary.replace(path)
+            return
+        except PermissionError:
+            if attempt == 5:
+                raise
+            # Windows scanners and readers can briefly hold the destination
+            # without sharing delete access. Keep the atomic replace boundary,
+            # but tolerate a short local sharing violation.
+            time.sleep(min(0.8, 0.05 * (2**attempt)))
 
 
 def _mark_checkpoint_paused(checkpoint: dict[str, Any]) -> None:
