@@ -502,6 +502,87 @@ def test_12306_provider_reconciles_one_proven_parent_service_stop() -> None:
     assert service.stops[1].station_code == "NJH"
 
 
+def test_12306_provider_accepts_one_proven_discovery_stop_undercount() -> None:
+    search_payload = {
+        "data": [
+            {
+                "date": "20260810",
+                "from_station": "哈密",
+                "station_train_code": "D8813",
+                "to_station": "乌鲁木齐",
+                "total_num": "4",
+                "train_no": "92000D881309",
+            }
+        ]
+    }
+    detail_payload = {
+        "status": True,
+        "httpstatus": 200,
+        "data": {
+            "data": [
+                {
+                    "station_name": "哈密",
+                    "station_train_code": "D8813",
+                    "station_no": "01",
+                    "arrive_time": "----",
+                    "start_time": "20:20",
+                    "arrive_day_diff": "0",
+                    "running_time": "00:00",
+                },
+                {
+                    "station_name": "吐哈",
+                    "station_train_code": "D8813",
+                    "station_no": "02",
+                    "arrive_time": "21:31",
+                    "start_time": "21:33",
+                    "arrive_day_diff": "0",
+                    "running_time": "01:08",
+                },
+                {
+                    "station_name": "鄯善北",
+                    "station_train_code": "D8813",
+                    "station_no": "03",
+                    "arrive_time": "21:45",
+                    "start_time": "21:47",
+                    "arrive_day_diff": "0",
+                    "running_time": "01:23",
+                },
+                {
+                    "station_name": "吐鲁番北",
+                    "station_train_code": "D8813",
+                    "station_no": "04",
+                    "arrive_time": "22:15",
+                    "start_time": "22:17",
+                    "arrive_day_diff": "0",
+                    "running_time": "01:53",
+                },
+                {
+                    "station_name": "乌鲁木齐",
+                    "station_train_code": "D8813",
+                    "station_no": "05",
+                    "arrive_time": "23:16",
+                    "start_time": "23:13",
+                    "arrive_day_diff": "0",
+                    "running_time": "02:50",
+                },
+            ]
+        },
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = search_payload if "train/search" in str(request.url) else detail_payload
+        return httpx.Response(200, json=payload, headers={"content-type": "application/json"})
+
+    provider = Rail12306TimetableProvider(client=httpx.Client(transport=httpx.MockTransport(handler)))
+    provider._wait_for_interval = lambda: None  # type: ignore[method-assign]
+    discovered, _ = provider.discover_exact_services(date(2026, 8, 10), ("D8813",))
+    service = provider.fetch_complete_service(discovered[0])
+
+    assert len(service.stops) == 5
+    assert [stop.stop_sequence for stop in service.stops] == [1, 2, 3, 4, 5]
+    assert service.stops[-1].station_code == "WAR"
+
+
 def test_12306_provider_confirms_withdrawn_service_after_empty_detail() -> None:
     discovered = DiscoveredRailService(
         service_date=date(2026, 8, 10),

@@ -476,6 +476,30 @@ def _reconcile_extra_detail_rows(rows: list[Any], discovered: DiscoveredRailServ
             raise RailTimetableProviderError("12306 extra-stop reconciliation lacks timing evidence")
         elapsed_minutes = int(day_text) * 24 * 60 + _clock_minutes(arrival) - origin_minutes
         deviations[index] = abs(elapsed_minutes - running_minutes)
+    train_numbers = {
+        str(row.get("station_train_code") or "").strip().upper()
+        for row in rows
+        if isinstance(row, dict)
+    }
+    first_station = str(first.get("station_name") or "").strip()
+    last = rows[-1]
+    last_station = str(last.get("station_name") or "").strip() if isinstance(last, dict) else ""
+    if (
+        excess == 1
+        and train_numbers == {discovered.train_number}
+        and first_station == discovered.origin_station_name
+        and last_station == discovered.destination_station_name
+        and all(value <= 15 for value in deviations.values())
+    ):
+        logger.warning(
+            "rail_timetable_detail_discovery_undercount_accepted "
+            "train_number=%s expected=%s returned=%s max_timing_deviation_minutes=%s",
+            discovered.train_number,
+            expected,
+            len(rows),
+            max(deviations.values(), default=0),
+        )
+        return rows
     removable = sorted(range(1, len(rows) - 1), key=lambda index: deviations[index], reverse=True)
     dropped = set(removable[:excess])
     if len(dropped) != excess:
