@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import sys
 import time
 from datetime import date, timedelta
@@ -17,12 +18,14 @@ from app.data_sources.rail_12306_timetable_provider import (  # noqa: E402
     Rail12306TimetableProvider,
     RailTimetableAccessControlError,
     RailTimetableProviderError,
+    RailTimetableServiceWithdrawnError,
     SOURCE_VERSION,
 )
 from app.services.rail_timetable_store import RailTimetableStore, RailTimetableStoreError  # noqa: E402
 
 
 DEFAULT_CHECKPOINT = ROOT / "logs" / "rail_timetable_import_checkpoint.json"
+logger = logging.getLogger("app.rail_timetable_import")
 
 
 def main() -> int:
@@ -188,6 +191,7 @@ def _import_date(
     _save_checkpoint(checkpoint_path, checkpoint)
     completed = set(str(value) for value in date_state.get("completed_train_nos", []))
     active_batch_id, active_fingerprints = store.active_service_fingerprints(service_date)
+    expected_service_count = len(discovered)
     try:
         for item in discovered:
             if item.train_no_internal in completed:
@@ -200,15 +204,34 @@ def _import_date(
             ):
                 pass
             else:
-                store.upsert_service(batch_id, provider.fetch_complete_service(item))
+                try:
+                    service = provider.fetch_complete_service(item)
+                except RailTimetableServiceWithdrawnError:
+                    discovery_state = date_state.get("discovery")
+                    discovery_services = discovery_state.get("services") if isinstance(discovery_state, dict) else None
+                    if not isinstance(discovery_services, dict) or discovery_services.pop(item.train_no_internal, None) is None:
+                        raise RailTimetableProviderError(
+                            "withdrawn timetable service cannot be reconciled with discovery checkpoint"
+                        )
+                    expected_service_count -= 1
+                    logger.warning(
+                        "rail_timetable_service_withdrawn service_date=%s train_number=%s train_no_internal=%s",
+                        service_date.isoformat(),
+                        item.train_number,
+                        item.train_no_internal,
+                    )
+                    _save_checkpoint(checkpoint_path, checkpoint)
+                    continue
+                store.upsert_service(batch_id, service)
             completed.add(item.train_no_internal)
             date_state["completed_train_nos"] = sorted(completed)
             date_state["status"] = "STAGING"
             _save_checkpoint(checkpoint_path, checkpoint)
         staged = store.get_batch(batch_id)
-        if staged is None or staged.service_count != len(discovered):
+        if staged is None or staged.service_count != expected_service_count:
             raise RailTimetableStoreError(
-                f"discovery completeness gate failed: discovered={len(discovered)}, staged={staged.service_count if staged else 0}"
+                "discovery completeness gate failed: "
+                f"discovered={expected_service_count}, staged={staged.service_count if staged else 0}"
             )
         activated = store.activate_batch(batch_id)
     except Exception as exc:
@@ -231,7 +254,7 @@ def _import_date(
     _save_checkpoint(checkpoint_path, checkpoint)
     return {
         "service_date": date_key,
-        "discovered_count": diagnostics.service_count,
+        "discovered_count": expected_service_count,
         "service_count": activated.service_count,
         "stop_count": activated.stop_count,
         "query_count": diagnostics.query_count,

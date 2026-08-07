@@ -12,8 +12,12 @@ from app.data_sources.config_loader import (
 )
 from app.data_sources.provider_booking import ProviderBookingReference
 from app.data_sources.rail_12306_timetable_provider import (
+    DiscoveryDiagnostics,
+    DiscoveredRailService,
     Rail12306TimetableProvider,
     RailTimetableAccessControlError,
+    RailTimetableProviderError,
+    RailTimetableServiceWithdrawnError,
 )
 from app.data_sources.rail_providers import (
     RailOffer,
@@ -196,6 +200,72 @@ def test_bootstrap_resume_skips_active_date_and_repairs_checkpoint_without_netwo
     assert repaired["batch_id"] == active_batch
     assert repaired["status"] == "ACTIVE"
     assert repaired["completed_train_nos"] == [service.train_no_internal]
+
+
+def test_importer_removes_only_exactly_confirmed_withdrawn_service(tmp_path: Path) -> None:
+    store = RailTimetableStore(tmp_path / "rail.sqlite3")
+    service_date = date.today()
+    retained = DiscoveredRailService(
+        service_date=service_date,
+        train_no_internal="internal_G1",
+        train_number="G1",
+        origin_station_name="北京南",
+        destination_station_name="上海虹桥",
+        total_stop_count=2,
+        summary_fingerprint="fingerprint_G1",
+    )
+    withdrawn = DiscoveredRailService(
+        service_date=service_date,
+        train_no_internal="internal_C4248",
+        train_number="C4248",
+        origin_station_name="临沧",
+        destination_station_name="昆明",
+        total_stop_count=3,
+        summary_fingerprint="fingerprint_C4248",
+    )
+
+    class FixtureProvider:
+        def discover_services(self, *_args, resume_state, checkpoint_callback, **_kwargs):
+            resume_state.update(
+                {
+                    "status": "COMPLETE",
+                    "services": {
+                        retained.train_no_internal: {"train_number": retained.train_number},
+                        withdrawn.train_no_internal: {"train_number": withdrawn.train_number},
+                    },
+                }
+            )
+            checkpoint_callback()
+            return [retained, withdrawn], DiscoveryDiagnostics(1, 0, 2, ("fixture",))
+
+        def fetch_complete_service(self, item: DiscoveredRailService) -> RailServiceInput:
+            if item.train_no_internal == withdrawn.train_no_internal:
+                raise RailTimetableServiceWithdrawnError("confirmed withdrawn")
+            return _service(service_date, "G1", "VNP", "AOH", "08:00", "12:00")
+
+    checkpoint = {"version": 1, "dates": {}}
+    checkpoint_path = tmp_path / "checkpoint.json"
+    summary = _import_date(
+        service_date=service_date,
+        provider=FixtureProvider(),  # type: ignore[arg-type]
+        store=store,
+        checkpoint=checkpoint,
+        checkpoint_path=checkpoint_path,
+        resume=True,
+        dry_run=False,
+        train_numbers=(),
+        prefixes=("G", "D", "C"),
+        max_discovery_queries=None,
+        max_trains=None,
+        refresh=False,
+    )
+
+    date_state = checkpoint["dates"][service_date.isoformat()]
+    assert summary["discovered_count"] == 1
+    assert summary["service_count"] == 1
+    assert date_state["status"] == "ACTIVE"
+    assert date_state["completed_train_nos"] == [retained.train_no_internal]
+    assert list(date_state["discovery"]["services"]) == [retained.train_no_internal]
 
 
 def test_checkpoint_atomic_replace_retries_temporary_windows_sharing_violation(monkeypatch, tmp_path: Path) -> None:
@@ -430,6 +500,75 @@ def test_12306_provider_reconciles_one_proven_parent_service_stop() -> None:
     assert len(service.stops) == 3
     assert [stop.stop_sequence for stop in service.stops] == [1, 2, 3]
     assert service.stops[1].station_code == "NJH"
+
+
+def test_12306_provider_confirms_withdrawn_service_after_empty_detail() -> None:
+    discovered = DiscoveredRailService(
+        service_date=date(2026, 8, 10),
+        train_no_internal="8c000C424810",
+        train_number="C4248",
+        origin_station_name="临沧",
+        destination_station_name="昆明",
+        total_stop_count=3,
+        summary_fingerprint="fixture",
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "train/search" in str(request.url):
+            return httpx.Response(200, json={"data": []}, headers={"content-type": "application/json"})
+        return httpx.Response(
+            200,
+            json={"status": True, "httpstatus": 200, "data": None},
+            headers={"content-type": "application/json"},
+        )
+
+    provider = Rail12306TimetableProvider(client=httpx.Client(transport=httpx.MockTransport(handler)))
+    provider._wait_for_interval = lambda: None  # type: ignore[method-assign]
+
+    with pytest.raises(RailTimetableServiceWithdrawnError, match="no longer present"):
+        provider.fetch_complete_service(discovered)
+
+
+def test_12306_provider_keeps_fail_closed_when_empty_detail_service_still_exists() -> None:
+    discovered = DiscoveredRailService(
+        service_date=date(2026, 8, 10),
+        train_no_internal="8c000C424810",
+        train_number="C4248",
+        origin_station_name="临沧",
+        destination_station_name="昆明",
+        total_stop_count=3,
+        summary_fingerprint="fixture",
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "train/search" in str(request.url):
+            return httpx.Response(
+                200,
+                json={
+                    "data": [
+                        {
+                            "date": "20260810",
+                            "from_station": "临沧",
+                            "station_train_code": "C4248",
+                            "to_station": "昆明",
+                            "total_num": "3",
+                            "train_no": "8c000C424810",
+                        }
+                    ]
+                },
+                headers={"content-type": "application/json"},
+            )
+        return httpx.Response(
+            200,
+            json={"status": True, "httpstatus": 200, "data": None},
+            headers={"content-type": "application/json"},
+        )
+
+    provider = Rail12306TimetableProvider(client=httpx.Client(transport=httpx.MockTransport(handler)))
+    provider._wait_for_interval = lambda: None  # type: ignore[method-assign]
+
+    with pytest.raises(RailTimetableProviderError, match="fewer than two stops"):
+        provider.fetch_complete_service(discovered)
 
 
 def test_12306_provider_pauses_on_rate_limit() -> None:

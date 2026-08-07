@@ -35,6 +35,10 @@ class RailTimetableTemporaryError(RailTimetableProviderError):
     pass
 
 
+class RailTimetableServiceWithdrawnError(RailTimetableProviderError):
+    pass
+
+
 @dataclass(frozen=True)
 class DiscoveredRailService:
     service_date: date
@@ -245,6 +249,14 @@ class Rail12306TimetableProvider:
         data = payload.get("data")
         rows = data.get("data") if isinstance(data, dict) else None
         if not isinstance(rows, list) or len(rows) < 2:
+            current, _ = self.discover_exact_services(
+                discovered.service_date,
+                (discovered.train_number,),
+            )
+            if not current:
+                raise RailTimetableServiceWithdrawnError(
+                    f"12306 service {discovered.train_number} is no longer present in exact discovery"
+                )
             raise RailTimetableProviderError("12306 train detail returned fewer than two stops")
         rows = _reconcile_extra_detail_rows(rows, discovered)
         stops = tuple(
