@@ -728,3 +728,14 @@
   - C824 的 65 分钟异常行仍被原规则剔除；D8813 的 5 个同车次合法停站不再为匹配错误的 `total_num=4` 丢失任一站。
 - 验证：真实 D8813 低频详情诊断为 5 行，累计运行时偏差 2～6 分钟；铁路定向测试 21 passed；后端全量测试 298 passed；Python compileall 与 `git diff --check` 通过。
 - 兼容性：不修改外部 API、SQLite schema、请求间隔、并发度或访问控制策略；不放宽首末站、车次身份、时间或批次原子激活门禁。
+
+## 2026-08-08 13:05:00 +08:00
+
+- 任务：避免当前官方目录尚无 telecode 的新站点阻塞整个铁路服务日导入。
+- 代码提交：`2ea69ed`。
+- 修改内容：
+  - 将“站名存在但本地当前官方目录无 telecode”区分为显式 `RailTimetableUnsupportedStationError`；空站名和其他解析错误继续按原规则失败。
+  - Bootstrap 只对命中该异常的单一服务执行失败关闭，把车次、站名和 `UNSUPPORTED_STATION` 原因写入 checkpoint 隔离清单，并从本批可入库发现集合移除；不生成或猜测站码。
+  - 其余服务继续完成原子批次；隔离条目保留可审计原因，不进入本地路线候选。
+- 验证：当前官方 `station_name.js`（3397 站）和官方全站起售目录（3169 站）均无“玉环”；G7364 精确发现仅提供站名、未提供 telecode；铁路定向测试 22 passed；后端全量测试 299 passed；Python compileall 与 `git diff --check` 通过。
+- 兼容性：不修改外部 API、SQLite schema、请求间隔、并发度或访问控制策略；无法用官方 telecode 表示的服务不会进入 ACTIVE 运行图。
