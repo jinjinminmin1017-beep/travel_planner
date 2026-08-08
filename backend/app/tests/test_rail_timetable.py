@@ -18,6 +18,7 @@ from app.data_sources.rail_12306_timetable_provider import (
     RailTimetableAccessControlError,
     RailTimetableProviderError,
     RailTimetableServiceWithdrawnError,
+    RailTimetableUnsupportedStationError,
 )
 from app.data_sources.rail_providers import (
     RailOffer,
@@ -266,6 +267,75 @@ def test_importer_removes_only_exactly_confirmed_withdrawn_service(tmp_path: Pat
     assert date_state["status"] == "ACTIVE"
     assert date_state["completed_train_nos"] == [retained.train_no_internal]
     assert list(date_state["discovery"]["services"]) == [retained.train_no_internal]
+
+
+def test_importer_quarantines_service_with_unsupported_station(tmp_path: Path) -> None:
+    store = RailTimetableStore(tmp_path / "rail.sqlite3")
+    service_date = date.today()
+    retained = DiscoveredRailService(
+        service_date=service_date,
+        train_no_internal="internal_G1",
+        train_number="G1",
+        origin_station_name="北京南",
+        destination_station_name="上海虹桥",
+        total_stop_count=2,
+        summary_fingerprint="fingerprint_G1",
+    )
+    unsupported = DiscoveredRailService(
+        service_date=service_date,
+        train_no_internal="5j000G736420",
+        train_number="G7364",
+        origin_station_name="玉环",
+        destination_station_name="上海南",
+        total_stop_count=11,
+        summary_fingerprint="fingerprint_G7364",
+    )
+
+    class FixtureProvider:
+        def discover_services(self, *_args, resume_state, checkpoint_callback, **_kwargs):
+            resume_state.update(
+                {
+                    "status": "COMPLETE",
+                    "services": {
+                        retained.train_no_internal: {"train_number": retained.train_number},
+                        unsupported.train_no_internal: {"train_number": unsupported.train_number},
+                    },
+                }
+            )
+            checkpoint_callback()
+            return [retained, unsupported], DiscoveryDiagnostics(1, 0, 2, ("fixture",))
+
+        def fetch_complete_service(self, item: DiscoveredRailService) -> RailServiceInput:
+            if item.train_no_internal == unsupported.train_no_internal:
+                raise RailTimetableUnsupportedStationError("玉环")
+            return _service(service_date, "G1", "VNP", "AOH", "08:00", "12:00")
+
+    checkpoint = {"version": 1, "dates": {}}
+    summary = _import_date(
+        service_date=service_date,
+        provider=FixtureProvider(),  # type: ignore[arg-type]
+        store=store,
+        checkpoint=checkpoint,
+        checkpoint_path=tmp_path / "checkpoint.json",
+        resume=True,
+        dry_run=False,
+        train_numbers=(),
+        prefixes=("G", "D", "C"),
+        max_discovery_queries=None,
+        max_trains=None,
+        refresh=False,
+    )
+
+    date_state = checkpoint["dates"][service_date.isoformat()]
+    quarantine = date_state["discovery"]["quarantined_services"]
+    assert summary["service_count"] == 1
+    assert date_state["status"] == "ACTIVE"
+    assert list(date_state["discovery"]["services"]) == [retained.train_no_internal]
+    assert quarantine[unsupported.train_no_internal] == {
+        "train_number": "G7364",
+        "reason": "UNSUPPORTED_STATION",
+        "station_name": "玉环",
+    }
 
 
 def test_checkpoint_atomic_replace_retries_temporary_windows_sharing_violation(monkeypatch, tmp_path: Path) -> None:

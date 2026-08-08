@@ -39,6 +39,12 @@ class RailTimetableServiceWithdrawnError(RailTimetableProviderError):
     pass
 
 
+class RailTimetableUnsupportedStationError(RailTimetableProviderError):
+    def __init__(self, station_name: str) -> None:
+        self.station_name = station_name
+        super().__init__(f"station code missing for timetable stop: {station_name}")
+
+
 @dataclass(frozen=True)
 class DiscoveredRailService:
     service_date: date
@@ -421,8 +427,10 @@ def _parse_stop_row(value: Any, fallback_sequence: int, *, is_last: bool) -> Rai
         raise RailTimetableProviderError("12306 train detail stop is not an object")
     station_name = str(value.get("station_name") or "").strip()
     station_code = station_code_for_name(station_name)
-    if not station_name or not station_code:
-        raise RailTimetableProviderError(f"station code missing for timetable stop: {station_name or '<empty>'}")
+    if not station_name:
+        raise RailTimetableProviderError("station code missing for timetable stop: <empty>")
+    if not station_code:
+        raise RailTimetableUnsupportedStationError(station_name)
     day_text = str(value.get("arrive_day_diff") or "0").strip()
     day_offset = int(day_text) if day_text.isdigit() else 0
     arrival = None if fallback_sequence == 1 else _clock_or_none(value.get("arrive_time"))

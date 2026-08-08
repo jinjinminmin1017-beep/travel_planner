@@ -19,6 +19,7 @@ from app.data_sources.rail_12306_timetable_provider import (  # noqa: E402
     RailTimetableAccessControlError,
     RailTimetableProviderError,
     RailTimetableServiceWithdrawnError,
+    RailTimetableUnsupportedStationError,
     SOURCE_VERSION,
 )
 from app.services.rail_timetable_store import RailTimetableStore, RailTimetableStoreError  # noqa: E402
@@ -219,6 +220,32 @@ def _import_date(
                         service_date.isoformat(),
                         item.train_number,
                         item.train_no_internal,
+                    )
+                    _save_checkpoint(checkpoint_path, checkpoint)
+                    continue
+                except RailTimetableUnsupportedStationError as exc:
+                    discovery_state = date_state.get("discovery")
+                    discovery_services = discovery_state.get("services") if isinstance(discovery_state, dict) else None
+                    if not isinstance(discovery_services, dict) or discovery_services.pop(item.train_no_internal, None) is None:
+                        raise RailTimetableProviderError(
+                            "unsupported-station service cannot be reconciled with discovery checkpoint"
+                        )
+                    quarantined = discovery_state.setdefault("quarantined_services", {})
+                    if not isinstance(quarantined, dict):
+                        raise RailTimetableProviderError("timetable discovery quarantine checkpoint is malformed")
+                    quarantined[item.train_no_internal] = {
+                        "train_number": item.train_number,
+                        "reason": "UNSUPPORTED_STATION",
+                        "station_name": exc.station_name,
+                    }
+                    expected_service_count -= 1
+                    logger.warning(
+                        "rail_timetable_service_quarantined service_date=%s train_number=%s "
+                        "train_no_internal=%s reason=UNSUPPORTED_STATION station_name=%s",
+                        service_date.isoformat(),
+                        item.train_number,
+                        item.train_no_internal,
+                        exc.station_name,
                     )
                     _save_checkpoint(checkpoint_path, checkpoint)
                     continue
