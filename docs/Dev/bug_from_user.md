@@ -149,3 +149,47 @@
 - 解决方式：新增显式 unsupported-station 异常；仅隔离命中该异常的单一服务，在 checkpoint 保存车次、站名和原因并从可激活发现集合移除。其余服务继续严格解析和原子激活；隔离服务不参与本地路线搜索和实时核票。
 - 问题修改提交：`2ea69ed`。
 - 验证：新增服务级隔离回归，确认批次可激活、隔离原因可审计且未知站服务不入库；铁路定向测试 22 passed，后端全量测试 299 passed，Python compileall 与 `git diff --check` 通过。
+
+## 2026-08-15 Task Dock 持续弹出终端窗口
+
+- 用户提问时间：2026-08-15。
+- 问题描述：Task Dock 在桌面运行期间持续弹出或闪现终端窗口。
+- 问题根因：主进程虽然由 `pythonw.exe` 隐藏启动，但状态接口会周期性调用 `git.exe` 检查分支、工作区与任务补丁；Windows 子进程未设置 `CREATE_NO_WINDOW`，因此每次 Git 检查都可能单独创建控制台窗口。Codex CLI 子进程也存在同类风险。
+- 解决方式：新增统一的 Windows 隐藏控制台进程标志，并应用到 Git、Codex CLI 和 Edge 启动边界；非 Windows 保持标志为 0。补充回归测试，明确校验 Git 子进程携带 `CREATE_NO_WINDOW`。
+- 问题修改提交：未提交，保留在当前工作区供用户审阅。
+- 验证：Task Dock 自动测试 8 passed；Python compileall 与定向窗口枚举检查通过。
+## 2026-08-15 Task Dock 点击任务后详情错位
+
+- 用户提问时间：2026-08-15。
+- 问题描述：点击“其他任务”中的一条任务后，上方焦点详情显示了另一条任务的内容。
+- 问题根因：任务文档中的显式编号并非全局唯一；当前 79 条任务中存在 8 组跨文档重复 ID，例如多个架构任务文档都包含 `P0-1`。列表虽然捕获了被点击任务，但详情和后续操作通过 ID 查找时始终命中同 ID 的第一条记录。
+- 问题解决方式：显式编号继续作为界面显示编号，内部任务 ID 改为“显示编号 + 来源文档摘要”的稳定唯一标识；列表选择、详情查找、执行、回退和删除均使用内部唯一 ID。新增两个文档使用相同 `P0-1` 时仍可分别精确选中的回归测试。
+- 问题修改提交：未提交；`tools/codex-task-dock/` 在当前工作区原本为未跟踪目录，避免擅自提交用户既有内容。
+- 验证：Task Dock 自动测试 13 passed；当前 79 条真实任务的内部重复 ID 为 0；Python compileall、JavaScript 语法检查与 `git diff --check` 通过。
+
+## 2026-08-15 Task Dock 原文定位按钮未实际跳转
+
+- 用户提问时间：2026-08-15。
+- 问题描述：点击任务详情中的原文定位按钮后没有实际跳转到来源文件对应行。
+- 问题根因：Windows 下 VS Code 入口是路径含空格的 `code.cmd`；旧实现把它作为 `cmd.exe /c` 后的分离参数传入，实际只执行到路径第一个空格并返回退出码 1。同时后端未等待退出结果，错误地向界面报告成功。
+- 解决方式：使用 Windows 安全引号生成完整命令行，增加 `--reuse-window --goto`，等待并校验 VS Code CLI 退出状态；失败时把明确原因返回界面，不再假成功。
+- 问题修改提交：未提交；`tools/codex-task-dock/` 在当前工作区原本为未跟踪目录。
+- 验证：Task Dock 自动测试 17 passed；真实 VS Code CLI 跳转退出码为 0，活动窗口标题确认为 `task_from_user_for_dev.md - travel_planner - Visual Studio Code`；JavaScript 语法、Python compileall 与 `git diff --check` 通过。
+
+## 2026-08-15 Task Dock 交给 Codex 后立即退出码 2
+
+- 用户提问时间：2026-08-15。
+- 问题描述：点击“交给 Codex”后，任务没有开始开发，详情显示“Codex 进程退出码为 2”。
+- 问题根因：当前 Codex CLI 0.128.0 只在顶层命令接受 `-a/--ask-for-approval`；Task Dock 把 `-a never` 放在 `exec` 子命令后，CLI 日志明确报 `error: unexpected argument '-a' found` 并以参数错误码 2 退出。修正参数后又发现用户配置仍含新版不再接受的 `service_tier = "default"`，导致配置加载退出码 1。
+- 解决方式：把审批策略移动到 `exec` 之前，同时覆盖 `codex.cmd` 与 PowerShell 启动路径；Task Dock 执行增加 `--ignore-user-config`，继续复用登录凭证但不依赖易随版本失效的个人 CLI 配置；后台子进程的 stdin 明确连接 `DEVNULL`，避免在已经提供提示词后继续等待额外输入；非零退出时从 JSONL/CLI 日志提取具体错误并展示，不再只报告退出码。
+- 问题修改提交：未提交；`tools/codex-task-dock/` 在当前工作区原本为未跟踪目录。
+- 验证：Task Dock 自动测试 22 passed；本机 `codex -a never exec --ignore-user-config --help` 返回 0；真实重试已产生 `thread.started` 与 `turn.started` 事件，`P0-4` 保持运行且无 `last_error`；Python compileall、JavaScript 语法与 `git diff --check` 通过。
+
+## 2026-08-15 Task Dock 未接收 Codex 完成结果且状态长期停留开发中
+
+- 用户提问时间：2026-08-15。
+- 问题描述：Codex 子进程已经结束，任务仍长期显示“开发中”；用户期望任务完成后把结果返回 Dock 并立即更新状态。
+- 问题根因：任务状态只在运行线程的内存流程末尾更新，缺少持久化结果回执和启动恢复；Dock 重启后会直接相信遗留的 `running` 字段。与此同时，Windows `.cmd` 启动链把多行中文任务正文作为命令行参数传递，本次运行实际未把具体任务交给 Codex，所以进程虽返回 `turn.completed`，却没有产生代码改动。
+- 解决方式：Codex 任务正文改为通过标准输入传递；每次运行原子写入包含进程、日志、退出码、结果摘要和补丁路径的 JSON 回执。Dock 启动时检查遗留运行记录：仍存活则继续监控，已退出则依据回执、JSONL 完成事件、隔离 worktree 与 Git 补丁恢复为完成或失败可重试。完成结果摘要同步返回详情区。
+- 问题修改提交：未提交；`tools/codex-task-dock/` 在当前工作区原本为未跟踪目录。
+- 验证：Task Dock 自动测试 28 passed；新增“完成后恢复并应用补丁”和“完成但无代码时转为可重试失败”回归；`codex exec --help` 确认 `-` 支持从 stdin 读取任务正文。

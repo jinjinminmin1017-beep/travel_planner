@@ -15,6 +15,7 @@
 5. 让用户确认效果
 6. 根据反馈迭代设计
 7. 最后再输出前端可执行说明
+8. 必须使用`C:\Users\儿儿的爹妈\.codex\skills\taste-skill`和`C:\Users\儿儿的爹妈\.codex\skills\impeccable`这2个skill
 
 ---
 

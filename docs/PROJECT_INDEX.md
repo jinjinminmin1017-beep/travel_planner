@@ -1,6 +1,6 @@
 # Project Index
 
-更新日期：2026-08-02
+更新日期：2026-08-14
 
 ## 技术栈
 
@@ -54,6 +54,7 @@
 - `scripts/`：启动、schema 导出、Provider 配置检查、live smoke、数据导入、质量评估脚本。
   - `scripts/import_12306_timetable.py`：15 天 bootstrap、每日 refresh、checkpoint/resume 和 dry-run。
   - `scripts/install_rail_timetable_refresh.ps1`：Windows 每日刷新任务的安装、检查和卸载。
+- `tools/codex-task-dock/`：与旅行业务隔离的 Codex 桌面任务侧栏；增量读取 `docs/Dev/task*.md`，管理隔离开发、补丁状态与单任务回退。
 - `docs/`：产品任务拆分、架构索引、API 合同和历史文档归档。
 - `mock_data/`：路线 mock 数据目录。
 - `.github/workflows/`：CI 工作流。
@@ -108,6 +109,7 @@
 - 启动后端：`.\.venv\Scripts\python -m uvicorn app.main:app --reload --app-dir backend`
 - 启动前端：`cd frontend; npm run start`
 - 启动脚本：`.\scripts\dev.ps1 -Target backend` / `frontend` / `test`
+- 启动 Task Dock：`.\tools\codex-task-dock\start.ps1`
 - FlyAI 50 样例门禁：`.\.venv\Scripts\python scripts\benchmark_fliggy_flyai.py --date <未来日期>`
 - 真机调试：`.\scripts\device-debug.ps1 -OpenQr`；Windows 下默认启用仓库固定安装的 `node_modules\.bin\flyai.cmd`，需要跳过票务源时显式传入 `-SkipFlyAI`。
 - 后端测试：`.\.venv\Scripts\python -m pytest backend\app\tests`

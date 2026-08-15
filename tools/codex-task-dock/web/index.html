@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light">
+    <title>Task Dock</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <main class="dock-shell">
+      <header class="app-header">
+        <div>
+          <p class="eyebrow">CODEX COMPANION</p>
+          <h1>Task Dock</h1>
+        </div>
+        <span class="sync-mark" id="sync-mark" title="任务文档同步状态" aria-label="任务文档同步中"></span>
+      </header>
+
+      <section class="project-strip" aria-label="当前项目">
+        <div>
+          <strong id="project-name">正在连接项目</strong>
+          <span id="branch-name">读取分支中</span>
+        </div>
+        <span id="sync-label">每 3 秒增量同步</span>
+      </section>
+
+      <section class="summary" aria-live="polite">
+        <p id="summary-count">正在读取开发任务</p>
+        <p id="summary-note">只读取发生变化的任务文件</p>
+        <button class="batch-action" id="batch-action" type="button" disabled>
+          <span id="batch-action-label">一键开发全部</span>
+          <span class="batch-action-count" id="batch-action-count">0</span>
+        </button>
+      </section>
+
+      <section class="focus-task" id="focus-task" aria-labelledby="focus-heading">
+        <div class="focus-topline">
+          <span class="status-chip" id="focus-status"><i></i><span>待开发</span></span>
+          <span class="task-id" id="focus-id"></span>
+        </div>
+        <h2 id="focus-heading">选择一条开发任务</h2>
+        <p class="focus-description" id="focus-description">任务会自动从 docs/Dev/task*.md 中出现。</p>
+        <p class="source-line" id="focus-source"></p>
+        <div class="focus-actions">
+          <button class="primary-action" id="primary-action" type="button" disabled>交给 Codex</button>
+          <button class="source-action" id="source-action" type="button" disabled>跳转到任务原文</button>
+        </div>
+        <p class="safety-note" id="safety-note">开始前会创建隔离工作区并检查 Git 补丁</p>
+      </section>
+
+      <section class="task-section" aria-labelledby="task-list-heading">
+        <div class="section-heading">
+          <h2 id="task-list-heading">全部任务</h2>
+          <div class="task-list-tools">
+            <label class="status-filter-label" for="status-filter">状态</label>
+            <select class="status-filter" id="status-filter">
+              <option value="all">全部状态</option>
+              <option value="pending">待开发</option>
+              <option value="running">开发中</option>
+              <option value="complete">已完成</option>
+              <option value="drift">需检查</option>
+            </select>
+            <span id="task-total">0 条</span>
+          </div>
+        </div>
+        <div class="task-list" id="task-list" role="list"></div>
+        <div class="empty-state" id="empty-state" hidden>
+          <span class="empty-orbit" aria-hidden="true"></span>
+          <strong>没有可显示的任务</strong>
+          <p>Task Dock 会继续监听开发任务文档。</p>
+        </div>
+      </section>
+
+      <footer class="dock-footer">
+        <span id="working-tree">工作区检查中</span>
+        <button class="quiet-button" id="refresh-button" type="button">立即同步</button>
+      </footer>
+    </main>
+
+    <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+
+    <dialog class="action-dialog" id="action-dialog">
+      <form method="dialog">
+        <div class="dialog-heading">
+          <div>
+            <h2 id="action-title">任务操作</h2>
+          </div>
+          <button class="icon-button" value="cancel" aria-label="关闭任务操作">×</button>
+        </div>
+        <div class="dialog-actions">
+          <button id="view-diff-button" type="button">查看代码改动</button>
+          <button id="revert-button" type="button">Revert 此任务</button>
+          <button class="danger-action" id="delete-button" type="button">删除任务记录</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog class="confirm-dialog" id="confirm-dialog">
+      <form method="dialog">
+        <h2 id="confirm-title">确认操作</h2>
+        <p id="confirm-message"></p>
+        <div class="confirm-actions">
+          <button class="secondary-action" value="cancel">取消</button>
+          <button class="confirm-primary" id="confirm-button" value="default" type="button">确认</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog class="diff-dialog" id="diff-dialog">
+      <form method="dialog">
+        <div class="dialog-heading">
+          <div>
+            <h2 id="diff-title">代码改动</h2>
+          </div>
+          <button class="icon-button" value="cancel" aria-label="关闭代码改动">×</button>
+        </div>
+        <pre id="diff-content" tabindex="0"></pre>
+      </form>
+    </dialog>
+
+    <script src="/app.js" defer></script>
+  </body>
+</html>

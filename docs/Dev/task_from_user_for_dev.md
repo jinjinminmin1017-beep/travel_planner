@@ -18,6 +18,16 @@
   - Added redacted HO, SC, HNA-micro and QW transport/contract evidence plus repeated safety-gate smoke across all 10 sources.
 - Status: engineering configuration and fail-closed gates completed; external technical/legal prerequisites remain blocked. No source is marked executable because no source currently has both a replayable anonymous flight-level fare/cabin/availability response and affirmative automation/data-reuse approval. `LICENSE_STATUS` cannot override those facts.
 
+## 开发任务：Codex Task Dock 桌面开发任务工具
+
+- 日期：2026-08-14。
+- 用户需求：实现与旅行业务无关的浅色桌面任务工具，停靠在 Codex 左侧并随窗口尺寸自适应；自动读取开发任务、逐条交给 Codex、用状态灯反映真实代码、支持单任务 Revert 与删除。
+- 用户确认：采用方案 B，不提供添加任务入口；每 3 秒从 `docs/Dev/task*.md` 同步，并避免每轮遍历或重读全部文件。
+- 完成状态：已完成。
+- 实现位置：`tools/codex-task-dock/`。
+- 核心结果：目录 mtime 与已知文件 stat 增量策略、隔离 worktree、独立 binary patch、Git 正反向校验状态、受保护的 Revert 与任务源删除、顺序执行的“一键开发全部”队列、Win32 自适应停靠、浅色焦点任务界面。
+- 业务隔离：未修改旅行 API、数据库、业务服务或前端业务页面。
+
 ## 2026-07-19 — 完成全部常驻浏览器航司任务
 
 - 用户要求：所有任务都要开发完成，不接受只完成东航代码基线。

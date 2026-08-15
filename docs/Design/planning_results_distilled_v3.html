@@ -1,0 +1,730 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>规划结果页精简方案 V3</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #eef4f3;
+      --surface: #ffffff;
+      --ink: #13282b;
+      --muted: #5a6f72;
+      --line: #d8e2e0;
+      --primary: #126b75;
+      --primary-deep: #0b5159;
+      --primary-soft: #e2f0ee;
+      --primary-faint: #f4f8f7;
+      --on-primary: #ffffff;
+      --on-primary-muted: #c9e2df;
+      --success: #26705a;
+      --warning: #8a5a18;
+      --radius-card: 16px;
+      --radius-control: 12px;
+      --shadow-raised: 0 4px 8px rgba(22, 64, 66, 0.08);
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body {
+      margin: 0;
+      min-height: 100%;
+      background: var(--bg);
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Microsoft YaHei", sans-serif;
+      color: var(--ink);
+      -webkit-font-smoothing: antialiased;
+    }
+
+    body {
+      min-width: 320px;
+      display: flex;
+      justify-content: center;
+    }
+
+    button { font: inherit; }
+
+    .phone {
+      position: relative;
+      width: min(100%, 430px);
+      min-height: 100dvh;
+      background:
+        radial-gradient(circle at 88% 12%, rgba(104, 183, 170, 0.10), transparent 27%),
+        var(--bg);
+      overflow: hidden;
+    }
+
+    .status-bar {
+      height: 47px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 20px 0;
+      font-size: 15px;
+      font-weight: 800;
+      letter-spacing: -0.2px;
+    }
+
+    .status-icons {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      color: #0b1516;
+    }
+
+    .signal {
+      display: flex;
+      align-items: flex-end;
+      gap: 2px;
+      height: 13px;
+    }
+
+    .signal i {
+      display: block;
+      width: 3px;
+      border-radius: 2px;
+      background: currentColor;
+    }
+
+    .signal i:nth-child(1) { height: 5px; }
+    .signal i:nth-child(2) { height: 8px; }
+    .signal i:nth-child(3) { height: 10px; }
+    .signal i:nth-child(4) { height: 13px; }
+
+    .wifi {
+      width: 15px;
+      height: 11px;
+      border: 2px solid currentColor;
+      border-bottom: 0;
+      border-left-color: transparent;
+      border-right-color: transparent;
+      border-radius: 50% 50% 0 0;
+      position: relative;
+    }
+
+    .wifi::after {
+      content: "";
+      position: absolute;
+      width: 4px;
+      height: 4px;
+      border-radius: 50%;
+      background: currentColor;
+      left: 3.5px;
+      bottom: -3px;
+    }
+
+    .battery {
+      min-width: 25px;
+      height: 13px;
+      border: 1.5px solid currentColor;
+      border-radius: 4px;
+      padding: 1px;
+      position: relative;
+      font-size: 9px;
+      line-height: 8px;
+      text-align: center;
+    }
+
+    .battery::after {
+      content: "";
+      position: absolute;
+      width: 2px;
+      height: 6px;
+      right: -4px;
+      top: 2px;
+      border-radius: 0 2px 2px 0;
+      background: currentColor;
+    }
+
+    .main {
+      padding: 5px 16px 112px;
+    }
+
+    .nav {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-height: 50px;
+    }
+
+    .back {
+      width: 36px;
+      height: 36px;
+      border: 0;
+      border-radius: 50%;
+      background: rgba(255,255,255,0.68);
+      color: var(--ink);
+      display: grid;
+      place-items: center;
+      font-size: 24px;
+      line-height: 1;
+      padding: 0 2px 2px 0;
+    }
+
+    .trip-title {
+      min-width: 0;
+      flex: 1;
+    }
+
+    .trip-title h1 {
+      margin: 0;
+      font-size: 20px;
+      line-height: 26px;
+      letter-spacing: -0.4px;
+    }
+
+    .trip-title p {
+      margin: 2px 0 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 17px;
+    }
+
+    .more {
+      width: 38px;
+      height: 38px;
+      border: 0;
+      border-radius: 12px;
+      background: var(--surface);
+      color: var(--primary-deep);
+      font-size: 20px;
+      font-weight: 900;
+      line-height: 1;
+      box-shadow: var(--shadow-raised);
+    }
+
+    .result-meta {
+      margin: 14px 0 15px;
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .result-meta h2 {
+      margin: 0;
+      font-size: 19px;
+      line-height: 25px;
+      letter-spacing: -0.3px;
+    }
+
+    .source-link {
+      border: 0;
+      background: transparent;
+      color: var(--primary);
+      padding: 4px 0;
+      font-size: 12px;
+      font-weight: 800;
+      white-space: nowrap;
+    }
+
+    .source-link span {
+      color: var(--muted);
+      font-weight: 500;
+      margin-right: 5px;
+    }
+
+    .hero {
+      overflow: hidden;
+      border-radius: var(--radius-card);
+      background: var(--primary-deep);
+      color: var(--on-primary);
+      box-shadow: 0 6px 8px rgba(12, 65, 70, 0.10);
+    }
+
+    .hero-main {
+      position: relative;
+      min-height: 158px;
+      padding: 19px 20px 18px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      overflow: hidden;
+    }
+
+    .hero-main::before {
+      content: "";
+      position: absolute;
+      width: 192px;
+      height: 192px;
+      border-radius: 50%;
+      right: -76px;
+      top: -106px;
+      background: rgba(130, 221, 206, 0.10);
+    }
+
+    .hero-main::after {
+      content: "";
+      position: absolute;
+      width: 90px;
+      height: 90px;
+      border-radius: 50%;
+      right: 34px;
+      bottom: -60px;
+      background: rgba(255, 255, 255, 0.05);
+    }
+
+    .hero-kicker {
+      position: relative;
+      z-index: 1;
+      color: var(--on-primary-muted);
+      font-size: 12px;
+      font-weight: 700;
+      line-height: 18px;
+    }
+
+    .hero-route {
+      position: relative;
+      z-index: 1;
+      margin-top: 4px;
+      font-size: 22px;
+      line-height: 29px;
+      font-weight: 800;
+      letter-spacing: -0.4px;
+    }
+
+    .hero-price-row {
+      position: relative;
+      z-index: 1;
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: 12px;
+      margin-top: 20px;
+    }
+
+    .price-label {
+      color: var(--on-primary-muted);
+      font-size: 11px;
+      line-height: 16px;
+      margin-bottom: 2px;
+    }
+
+    .price {
+      font-size: 34px;
+      line-height: 38px;
+      letter-spacing: -1px;
+      font-weight: 850;
+    }
+
+    .route-badge {
+      min-height: 30px;
+      padding: 6px 10px;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.13);
+      color: #e9f7f5;
+      font-size: 11px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .metrics {
+      display: grid;
+      grid-template-columns: 1fr 1.15fr 0.75fr;
+      border-top: 1px solid rgba(255,255,255,0.11);
+      background: rgba(255,255,255,0.055);
+    }
+
+    .metric {
+      min-width: 0;
+      padding: 12px 14px 13px;
+    }
+
+    .metric + .metric {
+      border-left: 1px solid rgba(255,255,255,0.11);
+    }
+
+    .metric-label {
+      color: var(--on-primary-muted);
+      font-size: 10px;
+      line-height: 15px;
+    }
+
+    .metric-value {
+      margin-top: 3px;
+      font-size: 14px;
+      line-height: 19px;
+      font-weight: 800;
+      white-space: nowrap;
+    }
+
+    .section {
+      margin-top: 21px;
+    }
+
+    .section-title-row {
+      min-height: 34px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 8px;
+    }
+
+    .section h3 {
+      margin: 0;
+      font-size: 17px;
+      line-height: 23px;
+      letter-spacing: -0.2px;
+    }
+
+    .adjust {
+      min-height: 34px;
+      border: 0;
+      border-radius: 999px;
+      background: var(--primary-soft);
+      color: var(--primary-deep);
+      padding: 7px 12px;
+      font-size: 12px;
+      line-height: 18px;
+      font-weight: 800;
+    }
+
+    .plans {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 4px;
+      padding: 4px;
+      border-radius: var(--radius-card);
+      background: #dde7e5;
+    }
+
+    .plan {
+      min-width: 0;
+      min-height: 61px;
+      border: 0;
+      border-radius: 11px;
+      padding: 8px 5px;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      background: transparent;
+      color: var(--muted);
+    }
+
+    .plan.selected {
+      background: var(--surface);
+      color: var(--primary-deep);
+      box-shadow: 0 3px 6px rgba(22, 64, 66, 0.09);
+    }
+
+    .plan-name {
+      font-size: 12px;
+      line-height: 17px;
+      font-weight: 800;
+      white-space: nowrap;
+    }
+
+    .plan-value {
+      margin-top: 3px;
+      font-size: 10px;
+      line-height: 15px;
+      font-weight: 700;
+      white-space: nowrap;
+      letter-spacing: -0.15px;
+    }
+
+    .timeline {
+      background: var(--surface);
+      border-radius: var(--radius-card);
+      padding: 15px 15px 3px;
+    }
+
+    .leg {
+      position: relative;
+      display: grid;
+      grid-template-columns: 47px 18px minmax(0, 1fr);
+      gap: 8px;
+      min-height: 100px;
+    }
+
+    .leg-time {
+      padding-top: 1px;
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .leg-time strong {
+      display: block;
+      font-size: 14px;
+      line-height: 19px;
+    }
+
+    .leg-time span {
+      display: block;
+      margin-top: 2px;
+      color: var(--muted);
+      font-size: 10px;
+      line-height: 15px;
+    }
+
+    .rail {
+      position: relative;
+      display: flex;
+      justify-content: center;
+    }
+
+    .rail::before {
+      content: "";
+      position: absolute;
+      top: 13px;
+      bottom: -1px;
+      width: 2px;
+      background: #c6ded9;
+    }
+
+    .leg:last-child .rail::before {
+      display: none;
+    }
+
+    .node {
+      position: relative;
+      z-index: 1;
+      width: 10px;
+      height: 10px;
+      margin-top: 5px;
+      border-radius: 50%;
+      border: 2px solid var(--surface);
+      background: var(--primary);
+      box-shadow: 0 0 0 2px #b9d9d4;
+    }
+
+    .leg-copy {
+      padding-bottom: 15px;
+    }
+
+    .leg-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .leg-title {
+      min-width: 0;
+      font-size: 14px;
+      line-height: 20px;
+      font-weight: 800;
+    }
+
+    .leg-type {
+      flex: 0 0 auto;
+      border-radius: 999px;
+      background: var(--primary-faint);
+      color: var(--primary);
+      padding: 3px 7px;
+      font-size: 9px;
+      line-height: 14px;
+      font-weight: 800;
+    }
+
+    .leg-detail {
+      margin-top: 5px;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 17px;
+    }
+
+    .leg-detail strong {
+      color: var(--ink);
+      font-weight: 700;
+    }
+
+    .bottom {
+      position: fixed;
+      z-index: 10;
+      left: 50%;
+      bottom: 0;
+      transform: translateX(-50%);
+      width: min(100%, 430px);
+      padding: 10px 16px max(14px, env(safe-area-inset-bottom));
+      display: flex;
+      gap: 8px;
+      background: rgba(255,255,255,0.96);
+      border-top: 1px solid var(--line);
+      backdrop-filter: blur(16px);
+    }
+
+    .favorite,
+    .primary-action {
+      min-height: 50px;
+      border-radius: var(--radius-control);
+      font-size: 14px;
+      font-weight: 800;
+    }
+
+    .favorite {
+      width: 92px;
+      border: 1px solid var(--line);
+      background: var(--surface);
+      color: var(--primary-deep);
+    }
+
+    .primary-action {
+      flex: 1;
+      border: 0;
+      background: var(--primary);
+      color: var(--on-primary);
+    }
+
+    button:focus-visible {
+      outline: 3px solid rgba(18,107,117,0.28);
+      outline-offset: 2px;
+    }
+
+    button:active {
+      transform: scale(0.98);
+    }
+
+    .bottom button:active {
+      transform: translateY(1px);
+    }
+
+    @media (prefers-reduced-motion: no-preference) {
+      button { transition: transform 160ms cubic-bezier(0.16, 1, 0.3, 1), opacity 160ms ease; }
+    }
+
+    @media (prefers-reduced-transparency: reduce) {
+      .bottom {
+        background: var(--surface);
+        backdrop-filter: none;
+      }
+    }
+
+    @media (max-width: 359px) {
+      .main { padding-left: 12px; padding-right: 12px; }
+      .hero-main { padding-left: 16px; padding-right: 16px; }
+      .price { font-size: 31px; }
+      .metric { padding-left: 10px; padding-right: 10px; }
+      .plan-value { font-size: 9px; }
+    }
+  </style>
+</head>
+<body>
+  <main class="phone" aria-label="规划结果页精简设计稿">
+    <div class="status-bar" aria-hidden="true">
+      <span>08:04</span>
+      <div class="status-icons">
+        <span class="signal"><i></i><i></i><i></i><i></i></span>
+        <span class="wifi"></span>
+        <span class="battery">52</span>
+      </div>
+    </div>
+
+    <div class="main">
+      <nav class="nav" aria-label="路线结果导航">
+        <button class="back" aria-label="返回">‹</button>
+        <div class="trip-title">
+          <h1>温州 → 永嘉桥头梨村</h1>
+          <p>2026-07-29 · 05:15 出发</p>
+        </div>
+        <button class="more" aria-label="更多操作">•••</button>
+      </nav>
+
+      <div class="result-meta">
+        <h2>已找到 4 种可行路线</h2>
+        <button class="source-link"><span>更新于 07:55</span>数据来源</button>
+      </div>
+
+      <section class="hero" aria-label="当前推荐路线摘要">
+        <div class="hero-main">
+          <div>
+            <div class="hero-kicker">综合推荐 · 铁路联程</div>
+            <div class="hero-route">温州南至永嘉，再前往桥头梨村</div>
+          </div>
+          <div class="hero-price-row">
+            <div>
+              <div class="price-label">预计总价</div>
+              <div class="price">¥418.50</div>
+            </div>
+            <div class="route-badge">4 个可用班次</div>
+          </div>
+        </div>
+        <div class="metrics">
+          <div class="metric">
+            <div class="metric-label">全程耗时</div>
+            <div class="metric-value">5小时15分</div>
+          </div>
+          <div class="metric">
+            <div class="metric-label">换乘</div>
+            <div class="metric-value">2 次</div>
+          </div>
+          <div class="metric">
+            <div class="metric-label">预计抵达</div>
+            <div class="metric-value">10:30</div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" aria-labelledby="recommendation-title">
+        <div class="section-title-row">
+          <h3 id="recommendation-title">推荐目标</h3>
+        </div>
+        <div class="plans" role="tablist" aria-label="推荐目标">
+          <button class="plan" role="tab" aria-selected="false">
+            <span class="plan-name">综合推荐</span>
+            <span class="plan-value">¥512 · 5小时08分</span>
+          </button>
+          <button class="plan selected" role="tab" aria-selected="true">
+            <span class="plan-name">更舒适</span>
+            <span class="plan-value">¥418.50 · 5小时15分</span>
+          </button>
+          <button class="plan" role="tab" aria-selected="false">
+            <span class="plan-name">更省预算</span>
+            <span class="plan-value">¥418.50 · 5小时15分</span>
+          </button>
+        </div>
+      </section>
+
+      <section class="section" aria-labelledby="timeline-title">
+        <div class="section-title-row">
+          <h3 id="timeline-title">行程时间轴</h3>
+          <button class="adjust">调整时间</button>
+        </div>
+        <div class="timeline">
+          <article class="leg">
+            <div class="leg-time"><strong>05:15</strong><span>约 38 分</span></div>
+            <div class="rail"><span class="node"></span></div>
+            <div class="leg-copy">
+              <div class="leg-head">
+                <div class="leg-title">温州市区 → 温州南站</div>
+                <span class="leg-type">市内接驳</span>
+              </div>
+              <div class="leg-detail">建议 05:53 前抵达，预留 <strong>35 分钟</strong> 进站</div>
+            </div>
+          </article>
+
+          <article class="leg">
+            <div class="leg-time"><strong>06:28</strong><span>1小时06分</span></div>
+            <div class="rail"><span class="node"></span></div>
+            <div class="leg-copy">
+              <div class="leg-head">
+                <div class="leg-title">温州南站 → 永嘉站</div>
+                <span class="leg-type">铁路</span>
+              </div>
+              <div class="leg-detail">G7342，二等座，到达后步行约 8 分钟换乘</div>
+            </div>
+          </article>
+
+          <article class="leg">
+            <div class="leg-time"><strong>07:52</strong><span>2小时38分</span></div>
+            <div class="rail"><span class="node"></span></div>
+            <div class="leg-copy">
+              <div class="leg-head">
+                <div class="leg-title">永嘉站 → 桥头梨村</div>
+                <span class="leg-type">巴士</span>
+              </div>
+              <div class="leg-detail">城乡巴士 7 路，预计 <strong>10:30</strong> 抵达</div>
+            </div>
+          </article>
+        </div>
+      </section>
+    </div>
+
+    <div class="bottom" role="group" aria-label="路线操作">
+      <button class="favorite">收藏</button>
+      <button class="primary-action">查看完整路线</button>
+    </div>
+  </main>
+</body>
+</html>
