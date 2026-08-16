@@ -1,6 +1,6 @@
 # Architecture
 
-更新日期：2026-08-14
+更新日期：2026-08-16
 
 ## 文档定位
 
@@ -131,19 +131,21 @@ Expo / React Native App
 - `services/cache_store.py`：进程内 TTL 缓存。
 - `services/observability.py`：规划阶段、deadline 和结果指标。
 
-### 5.4 自然语言相对日期与时间解析（已批准目标，待实现）
+### 5.4 自然语言相对日期与时间解析（当前，2026-08-16 已实现）
 
-当前问题：
+实现前问题：
 
-- `intent_parser.py` 的确定性日期规则只覆盖今天、明天、后天、明确年月日和有限月日格式；“本周几、下周几、最近的周几、这个周末、月底、N 小时后”等常见表达没有完整覆盖。
+- `intent_parser.py` 的确定性日期规则只覆盖今天、明天、后天、明确年月日和有限月日格式；“现在就要出发、马上/立即/即刻/尽快出发、本周几、下周几、最近的周几、这个周末、月底、N 小时后”等常见表达没有完整覆盖。
 - LLM 首次输出和一次 repair 都可能返回不符合 `TravelRequest.travel_date` 的值；确定性兜底也无法识别时，接口会把有日期语义的输入误报为缺少日期。
 - 当前只把 `current_date` 传给 LLM，没有传带时区的权威 `current_datetime`；因此不能可靠处理跨午夜的“N 小时后”。
+- 2026-08-16 生产式真机复现中，“我现在就要从上海市南翔镇某小区出发，到杭州市”在首次 LLM 与 repair 后均触发 `travel_date: Input should be a valid date`，`POST /api/travel/plan/async` 在创建 job 前返回 HTTP 400。
 
-目标方案：
+已实现方案：
 
 - 后端使用 `Asia/Shanghai` 的带时区当前时刻作为国内行程解析的唯一权威基准，不依赖客户端时钟，也不依赖服务器默认时区。
 - 采用“LLM 识别语义、后端确定性归一化和校验”的边界：LLM 不直接决定最终日期；后端将相对表达转换为规范 `travel_date` 和 `TimePoint`。
-- 明确支持今天、明天、后天、本周几/这周几、下周几/下星期几、最近的周几及“N 小时后”；跨午夜时同步更新 `travel_date`。
+- 明确支持今天、明天、后天、本周几/这周几、下周几/下星期几、最近的周几、“N 小时后”，以及与出发动作绑定的“现在就要出发、现在出发、马上/立即/即刻/尽快出发”；跨午夜时同步更新 `travel_date`。
+- 立即出发语义使用一次性捕获的权威 `current_datetime`：`travel_date` 取其上海日期，`time_anchor_type=DEPARTURE`，`earliest_departure_time` 与 `time_window_start` 使用同一个 `TimePoint`，`time_window_end=null`。不能把仅表示对话时刻的“现在”误判为出发约束；明确未来日期或时间与立即出发表达冲突时必须按确定性优先级处理或追问。
 - `travel_date` 输出必须规范化为 `YYYY-MM-DD`；所有具体时间输出为包含 `datetime`、`timezone`、`source_timezone` 的 `TimePoint`。
 - “这个周末”“月底”等不能唯一落到单个出发日的表达不得静默猜测；返回 `PARSE_NEEDS_INPUT` 和针对性 follow-up question，引导用户选择具体日期。
 - 已明确但 LLM 格式错误的日期应由后端从原始输入恢复；只有信息确实缺失或存在无法消除的歧义时才追问。

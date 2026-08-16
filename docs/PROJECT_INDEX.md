@@ -1,6 +1,6 @@
 # Project Index
 
-更新日期：2026-08-14
+更新日期：2026-08-16
 
 ## 技术栈
 
@@ -28,6 +28,7 @@
 - `backend/app/main.py`：后端应用、middleware、异常处理与全部路由注册入口。
 - `backend/app/models/`：Pydantic schema/model。
 - `backend/app/services/`：规划、解析、推荐、重算、结果集偏好传播、存储、可观测性等业务服务层；结果集席别传播位于 `result_set_preferences.py`。
+- `backend/app/services/relative_datetime_parser.py`：基于单次捕获的 `Asia/Shanghai` 权威时刻，确定性归一化相对日期、星期、相对小时和立即出发语义，并在规划前阻断歧义或过去日期。
 - `backend/app/services/planning_progress.py`：不依赖 HTTP、SQLite 或全局 store 的渐进结果协议与执行指标载体。
 - `backend/app/services/task_queue.py`：异步任务期限、Provider 超时、并发和渐进结果开关；期限默认处于观测模式。
 - `backend/app/services/local_transfer_engine.py`：规划请求内地点解析与地图路线复用，缓存键覆盖规范化坐标、方式、Provider 链和环境。

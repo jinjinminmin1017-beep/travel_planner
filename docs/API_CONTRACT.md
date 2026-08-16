@@ -1,6 +1,6 @@
 # API Contract
 
-更新日期：2026-08-14
+更新日期：2026-08-16
 
 本文只记录已在 `backend/app/main.py` 或 `frontend/src/api/client.ts` 中发现的接口。统一错误结构见 `backend/app/models/schemas.py` 的 `ErrorResponse`。
 
@@ -64,13 +64,14 @@
 - 前端调用位置：未发现前端调用。
 - 后端实现位置：`backend/app/main.py` `parse_travel()`
 
-### 相对日期与时间解析目标语义（无字段变更，待实现）
+### 相对日期与时间解析语义（无字段变更，2026-08-16 已实现）
 
 - 后端以 `Asia/Shanghai` 的带时区当前时刻作为国内规划的权威解析基准，不信任客户端时钟。
-- 应确定性支持今天、明天、后天、本周几/这周几、下周几/下星期几、最近的周几及“N 小时后”；跨午夜时同时更新 `travel_date` 和对应 `TimePoint`。
+- 应确定性支持今天、明天、后天、本周几/这周几、下周几/下星期几、最近的周几、“N 小时后”，以及与出发动作绑定的“现在就要出发、现在出发、马上/立即/即刻/尽快出发”；跨午夜时同时更新 `travel_date` 和对应 `TimePoint`。
+- 立即出发语义必须在请求开始时只捕获一次权威 `current_datetime`，返回 `travel_date=<上海当天>`、`time_anchor_type=DEPARTURE`、`earliest_departure_time=current_datetime`、`time_window_start=current_datetime`、`time_window_end=null`；两个 TimePoint 必须完全相同。仅表示对话时刻的“现在”（例如“我现在想规划明天出发”）不得覆盖明确的未来日期。
 - `travel_date` 必须归一化为 `YYYY-MM-DD`；具体时间必须使用现有 `TimePoint` 结构，不返回裸时间字符串。
 - “这个周末”“月底”等无法唯一映射到单个日期的表达返回 HTTP 400 + `PARSE_NEEDS_INPUT`，`details.missing_fields` 包含 `travel_date`，`details.follow_up_questions` 提供针对性问题，不得只返回通用解析失败。
-- LLM 输出格式非法但原始输入包含可确定日期时，后端必须使用确定性解析恢复，不得把格式错误误报为信息缺失。
+- LLM 输出格式非法但原始输入包含可确定日期或立即出发语义时，后端必须使用确定性解析恢复，不得把格式错误误报为信息缺失；该规则也适用于 LLM 与 repair 都返回 `null`、中文相对词、完整 datetime 或其他非法 `travel_date` 的情况。
 - 明确解析到过去日期时返回可解释校验错误，不得向票务 Provider 发起过去日期查询。
 - 本规则同时适用于 `POST /api/travel/plan` 与 `POST /api/travel/plan/async` 内部的自然语言解析阶段；结构化 `travel_request` 路径保持现有校验。
 

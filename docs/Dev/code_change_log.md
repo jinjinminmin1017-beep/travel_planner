@@ -855,3 +855,16 @@
 - 代码提交：未提交；保留在当前工作区供用户审阅。
 - 验证：Task Dock 自动测试 28 passed；新增两个中断恢复回归，本机 Codex CLI 帮助确认 stdin 协议。
 - 兼容性：不修改旅行规划 API、SQLite schema、任务扫描频率或串行执行策略。
+
+## 2026-08-16 — 完成自然语言相对日期与时间解析
+
+- 任务：落实 `task_from_arc_for_dev_20260814_relative_datetime.md`，修复“现在就要从 A 出发”被误报 `PARSE_NEEDS_INPUT`，并补齐相对日期/时间确定性归一化。
+- 修改时间：2026-08-16 18:38:53 +08:00。
+- 核心代码提交：`a7df17f`。
+- 修改内容：
+  - 新增 `relative_datetime_parser.py`，以单次捕获的 `Asia/Shanghai` 权威时刻解析立即出发、今天/明天/后天、本周/下周/最近星期及 N 小时后，处理跨日/月/年并阻断歧义和过去日期。
+  - 首次 Intent 与 repair prompt 共享相同 `current_datetime`、`current_date` 和默认时区；LLM 日期非法时以后端原始输入的确定性结果归一化。
+  - 前端保留 `PARSE_NEEDS_INPUT` 的结构化错误和首个具体追问，job 创建成功前不进入规划页，失败后保留输入。
+  - 更新历史测试夹具的出行日期，避免新增过去日期门禁把正常规划回归误判为非法请求。
+- 验证：相对日期专项 49 passed；后端全量 351 passed；前端 typecheck、28 项 helper/UI tests、Web/iOS/Android Expo export 通过；真实 `glm-4.5-air` 两项 parse smoke 通过。
+- 兼容性：API Schema 保持 V1.18，无数据库迁移，不修改结构化 `travel_request` 路径和票务 Provider 合同。
