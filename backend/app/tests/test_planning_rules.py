@@ -13,7 +13,7 @@ from app.services.planning_rules import assert_option_available, candidate_plans
 def _request():
     ctx = RequestContext("req_rules", "trace_rules", "corr_rules", "idem_rules")
     return parse_travel_request(
-        "我 2026 年 5 月 21 日上午 9 点后，从上海嘉定南翔格林公馆出发，到青岛金水假日酒店，帮我找最舒服和最便宜的方式。",
+        "我 2027 年 5 月 21 日上午 9 点后，从上海嘉定南翔格林公馆出发，到青岛金水假日酒店，帮我找最舒服和最便宜的方式。",
         ctx,
     )
 
@@ -21,7 +21,7 @@ def _request():
 def _beijing_guangzhou_request():
     ctx = RequestContext("req_bg", "trace_bg", "corr_bg", "idem_bg")
     return parse_travel_request(
-        "我 2026 年 5 月 21 日上午 9 点后，从北京到广州，帮我找最舒服的方式。",
+        "我 2027 年 5 月 21 日上午 9 点后，从北京到广州，帮我找最舒服的方式。",
         ctx,
     )
 

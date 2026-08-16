@@ -13,7 +13,7 @@ from app.services.planner import INTERNAL_SOURCE, build_plans
 def _request():
     ctx = RequestContext("req_score", "trace_score", "corr_score", "idem_score")
     return parse_travel_request(
-        "我 2026 年 5 月 21 日上午 9 点后，从上海嘉定南翔格林公馆出发，到青岛金水假日酒店，帮我找最舒服和最便宜的方式。",
+        "我 2027 年 5 月 21 日上午 9 点后，从上海嘉定南翔格林公馆出发，到青岛金水假日酒店，帮我找最舒服和最便宜的方式。",
         ctx,
     )
 

@@ -5,7 +5,7 @@ import re
 import time as perf_time
 import uuid
 from dataclasses import dataclass
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import date, datetime, time
 
 import httpx
 from pydantic import ValidationError
@@ -23,6 +23,13 @@ from app.models.schemas import (
     TravelRequest,
     TravelSoftPreferences,
     money,
+)
+from app.services.relative_datetime_parser import (
+    SHANGHAI_TIMEZONE,
+    RelativeDateTimeParseError,
+    ResolvedTemporalIntent,
+    normalize_current_datetime,
+    resolve_temporal_intent,
 )
 
 DEFAULT_TIMEZONE = "Asia/Shanghai"
@@ -77,28 +84,24 @@ def _validation_result(
 
 
 def _extract_date(raw: str, current_date: date | None = None) -> date:
-    today = current_date or date.today()
-    if "后天" in raw:
-        return today + timedelta(days=2)
-    if "明天" in raw:
-        return today + timedelta(days=1)
-    if "今天" in raw:
-        return today
-    match = re.search(r"(20\d{2})\s*年?\s*(\d{1,2})\s*(?:月|[./-])\s*(\d{1,2})\s*[日号]?", raw)
-    if match:
-        return date(int(match.group(1)), int(match.group(2)), int(match.group(3)))
-    iso = re.search(r"(20\d{2})-(\d{1,2})-(\d{1,2})", raw)
-    if iso:
-        return date(int(iso.group(1)), int(iso.group(2)), int(iso.group(3)))
-    month_day = re.search(r"(?<!\d)(\d{1,2})\s*(?:月|[./])\s*(\d{1,2})\s*[日号]?", raw)
-    if month_day:
-        parsed = date(today.year, int(month_day.group(1)), int(month_day.group(2)))
-        return date(today.year + 1, parsed.month, parsed.day) if parsed < today else parsed
+    current_datetime = datetime.combine(current_date, time.min, tzinfo=SHANGHAI_TIMEZONE) if current_date else normalize_current_datetime()
+    try:
+        resolution = resolve_temporal_intent(raw, current_datetime)
+    except RelativeDateTimeParseError as exc:
+        raise IntentParserError(str(exc), ["travel_date"], [exc.follow_up_question]) from exc
+    if resolution is not None:
+        return resolution.travel_date
     raise IntentParserError("缺少出行日期，请补充具体日期。", ["travel_date"], ["请补充具体出行日期，例如“2026 年 5 月 21 日”或“明天”。"])
 
 
 def _timepoint(day: date, hour: int, minute: int = 0) -> TimePoint:
-    return TimePoint(datetime=datetime.combine(day, time(hour, minute), tzinfo=timezone(timedelta(hours=8))), timezone=DEFAULT_TIMEZONE, source_timezone=DEFAULT_TIMEZONE)
+    return TimePoint(datetime=datetime.combine(day, time(hour, minute), tzinfo=SHANGHAI_TIMEZONE), timezone=DEFAULT_TIMEZONE, source_timezone=DEFAULT_TIMEZONE)
+
+
+def _datetime_timepoint(value: datetime | None) -> TimePoint | None:
+    if value is None:
+        return None
+    return TimePoint(datetime=value, timezone=DEFAULT_TIMEZONE, source_timezone=DEFAULT_TIMEZONE)
 
 
 def _extract_time(raw: str, marker: str) -> tuple[int, int] | None:
@@ -236,8 +239,20 @@ def _is_specific_place(value: str) -> bool:
     return bool(re.search(r"[\u4e00-\u9fffA-Za-z]", value))
 
 
-def _parse_rule_based(raw: str, ctx: RequestContext, current_date: date | None = None) -> TravelRequest:
-    travel_date = _extract_date(raw, current_date)
+def _parse_rule_based(
+    raw: str,
+    ctx: RequestContext,
+    current_datetime: datetime,
+    temporal_resolution: ResolvedTemporalIntent | None = None,
+) -> TravelRequest:
+    resolution = temporal_resolution or _resolve_temporal_or_raise(raw, current_datetime)
+    if resolution is None:
+        raise IntentParserError(
+            "缺少出行日期，请补充具体日期。",
+            ["travel_date"],
+            ["请补充具体出行日期，例如“2026 年 5 月 21 日”或“明天”。"],
+        )
+    travel_date = resolution.travel_date
     origin, destination = _extract_origin_destination(raw)
 
     excluded: list[TransportMode] = []
@@ -282,13 +297,15 @@ def _parse_rule_based(raw: str, ctx: RequestContext, current_date: date | None =
         )
         preference_source = "USER_EXPLICIT"
 
-    earliest = _extract_time(raw, "后|以后|之后")
-    latest = _extract_time(raw, "前|以前|之前")
+    earliest = _extract_time(raw, "后|以后|之后") if resolution.earliest_departure_time is None else None
+    latest = _extract_time(raw, "前|以前|之前") if resolution.latest_arrival_time is None else None
     around = _extract_time(raw, "左右")
-    earliest_point = _timepoint(travel_date, *earliest) if earliest is not None else None
-    latest_point = _timepoint(travel_date, *latest) if latest is not None else None
+    earliest_point = _datetime_timepoint(resolution.earliest_departure_time) or (_timepoint(travel_date, *earliest) if earliest is not None else None)
+    latest_point = _datetime_timepoint(resolution.latest_arrival_time) or (_timepoint(travel_date, *latest) if latest is not None else None)
     around_point = _timepoint(travel_date, *around) if around is not None else None
-    anchor_type = _time_anchor_type(raw, has_arrival_constraint=latest_point is not None)
+    anchor_type = resolution.time_anchor_type or _time_anchor_type(raw, has_arrival_constraint=latest_point is not None)
+    window_start = _datetime_timepoint(resolution.time_window_start) or earliest_point
+    window_end = _datetime_timepoint(resolution.time_window_end) or latest_point
 
     max_cost = None
     budget = re.search(r"(?:预算|不要超过|不超过)\s*(\d{2,5})", raw)
@@ -307,8 +324,8 @@ def _parse_rule_based(raw: str, ctx: RequestContext, current_date: date | None =
         destination_text=destination,
         travel_date=travel_date,
         time_anchor_type=anchor_type,
-        time_window_start=earliest_point,
-        time_window_end=latest_point,
+        time_window_start=window_start,
+        time_window_end=window_end,
         earliest_departure_time=earliest_point,
         latest_arrival_time=latest_point,
         preferred_departure_time=around_point,
@@ -339,7 +356,27 @@ def parse_travel_request(raw: str, ctx: RequestContext) -> TravelRequest:
     return parse_travel_request_with_validation(raw, ctx).travel_request
 
 
-def parse_travel_request_with_validation(raw: str, ctx: RequestContext, current_date: date | None = None) -> IntentParseResult:
+def _resolve_temporal_or_raise(raw: str, current_datetime: datetime) -> ResolvedTemporalIntent | None:
+    try:
+        return resolve_temporal_intent(raw, current_datetime)
+    except RelativeDateTimeParseError as exc:
+        raise IntentParserError(str(exc), ["travel_date"], [exc.follow_up_question]) from exc
+
+
+def _authoritative_current_datetime(current_date: date | None, current_datetime: datetime | None) -> datetime:
+    if current_datetime is not None:
+        return normalize_current_datetime(current_datetime)
+    if current_date is not None:
+        return datetime.combine(current_date, time.min, tzinfo=SHANGHAI_TIMEZONE)
+    return normalize_current_datetime()
+
+
+def parse_travel_request_with_validation(
+    raw: str,
+    ctx: RequestContext,
+    current_date: date | None = None,
+    current_datetime: datetime | None = None,
+) -> IntentParseResult:
     raw = raw.strip()
     if not raw:
         validation = _validation_result(
@@ -352,15 +389,42 @@ def parse_travel_request_with_validation(raw: str, ctx: RequestContext, current_
         )
         raise IntentParserError("请输入出行需求。", ["raw_user_input"], ["请告诉我出发地、目的地和出行日期。"], validation)
 
+    authoritative_now = _authoritative_current_datetime(current_date, current_datetime)
+    try:
+        temporal_resolution = _resolve_temporal_or_raise(raw, authoritative_now)
+    except IntentParserError as exc:
+        exc.llm_validation_result = _validation_result(
+            schema_valid=False,
+            semantic_valid=False,
+            repair_attempted=False,
+            final_strategy="REJECTED",
+            invalid_reasons=[str(exc)],
+            prompt_version=INTENT_PARSER_PROMPT_VERSION,
+            model_name=RULE_PARSER_MODEL,
+        )
+        raise
+
     provider = build_enabled_intent_llm_provider()
     if provider is not None:
-        return _parse_with_llm(raw, ctx, provider, current_date)
-    return _parse_with_rule_fallback(raw, ctx, current_date, ["real_llm is disabled or unavailable; rule parser fallback used"])
+        return _parse_with_llm(raw, ctx, provider, authoritative_now, temporal_resolution)
+    return _parse_with_rule_fallback(
+        raw,
+        ctx,
+        authoritative_now,
+        temporal_resolution,
+        ["real_llm is disabled or unavailable; rule parser fallback used"],
+    )
 
 
-def _parse_with_rule_fallback(raw: str, ctx: RequestContext, current_date: date | None, reasons: list[str]) -> IntentParseResult:
+def _parse_with_rule_fallback(
+    raw: str,
+    ctx: RequestContext,
+    current_datetime: datetime,
+    temporal_resolution: ResolvedTemporalIntent | None,
+    reasons: list[str],
+) -> IntentParseResult:
     try:
-        travel_request = _parse_rule_based(raw, ctx, current_date)
+        travel_request = _parse_rule_based(raw, ctx, current_datetime, temporal_resolution)
     except IntentParserError as exc:
         validation = _validation_result(
             schema_valid=False,
@@ -373,7 +437,7 @@ def _parse_with_rule_fallback(raw: str, ctx: RequestContext, current_date: date 
         )
         exc.llm_validation_result = validation
         raise
-    semantic_reasons = validate_travel_request_semantics(travel_request)
+    semantic_reasons = validate_travel_request_semantics(travel_request, current_datetime)
     if semantic_reasons:
         validation = _validation_result(
             schema_valid=True,
@@ -404,21 +468,26 @@ def _parse_with_rule_fallback(raw: str, ctx: RequestContext, current_date: date 
     )
 
 
-def _parse_with_llm(raw: str, ctx: RequestContext, provider, current_date: date | None) -> IntentParseResult:
+def _parse_with_llm(
+    raw: str,
+    ctx: RequestContext,
+    provider,
+    current_datetime: datetime,
+    temporal_resolution: ResolvedTemporalIntent | None,
+) -> IntentParseResult:
     call_id = f"llm_intent_{uuid.uuid4().hex[:12]}"
-    prompt_date = current_date or date.today()
     start = perf_time.perf_counter()
     try:
-        raw_output = provider.parse_intent(raw, ctx.request_id, prompt_date, DEFAULT_TIMEZONE)
+        raw_output = provider.parse_intent(raw, ctx.request_id, current_datetime, DEFAULT_TIMEZONE)
     except (httpx.HTTPError, LLMProviderError, ValueError) as exc:
         latency_ms = _elapsed_ms(start)
         _audit(call_id, ctx, provider.model_name, raw, "", False, False, False, "FALLBACK_RULES", latency_ms, [str(exc)])
-        return _parse_with_rule_fallback(raw, ctx, current_date, [f"real_llm unavailable: {exc}"])
+        return _parse_with_rule_fallback(raw, ctx, current_datetime, temporal_resolution, [f"real_llm unavailable: {exc}"])
 
     latency_ms = _elapsed_ms(start)
-    travel_request, invalid_reasons = _travel_request_from_llm_output(raw_output, raw, ctx)
+    travel_request, invalid_reasons = _travel_request_from_llm_output(raw_output, raw, ctx, temporal_resolution)
     if travel_request is not None:
-        semantic_reasons = validate_travel_request_semantics(travel_request)
+        semantic_reasons = validate_travel_request_semantics(travel_request, current_datetime)
         if not semantic_reasons:
             _audit(call_id, ctx, provider.model_name, raw, raw_output, True, True, False, "USE_ORIGINAL", latency_ms, [])
             return IntentParseResult(
@@ -439,15 +508,15 @@ def _parse_with_llm(raw: str, ctx: RequestContext, provider, current_date: date 
     repaired_output = ""
     repair_start = perf_time.perf_counter()
     try:
-        repaired_output = provider.repair_intent(raw_output, invalid_reasons, raw, ctx.request_id)
-        repaired_request, repaired_reasons = _travel_request_from_llm_output(repaired_output, raw, ctx)
+        repaired_output = provider.repair_intent(raw_output, invalid_reasons, raw, ctx.request_id, current_datetime, DEFAULT_TIMEZONE)
+        repaired_request, repaired_reasons = _travel_request_from_llm_output(repaired_output, raw, ctx, temporal_resolution)
     except (httpx.HTTPError, LLMProviderError, ValueError) as exc:
         repaired_request = None
         repaired_reasons = [str(exc)]
     repair_latency_ms = latency_ms + _elapsed_ms(repair_start)
 
     if repaired_request is not None:
-        semantic_reasons = validate_travel_request_semantics(repaired_request)
+        semantic_reasons = validate_travel_request_semantics(repaired_request, current_datetime)
         if not semantic_reasons:
             _audit(call_id, ctx, provider.model_name, raw, repaired_output, True, True, True, "REPAIRED", repair_latency_ms, invalid_reasons)
             return IntentParseResult(
@@ -470,7 +539,13 @@ def _parse_with_llm(raw: str, ctx: RequestContext, provider, current_date: date 
     final_reasons = [*invalid_reasons, *repaired_reasons]
     _audit(call_id, ctx, provider.model_name, raw, repaired_output or raw_output, False, False, True, "REJECTED", repair_latency_ms, final_reasons)
     try:
-        return _parse_with_rule_fallback(raw, ctx, current_date, [f"real_llm output rejected; rule parser fallback used: {'; '.join(final_reasons)}"])
+        return _parse_with_rule_fallback(
+            raw,
+            ctx,
+            current_datetime,
+            temporal_resolution,
+            [f"real_llm output rejected; rule parser fallback used: {'; '.join(final_reasons)}"],
+        )
     except IntentParserError:
         pass
     validation = _validation_result(
@@ -493,7 +568,46 @@ def _parse_with_llm(raw: str, ctx: RequestContext, provider, current_date: date 
     )
 
 
-def _travel_request_from_llm_output(raw_output: str, raw_user_input: str, ctx: RequestContext) -> tuple[TravelRequest | None, list[str]]:
+def _apply_temporal_resolution_to_payload(payload: dict[str, object], resolution: ResolvedTemporalIntent | None) -> None:
+    if resolution is None:
+        return
+    payload["travel_date"] = resolution.travel_date.isoformat()
+    if resolution.time_anchor_type is None:
+        return
+
+    payload["time_anchor_type"] = resolution.time_anchor_type
+    payload["time_window_start"] = _timepoint_payload(resolution.time_window_start)
+    payload["time_window_end"] = _timepoint_payload(resolution.time_window_end)
+    hard_constraints = payload.get("hard_constraints")
+    if not isinstance(hard_constraints, dict):
+        hard_constraints = {}
+        payload["hard_constraints"] = hard_constraints
+    if resolution.time_anchor_type == "DEPARTURE":
+        departure = _timepoint_payload(resolution.earliest_departure_time)
+        payload["earliest_departure_time"] = departure
+        hard_constraints["earliest_departure_time"] = departure
+    else:
+        arrival = _timepoint_payload(resolution.latest_arrival_time)
+        payload["latest_arrival_time"] = arrival
+        hard_constraints["latest_arrival_time"] = arrival
+
+
+def _timepoint_payload(value: datetime | None) -> dict[str, str] | None:
+    if value is None:
+        return None
+    return {
+        "datetime": value.isoformat(),
+        "timezone": DEFAULT_TIMEZONE,
+        "source_timezone": DEFAULT_TIMEZONE,
+    }
+
+
+def _travel_request_from_llm_output(
+    raw_output: str,
+    raw_user_input: str,
+    ctx: RequestContext,
+    temporal_resolution: ResolvedTemporalIntent | None = None,
+) -> tuple[TravelRequest | None, list[str]]:
     try:
         payload = json.loads(raw_output)
     except json.JSONDecodeError as exc:
@@ -503,13 +617,14 @@ def _travel_request_from_llm_output(raw_output: str, raw_user_input: str, ctx: R
     payload.setdefault("schema_version", "1.18")
     payload.setdefault("request_id", ctx.request_id)
     payload.setdefault("raw_user_input", raw_user_input)
+    _apply_temporal_resolution_to_payload(payload, temporal_resolution)
     try:
         return _normalize_time_intent(TravelRequest.model_validate(payload)), []
     except ValidationError as exc:
         return None, [f"{'.'.join(str(part) for part in error['loc'])}: {error['msg']}" for error in exc.errors()]
 
 
-def validate_travel_request_semantics(request: TravelRequest) -> list[str]:
+def validate_travel_request_semantics(request: TravelRequest, current_datetime: datetime | None = None) -> list[str]:
     reasons: list[str] = []
     if not request.origin_text.strip():
         reasons.append("origin_text is required")
@@ -517,6 +632,8 @@ def validate_travel_request_semantics(request: TravelRequest) -> list[str]:
         reasons.append("destination_text is required")
     if not request.preferences:
         reasons.append("preferences must not be empty")
+    if current_datetime is not None and request.travel_date < normalize_current_datetime(current_datetime).date():
+        reasons.append("travel_date must not be in the past")
     allowed = set(request.hard_constraints.allowed_transport_modes)
     excluded = set(request.hard_constraints.excluded_transport_modes)
     conflict = sorted(allowed & excluded)

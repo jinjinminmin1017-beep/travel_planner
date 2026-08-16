@@ -9,7 +9,7 @@ from app.services.planner import build_plans
 def _rail_fixture_plan():
     ctx = RequestContext("req_variants", "trace_variants", "corr_variants", "idem_variants")
     request = parse_travel_request(
-        "2026-05-21 from Shanghai to Qingdao by train",
+        "2027-05-21 from Shanghai to Qingdao by train",
         ctx,
     )
     request.earliest_departure_time = None

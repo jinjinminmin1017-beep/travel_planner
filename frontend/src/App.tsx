@@ -14,7 +14,7 @@ import {
   View
 } from "react-native";
 import qingdaoHero from "../assets/destination-scenes/qingdao-pier.jpg";
-import { cancelPlanningJob, planTripAsync, pollPlanningJob, retryPlanningJob, trackEvent } from "./api/client";
+import { ApiRequestError, cancelPlanningJob, planTripAsync, pollPlanningJob, retryPlanningJob, trackEvent } from "./api/client";
 import { ui } from "./designSystem";
 import {
   DEFAULT_OBSERVATION_WINDOW_MS,
@@ -651,13 +651,13 @@ export default function App() {
       setSelectedTransportMode(null);
     }
     setResultsPane("overview");
-    setActiveTab("results");
     const runId = planningRunId.current + 1;
     planningRunId.current = runId;
     try {
       void trackEvent({ eventType: "INPUT_SUBMITTED", metadata }).catch(() => undefined);
       const result = await planTripAsync(input);
       if (runId !== planningRunId.current) return;
+      setActiveTab("results");
       setSubmittingInputSummary(null);
       applyPlanningSnapshot(result);
       if (isPlanningActive(result)) {
@@ -670,6 +670,9 @@ export default function App() {
     } catch (caught) {
       if (runId !== planningRunId.current) return;
       setError(caught instanceof Error ? caught.message : "请求失败");
+      if (caught instanceof ApiRequestError && caught.errorCode === "PARSE_NEEDS_INPUT") {
+        setActiveTab("input");
+      }
       setSubmittingInputSummary(null);
       setObservationState("IDLE");
     } finally {

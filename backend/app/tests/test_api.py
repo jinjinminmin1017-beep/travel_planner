@@ -15,8 +15,8 @@ from app.services.cost_comfort_risk_engine import refresh_plan_cost_and_quality
 
 client = TestClient(app)
 
-RAW_INPUT = "我 2026 年 5 月 21 日上午 9 点后，从上海嘉定南翔格林公馆出发，到青岛金水假日酒店，帮我找最舒服和最便宜的方式。"
-BEIJING_GUANGZHOU_INPUT = "我 2026 年 5 月 21 日上午 9 点后，从北京到广州，帮我找最舒服的方式。"
+RAW_INPUT = "我 2027 年 5 月 21 日上午 9 点后，从上海嘉定南翔格林公馆出发，到青岛金水假日酒店，帮我找最舒服和最便宜的方式。"
+BEIJING_GUANGZHOU_INPUT = "我 2027 年 5 月 21 日上午 9 点后，从北京到广州，帮我找最舒服的方式。"
 
 
 def _first_dynamic_rail_plan(plans):
@@ -132,7 +132,7 @@ def test_parse_travel_request():
 
 
 def test_parse_english_or_mixed_input():
-    response = client.post("/api/travel/parse", json={"raw_user_input": "2026-05-21 from Beijing to Guangzhou, comfortable, train only"})
+    response = client.post("/api/travel/parse", json={"raw_user_input": "2027-05-21 from Beijing to Guangzhou, comfortable, train only"})
     assert response.status_code == 200
     body = response.json()
     assert body["travel_request"]["origin_text"] == "北京市朝阳区国贸"
@@ -151,12 +151,12 @@ def test_parse_explicit_poi_route_input():
 
 
 def test_parse_chinese_dot_date_with_explicit_year():
-    response = client.post("/api/travel/parse", json={"raw_user_input": "我要从上海东方明珠塔到北京天安门，2026年6.24号早上"})
+    response = client.post("/api/travel/parse", json={"raw_user_input": "我要从上海东方明珠塔到北京天安门，2027年6.24号早上"})
     assert response.status_code == 200
     request = response.json()["travel_request"]
     assert request["origin_text"] == "上海东方明珠塔"
     assert request["destination_text"] == "北京天安门"
-    assert request["travel_date"] == "2026-06-24"
+    assert request["travel_date"] == "2027-06-24"
 
 
 def test_parse_date_prefix_with_explicit_from_to_route():
@@ -177,7 +177,7 @@ def test_parse_preference_synonyms_and_text_order():
         ("帮我找省钱的方式", "CHEAPEST"),
     ]
     for suffix, expected in cases:
-        raw = f"我 2026 年 5 月 21 日上午 9 点后，从上海到青岛，{suffix}。"
+        raw = f"我 2027 年 5 月 21 日上午 9 点后，从上海到青岛，{suffix}。"
         response = client.post("/api/travel/parse", json={"raw_user_input": raw})
         assert response.status_code == 200
         request = response.json()["travel_request"]
@@ -190,14 +190,14 @@ def test_parse_preference_synonyms_and_text_order():
     )
     cheapest_first = client.post(
         "/api/travel/parse",
-        json={"raw_user_input": "我 2026 年 5 月 21 日上午 9 点后，从上海嘉定南翔格林公馆出发，到青岛金水假日酒店，帮我找最便宜和最舒服的方式。"},
+        json={"raw_user_input": "我 2027 年 5 月 21 日上午 9 点后，从上海嘉定南翔格林公馆出发，到青岛金水假日酒店，帮我找最便宜和最舒服的方式。"},
     )
     assert comfort_first.json()["travel_request"]["preferences"][:2] == ["MOST_COMFORTABLE", "CHEAPEST"]
     assert cheapest_first.json()["travel_request"]["preferences"][:2] == ["CHEAPEST", "MOST_COMFORTABLE"]
 
 
 def test_parse_transport_constraints():
-    raw = "我 2026 年 5 月 21 日上午 9 点后，从上海嘉定南翔格林公馆出发，到青岛金水假日酒店，不坐飞机，只看高铁，不接受高铁中转。"
+    raw = "我 2027 年 5 月 21 日上午 9 点后，从上海嘉定南翔格林公馆出发，到青岛金水假日酒店，不坐飞机，只看高铁，不接受高铁中转。"
     response = client.post("/api/travel/parse", json={"raw_user_input": raw})
     assert response.status_code == 200
     request = response.json()["travel_request"]
@@ -207,31 +207,31 @@ def test_parse_transport_constraints():
 
 
 def test_parse_budget_time_and_passenger_notes():
-    raw = "我 2026 年 5 月 21 日上午 9 点后，从上海到青岛，预算不要超过1000，晚上8点前到，带老人和行李多。"
+    raw = "我 2027 年 5 月 21 日上午 9 点后，从上海到青岛，预算不要超过1000，晚上8点前到，带老人和行李多。"
     response = client.post("/api/travel/parse", json={"raw_user_input": raw})
     assert response.status_code == 200
     request = response.json()["travel_request"]
     assert request["time_anchor_type"] == "ARRIVAL"
     assert request["hard_constraints"]["max_total_cost"]["amount_minor"] == 100000
-    assert request["latest_arrival_time"]["datetime"].startswith("2026-05-21T20:00:00")
+    assert request["latest_arrival_time"]["datetime"].startswith("2027-05-21T20:00:00")
     assert "老人" in request["soft_preferences"]["passenger_notes"]
     assert "行李多" in request["soft_preferences"]["passenger_notes"]
 
 
 def test_parse_period_departure_window():
-    raw = "我要从上海东方明珠塔到北京天安门，2026年6.24号早上出发"
+    raw = "我要从上海东方明珠塔到北京天安门，2027年6.24号早上出发"
     response = client.post("/api/travel/parse", json={"raw_user_input": raw})
     assert response.status_code == 200
     request = response.json()["travel_request"]
     assert request["time_anchor_type"] == "DEPARTURE"
-    assert request["time_window_start"]["datetime"].startswith("2026-06-24T06:00:00")
-    assert request["time_window_end"]["datetime"].startswith("2026-06-24T11:00:00")
-    assert request["earliest_departure_time"]["datetime"].startswith("2026-06-24T06:00:00")
+    assert request["time_window_start"]["datetime"].startswith("2027-06-24T06:00:00")
+    assert request["time_window_end"]["datetime"].startswith("2027-06-24T11:00:00")
+    assert request["earliest_departure_time"]["datetime"].startswith("2027-06-24T06:00:00")
 
 
 def test_parse_returns_error_for_missing_date_and_ambiguous_place():
     missing_date = client.post("/api/travel/parse", json={"raw_user_input": "从上海到青岛，帮我找最舒服的方式。"})
-    ambiguous_place = client.post("/api/travel/parse", json={"raw_user_input": "我 2026 年 5 月 21 日上午 9 点后，从家里到酒店。"})
+    ambiguous_place = client.post("/api/travel/parse", json={"raw_user_input": "我 2027 年 5 月 21 日上午 9 点后，从家里到酒店。"})
     assert missing_date.status_code == 400
     assert ambiguous_place.status_code == 400
     assert missing_date.json()["error_code"] == "PARSE_NEEDS_INPUT"
@@ -242,7 +242,7 @@ def test_parse_returns_error_for_missing_date_and_ambiguous_place():
 
 
 def test_parse_returns_follow_up_for_conflicting_transport_constraints():
-    raw = "我 2026 年 5 月 21 日上午 9 点后，从上海到青岛，只看高铁，但又不坐高铁。"
+    raw = "我 2027 年 5 月 21 日上午 9 点后，从上海到青岛，只看高铁，但又不坐高铁。"
     response = client.post("/api/travel/parse", json={"raw_user_input": raw})
     assert response.status_code == 400
     body = response.json()
@@ -259,7 +259,7 @@ def test_parse_uses_llm_repair_once_when_enabled_provider_returns_invalid_output
         def parse_intent(self, raw_user_input, request_id, current_date, default_timezone):
             return '{"schema_version":"1.18","origin_text":"","destination_text":"青岛金水假日酒店"}'
 
-        def repair_intent(self, raw_llm_output, invalid_reasons, raw_user_input, request_id):
+        def repair_intent(self, raw_llm_output, invalid_reasons, raw_user_input, request_id, current_datetime, default_timezone):
             return (
                 "{"
                 '"schema_version":"1.18",'
@@ -267,7 +267,7 @@ def test_parse_uses_llm_repair_once_when_enabled_provider_returns_invalid_output
                 f'"raw_user_input":"{raw_user_input}",'
                 '"origin_text":"上海嘉定南翔格林公馆",'
                 '"destination_text":"青岛金水假日酒店",'
-                '"travel_date":"2026-05-21",'
+                '"travel_date":"2027-05-21",'
                 '"preferences":["CHEAPEST","MOST_COMFORTABLE","BALANCED"],'
                 '"preference_source":"SYSTEM_DEFAULT",'
                 '"hard_constraints":{"allowed_transport_modes":[],"excluded_transport_modes":[]},'
@@ -292,19 +292,52 @@ def test_parse_falls_back_to_rules_when_llm_output_and_repair_fail(monkeypatch):
         model_name = "test-invalid-intent-model"
 
         def parse_intent(self, raw_user_input, request_id, current_date, default_timezone):
-            return '{"origin":"上海东方明珠塔","destination":"北京天安门","departure_date":"2026-06-24"}'
+            return '{"origin":"上海东方明珠塔","destination":"北京天安门","departure_date":"2027-06-24"}'
 
-        def repair_intent(self, raw_llm_output, invalid_reasons, raw_user_input, request_id):
+        def repair_intent(self, raw_llm_output, invalid_reasons, raw_user_input, request_id, current_datetime, default_timezone):
             raise ValueError("repair timed out")
 
     monkeypatch.setattr("app.services.intent_parser.build_enabled_intent_llm_provider", lambda: _InvalidIntentProvider())
-    response = client.post("/api/travel/parse", json={"raw_user_input": "我要从上海东方明珠塔到北京天安门，2026年6.24号早上"})
+    response = client.post("/api/travel/parse", json={"raw_user_input": "我要从上海东方明珠塔到北京天安门，2027年6.24号早上"})
     assert response.status_code == 200
     body = response.json()
-    assert body["travel_request"]["travel_date"] == "2026-06-24"
+    assert body["travel_request"]["travel_date"] == "2027-06-24"
     assert body["travel_request"]["origin_text"] == "上海东方明珠塔"
     assert body["travel_request"]["destination_text"] == "北京天安门"
     assert body["llm_validation_result"]["final_strategy"] == "FALLBACK_RULES"
+
+
+def test_immediate_departure_parse_and_async_create_job():
+    raw = "我现在就要从上海市南翔镇某小区出发，到杭州市"
+    parsed = client.post("/api/travel/parse", json={"raw_user_input": raw})
+    assert parsed.status_code == 200
+    request = parsed.json()["travel_request"]
+    assert request["time_anchor_type"] == "DEPARTURE"
+    assert request["earliest_departure_time"] == request["time_window_start"]
+    assert request["time_window_end"] is None
+    assert request["earliest_departure_time"]["timezone"] == "Asia/Shanghai"
+
+    sync_response = client.post("/api/travel/plan", json={"raw_user_input": raw})
+    assert sync_response.status_code == 200
+    assert sync_response.json()["travel_request"]["travel_date"] == request["travel_date"]
+
+    async_response = client.post("/api/travel/plan/async", json={"raw_user_input": raw})
+    assert async_response.status_code == 200
+    assert async_response.json()["async_job"]["job_id"].startswith("job_")
+    assert async_response.json()["travel_request"]["travel_date"] == request["travel_date"]
+
+
+def test_ambiguous_date_returns_specific_follow_up_without_async_job():
+    raw = "这个周末从上海到武汉"
+    parsed = client.post("/api/travel/parse", json={"raw_user_input": raw})
+    async_response = client.post("/api/travel/plan/async", json={"raw_user_input": raw})
+    for response in (parsed, async_response):
+        assert response.status_code == 400
+        body = response.json()
+        assert body["error_code"] == "PARSE_NEEDS_INPUT"
+        assert body["details"]["missing_fields"] == ["travel_date"]
+        assert "周六还是周日" in body["details"]["follow_up_questions"][0]
+        assert "async_job" not in body
 
 
 def test_plan_without_llm_returns_partial_without_generated_recommendation_cards():
@@ -344,7 +377,7 @@ def test_plan_has_door_to_door_segment_times():
 def test_plan_requeries_and_filters_by_arrival_time_constraint():
     response = client.post(
         "/api/travel/plan",
-        json={"raw_user_input": "我 2026 年 5 月 21 日，从上海到青岛，只看高铁，不坐飞机，中午12点前到。"},
+        json={"raw_user_input": "我 2027 年 5 月 21 日，从上海到青岛，只看高铁，不坐飞机，中午12点前到。"},
     )
     assert response.status_code == 200
     body = response.json()
@@ -444,7 +477,7 @@ def test_async_plan_survives_amap_transit_empty_cost(monkeypatch):
 def test_async_no_match_is_a_completed_business_job():
     response = client.post(
         "/api/travel/plan/async",
-        json={"raw_user_input": "我 2026 年 5 月 21 日，从上海到青岛，只看高铁，不坐飞机，中午12点前到。"},
+        json={"raw_user_input": "我 2027 年 5 月 21 日，从上海到青岛，只看高铁，不坐飞机，中午12点前到。"},
         headers={"idempotency-key": "idem_async_no_match_v116"},
     )
     assert response.status_code == 200
@@ -459,7 +492,7 @@ def test_async_no_match_is_a_completed_business_job():
 def test_async_plan_accepts_naive_datetime_with_declared_timezone():
     parsed = client.post("/api/travel/parse", json={"raw_user_input": RAW_INPUT}).json()["travel_request"]
     naive_latest = {
-        "datetime": "2026-05-21T17:00:00",
+        "datetime": "2027-05-21T17:00:00",
         "timezone": "Asia/Shanghai",
         "source_timezone": "Asia/Shanghai",
     }
@@ -732,7 +765,7 @@ def test_plan_filters_hard_constraints_before_llm_recommendation(monkeypatch):
     monkeypatch.setattr("app.services.recommendation.build_enabled_llm_provider", lambda: _RecordingLLMProvider())
     response = client.post(
         "/api/travel/plan",
-        json={"raw_user_input": "我 2026 年 5 月 21 日上午 9 点后，从上海到青岛，只看高铁，不坐飞机。"},
+        json={"raw_user_input": "我 2027 年 5 月 21 日上午 9 点后，从上海到青岛，只看高铁，不坐飞机。"},
     )
     assert response.status_code == 200
     body = response.json()
@@ -1151,7 +1184,7 @@ def test_booking_redirect():
 def test_non_sample_route_without_llm_has_no_generated_recommendation_cards():
     response = client.post(
         "/api/travel/plan",
-        json={"raw_user_input": "我 2026 年 5 月 21 日上午 9 点后，从北京到广州，force_invalid_llm"},
+        json={"raw_user_input": "我 2027 年 5 月 21 日上午 9 点后，从北京到广州，force_invalid_llm"},
     )
     assert response.status_code == 200
     body = response.json()
@@ -1183,7 +1216,7 @@ def test_non_sample_route_uses_beijing_guangzhou_provider_network():
 def test_known_city_pair_uses_dynamic_rail_provider_search():
     response = client.post(
         "/api/travel/plan",
-        json={"raw_user_input": "我 2026 年 5 月 21 日上午 9 点后，从成都到深圳，帮我找最舒服的方式。"},
+        json={"raw_user_input": "我 2027 年 5 月 21 日上午 9 点后，从成都到深圳，帮我找最舒服的方式。"},
     )
     assert response.status_code == 200
     body = response.json()

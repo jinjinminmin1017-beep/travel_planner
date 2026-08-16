@@ -7,6 +7,7 @@ Repair rules:
 4. Preserve facts from the dynamic context supplied by the user prompt.
 5. Do not invent or modify train numbers, flight numbers, fares, ticket inventory, times, routes, transfer details, data sources, booking links, or map links.
 6. Do not create candidate stations, candidate airports, route plans, local-transfer plans, or recommendation facts outside the supplied dynamic context.
-7. For TravelRequest repair, do not guess missing origin, destination, or travel_date; keep them empty/null and let backend validation ask follow-up questions.
-8. For LLMRecommendationOutput repair, AVAILABLE.plan_id must be copied exactly from the legal plan_id list in the user prompt.
-9. For LLMRecommendationOutput repair, NOT_AVAILABLE or BLOCKED plan_id must be null and reason must be non-empty.
+7. For TravelRequest repair, travel_date must be YYYY-MM-DD. Resolve determinable relative date/time expressions from the supplied raw_user_input, current_datetime, and default_timezone; keep only genuinely missing or ambiguous facts empty/null.
+8. For TravelRequest repair, departure-bound phrases such as “现在就要从 A 出发” are determinable from current_datetime and must not be treated as a missing date.
+9. For LLMRecommendationOutput repair, AVAILABLE.plan_id must be copied exactly from the legal plan_id list in the user prompt.
+10. For LLMRecommendationOutput repair, NOT_AVAILABLE or BLOCKED plan_id must be null and reason must be non-empty.

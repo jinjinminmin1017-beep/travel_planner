@@ -19,7 +19,7 @@ def _context() -> RequestContext:
 
 def _request():
     return parse_travel_request(
-        "我 2026 年 5 月 21 日上午 9 点后，从上海嘉定南翔格林公馆出发，到青岛金水假日酒店。",
+        "我 2027 年 5 月 21 日上午 9 点后，从上海嘉定南翔格林公馆出发，到青岛金水假日酒店。",
         _context(),
     )
 
@@ -27,7 +27,7 @@ def _request():
 def test_time_no_match_returns_http_business_state_with_safe_alternative(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("TRAVEL_CONSTRAINT_ANALYSIS_ENABLED", "true")
     request = _request()
-    latest = TimePoint(datetime=datetime.fromisoformat("2026-05-21T09:05:00+08:00"), timezone="Asia/Shanghai", source_timezone="Asia/Shanghai")
+    latest = TimePoint(datetime=datetime.fromisoformat("2027-05-21T09:05:00+08:00"), timezone="Asia/Shanghai", source_timezone="Asia/Shanghai")
     request.time_anchor_type = "ARRIVAL"
     request.latest_arrival_time = latest
     request.time_window_end = latest
@@ -77,7 +77,7 @@ def test_time_and_budget_tracks_are_not_collapsed_into_cross_unit_score():
     plans, *_ = build_plans(request)
     assert len(plans) >= 2
     request.hard_constraints.max_total_cost = money(1)
-    latest = TimePoint(datetime=datetime.fromisoformat("2026-05-21T09:05:00+08:00"), timezone="Asia/Shanghai", source_timezone="Asia/Shanghai")
+    latest = TimePoint(datetime=datetime.fromisoformat("2027-05-21T09:05:00+08:00"), timezone="Asia/Shanghai", source_timezone="Asia/Shanghai")
     request.latest_arrival_time = latest
     request.hard_constraints.latest_arrival_time = latest
     pool = generate_candidate_plan_pool(plans, request)

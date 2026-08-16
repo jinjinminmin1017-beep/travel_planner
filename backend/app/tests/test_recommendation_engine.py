@@ -1,5 +1,6 @@
 import json
-from datetime import date
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from app.core.context import RequestContext
 from app.data_sources.llm_providers import OpenAICompatibleLLMProvider, _prompt, _recommendation_selection_payload, _recommendation_user_prompt
@@ -53,7 +54,7 @@ def _llm_input():
         return LLMRecommendationInput.model_validate_json(_BASE_LLM_INPUT_JSON)
     ctx = RequestContext("req_rec", "trace_rec", "corr_rec", "idem_rec")
     request = parse_travel_request(
-        "2026-05-21 from Beijing to Guangzhou, comfortable and cheapest, train or flight",
+        "2027-05-21 from Beijing to Guangzhou, comfortable and cheapest, train or flight",
         ctx,
     )
     request.earliest_departure_time = None
@@ -101,7 +102,12 @@ def test_intent_prompt_uses_minimal_contract_and_dynamic_user_context():
     client = _RecordingLLMClient(['{"schema_version":"1.18"}'])
     provider = OpenAICompatibleLLMProvider(api_key="test-key", model="test-model", client=client)
 
-    provider.parse_intent("2026-07-09 from Beijing to Shanghai in the morning", "req_prompt", date(2026, 7, 7), "Asia/Shanghai")
+    provider.parse_intent(
+        "2026-07-09 from Beijing to Shanghai in the morning",
+        "req_prompt",
+        datetime(2026, 7, 7, 9, 30, tzinfo=ZoneInfo("Asia/Shanghai")),
+        "Asia/Shanghai",
+    )
 
     request_payload = client.requests[0]["json"]
     user_prompt = request_payload["messages"][1]["content"]
@@ -113,7 +119,29 @@ def test_intent_prompt_uses_minimal_contract_and_dynamic_user_context():
     assert "request_id: req_prompt" in user_prompt
     assert "default_timezone: Asia/Shanghai" in user_prompt
     assert "current_date: 2026-07-07" in user_prompt
+    assert "current_datetime: 2026-07-07T09:30:00+08:00" in user_prompt
     assert "2026-07-09 from Beijing to Shanghai in the morning" in user_prompt
+
+
+def test_intent_repair_prompt_reuses_authoritative_datetime_and_original_input():
+    client = _RecordingLLMClient(['{"schema_version":"1.18"}'])
+    provider = OpenAICompatibleLLMProvider(api_key="test-key", model="test-model", client=client)
+    current = datetime(2026, 8, 14, 23, 15, tzinfo=ZoneInfo("Asia/Shanghai"))
+
+    provider.repair_intent(
+        '{"travel_date":"下周六"}',
+        ["travel_date: Input should be a valid date"],
+        "下周六从上海到杭州",
+        "req_repair_time",
+        current,
+        "Asia/Shanghai",
+    )
+
+    user_prompt = client.requests[0]["json"]["messages"][1]["content"]
+    assert "current_datetime: 2026-08-14T23:15:00+08:00" in user_prompt
+    assert "default_timezone: Asia/Shanghai" in user_prompt
+    assert "下周六从上海到杭州" in user_prompt
+    assert "travel_date: Input should be a valid date" in user_prompt
 
 
 def test_recommendation_prompt_lists_exact_plan_ids_without_copyable_plan_id_placeholder():

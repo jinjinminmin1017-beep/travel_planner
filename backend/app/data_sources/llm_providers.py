@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import date
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Protocol, cast
 
@@ -21,10 +21,18 @@ class IntentParserLLMProvider(Protocol):
     source_id: str
     model_name: str
 
-    def parse_intent(self, raw_user_input: str, request_id: str, current_date: date, default_timezone: str) -> str:
+    def parse_intent(self, raw_user_input: str, request_id: str, current_datetime: datetime, default_timezone: str) -> str:
         ...
 
-    def repair_intent(self, raw_llm_output: str, invalid_reasons: list[str], raw_user_input: str, request_id: str) -> str:
+    def repair_intent(
+        self,
+        raw_llm_output: str,
+        invalid_reasons: list[str],
+        raw_user_input: str,
+        request_id: str,
+        current_datetime: datetime,
+        default_timezone: str,
+    ) -> str:
         ...
 
 
@@ -61,7 +69,7 @@ class OpenAICompatibleLLMProvider:
         self.thinking_disabled = thinking_disabled
         self._last_recommendation_raw_output: str | None = None
 
-    def parse_intent(self, raw_user_input: str, request_id: str, current_date: date, default_timezone: str) -> str:
+    def parse_intent(self, raw_user_input: str, request_id: str, current_datetime: datetime, default_timezone: str) -> str:
         user_prompt = "\n".join(
             [
                 "Parse the following user travel request into TravelRequest JSON.",
@@ -69,7 +77,8 @@ class OpenAICompatibleLLMProvider:
                 "schema_version: 1.18",
                 f"request_id: {request_id}",
                 f"default_timezone: {default_timezone}",
-                f"current_date: {current_date.isoformat()}",
+                f"current_date: {current_datetime.date().isoformat()}",
+                f"current_datetime: {current_datetime.isoformat()}",
                 "",
                 "raw_user_input:",
                 raw_user_input,
@@ -86,7 +95,15 @@ class OpenAICompatibleLLMProvider:
         )
         return self._complete_json(_prompt("intent_parser_prompt_v1_0.txt"), user_prompt)
 
-    def repair_intent(self, raw_llm_output: str, invalid_reasons: list[str], raw_user_input: str, request_id: str) -> str:
+    def repair_intent(
+        self,
+        raw_llm_output: str,
+        invalid_reasons: list[str],
+        raw_user_input: str,
+        request_id: str,
+        current_datetime: datetime,
+        default_timezone: str,
+    ) -> str:
         user_prompt = "\n".join(
             [
                 "Repair the previous Intent Parser output.",
@@ -99,13 +116,17 @@ class OpenAICompatibleLLMProvider:
                 "request_id:",
                 request_id,
                 "",
+                f"default_timezone: {default_timezone}",
+                f"current_date: {current_datetime.date().isoformat()}",
+                f"current_datetime: {current_datetime.isoformat()}",
+                "",
                 "raw_user_input:",
                 raw_user_input,
                 "",
                 "previous_raw_llm_output:",
                 raw_llm_output,
                 "",
-                "Return repaired JSON only. Copy request_id and raw_user_input exactly. Do not guess missing origin, destination, or travel_date.",
+                "Return repaired JSON only. Copy request_id and raw_user_input exactly. Normalize determinable relative dates using current_datetime; do not guess genuinely missing or ambiguous facts.",
             ]
         )
         return self._complete_json(_prompt("repair_prompt_v1_0.txt"), user_prompt)

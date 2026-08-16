@@ -15,7 +15,7 @@ SHANGHAI_TZ = timezone(timedelta(hours=8))
 def _many_rail_offers() -> list[RailOffer]:
     source = rail_data_source_metadata("rail_12306_public_query", "12306 Public Query")
     offers = []
-    start = datetime(2026, 8, 8, 6, 0, tzinfo=SHANGHAI_TZ)
+    start = datetime(2027, 8, 8, 6, 0, tzinfo=SHANGHAI_TZ)
     for index in range(92):
         departure = start + timedelta(minutes=index * 5)
         offers.append(RailOffer(
@@ -41,9 +41,9 @@ def _many_rail_offers() -> list[RailOffer]:
 
 def test_preselection_scans_all_verified_offers_before_build_budget() -> None:
     context = RequestContext("req_preselect", "trace_preselect", "corr_preselect", "idem_preselect")
-    request = parse_travel_request("我 2026 年 8 月 8 日从上海到温州，只坐高铁。", context)
+    request = parse_travel_request("我 2027 年 8 月 8 日从上海到温州，只坐高铁。", context)
     earliest = TimePoint(
-        datetime=datetime(2026, 8, 8, 12, 0, tzinfo=SHANGHAI_TZ),
+        datetime=datetime(2027, 8, 8, 12, 0, tzinfo=SHANGHAI_TZ),
         timezone="Asia/Shanghai",
         source_timezone="Asia/Shanghai",
     )
@@ -62,9 +62,9 @@ def test_preselection_scans_all_verified_offers_before_build_budget() -> None:
 
 def test_full_planner_continues_past_first_four_early_offers(monkeypatch) -> None:
     context = RequestContext("req_full_preselect", "trace_full_preselect", "corr_full_preselect", "idem_full_preselect")
-    request = parse_travel_request("我 2026 年 8 月 8 日从上海到温州，只坐高铁。", context)
+    request = parse_travel_request("我 2027 年 8 月 8 日从上海到温州，只坐高铁。", context)
     earliest = TimePoint(
-        datetime=datetime(2026, 8, 8, 12, 0, tzinfo=SHANGHAI_TZ),
+        datetime=datetime(2027, 8, 8, 12, 0, tzinfo=SHANGHAI_TZ),
         timezone="Asia/Shanghai",
         source_timezone="Asia/Shanghai",
     )

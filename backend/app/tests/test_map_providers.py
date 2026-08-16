@@ -349,7 +349,7 @@ def test_planner_uses_real_map_estimate_when_provider_is_enabled(monkeypatch):
     monkeypatch.setattr("app.services.planner.estimate_route_with_enabled_provider_result", fake_estimate)
     ctx = RequestContext("req_map", "trace_map", "corr_map", "idem_map")
     travel_request = parse_travel_request(
-        "我 2026 年 5 月 21 日上午 9 点后，从上海嘉定南翔格林公馆出发，到青岛金水假日酒店，帮我找最舒服的方式。",
+        "我 2027 年 5 月 21 日上午 9 点后，从上海嘉定南翔格林公馆出发，到青岛金水假日酒店，帮我找最舒服的方式。",
         ctx,
     )
 

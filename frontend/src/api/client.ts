@@ -1,5 +1,8 @@
 import type { AppEventType, BookingRedirect, BookingRedirectType, DataSourceStatusResponse, ErrorResponse, FeedbackCategory, FeedbackResponse, RecalculateChangeType, RecalculateResponse, RecalculateScope, TravelPlanResponse, TravelRequest } from "../types";
 import { NativeModules, Platform } from "react-native";
+import { ApiRequestError } from "./errors";
+
+export { ApiRequestError } from "./errors";
 
 const configuredApiBase = process.env.EXPO_PUBLIC_API_BASE_URL?.trim();
 
@@ -33,7 +36,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const data = await response.json();
   if (!response.ok) {
     const error = data as ErrorResponse;
-    throw new Error(error.user_visible_message || error.message || "Request failed");
+    throw new ApiRequestError(error);
   }
   return data as T;
 }
