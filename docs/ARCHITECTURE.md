@@ -565,6 +565,13 @@ Planner 只有在两个开关开启、目标日期存在有效 ACTIVE 批次时�
 - 前端：`cd frontend && npm run start`
 - 真机调试：`scripts/device-debug.ps1`；无可用 FlyAI 时必须显式选择无票务调试模式。
 
+iOS 发布配置：
+
+- `frontend/app.json` 固定 App Store 身份 `com.chuxingdazi.app`、竖屏方向、iPhone-only 范围、初始构建号和非豁免加密声明。Bundle ID 在首次上传 App Store Connect 前仍可修改，首次上传后视为稳定身份。
+- `frontend/eas.json` 提供 `preview` 内部分发和 `production` TestFlight / App Store 两个 iOS profile；生产构建号由 EAS remote version source 自动递增。
+- `EXPO_PUBLIC_API_BASE_URL` 不写入仓库配置，由 EAS `preview` / `production` environment 分别注入。TestFlight 与 App Store 构建必须使用手机可访问的 HTTPS API origin，禁止使用 localhost 或局域网地址。
+- 首发暂不声明 iPad 支持；完成 iPad 布局和商店截图验收后再独立开启。
+
 每次架构实现至少通过：
 
 - 后端 pytest。

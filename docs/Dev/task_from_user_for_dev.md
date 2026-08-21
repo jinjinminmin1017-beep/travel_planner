@@ -34,3 +34,14 @@
 - 已继续完成：东航真实结果页与含税 DOM、独立 Edge Chromium worker、loopback API、总超时取消、官方风险响应识别、page/context/browser 分级恢复测试、按航司比率与 cold/warm 延迟指标、无缓存伪成功的 50 次验收工具。
 - 当前门禁：首批前 5 次成功后连续 3 次超时；第二批按 10 秒额外间隔仍连续 3 次超时并自动停止，可见浏览器同样无法完成结果页。东航官方条款未授予自动化查询与数据复用许可。
 - 未完成原因：架构任务明确要求东航先达到 50 次、≥95% 成功率及许可门禁，再依次实现 CA/CZ/ZH/HO/SC。当前不得伪造验收、许可或越过 Phase 1 门禁批量启用 Phase 2。
+
+## 2026-08-21 — iOS 上线第一阶段配置
+
+- 用户需求：优先上线 iOS，执行第一阶段 App 身份、图标与 EAS 发布配置。
+- 状态：已完成。
+- 实现：
+  - 新增 iOS Bundle ID `com.chuxingdazi.app`、构建号、竖屏和 iPhone-only 配置。
+  - 新增原创高分辨率正方形 App Store 图标并纳入 Expo 资产，构建时由 Expo 生成所需的 iOS icon set。
+  - 新增 EAS `preview` / `production` iOS 构建与 production submit profile。
+  - 生产 API origin 改为由 EAS environment 注入，不在仓库内写死 localhost。
+- 验收：Expo config、TypeScript、helper tests、Expo export 与 Expo Doctor。

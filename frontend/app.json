@@ -3,21 +3,24 @@
     "name": "出行搭子",
     "slug": "travel-planner-app",
     "version": "0.1.0",
-    "orientation": "default",
+    "orientation": "portrait",
     "userInterfaceStyle": "light",
+    "icon": "./assets/app-icon.png",
     "assetBundlePatterns": [
       "assets/**/*"
     ],
     "ios": {
-      "supportsTablet": true
+      "bundleIdentifier": "com.chuxingdazi.app",
+      "buildNumber": "1",
+      "supportsTablet": false,
+      "config": {
+        "usesNonExemptEncryption": false
+      }
     },
     "android": {
       "adaptiveIcon": {
         "backgroundColor": "#126b75"
       }
-    },
-    "extra": {
-      "apiBaseUrl": "http://127.0.0.1:8000"
     }
   }
 }

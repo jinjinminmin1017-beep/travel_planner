@@ -101,6 +101,7 @@
 - 前端环境模板：`frontend/.env.example`。
 - 数据源配置：进程环境变量；本地由根目录 `.env` 注入，`.env.example` 是唯一非敏感变量清单。运行时不读取 JSON 配置源。
 - Expo 配置：`frontend/app.json`。
+- EAS iOS 构建与提交配置：`frontend/eas.json`；`preview` 用于内部分发，`production` 用于 TestFlight / App Store。
 - TypeScript 配置：`frontend/tsconfig.json`。
 
 ## 常用命令

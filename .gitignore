@@ -9,6 +9,7 @@ __pycache__/
 *.log
 logs/
 frontend/tsconfig.tsbuildinfo
+frontend/.expo/
 frontend/dist/
 frontend/test-results/
 frontend/playwright-report/
