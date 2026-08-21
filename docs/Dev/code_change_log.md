@@ -855,3 +855,16 @@
 - 代码提交：未提交；保留在当前工作区供用户审阅。
 - 验证：Task Dock 自动测试 28 passed；新增两个中断恢复回归，本机 Codex CLI 帮助确认 stdin 协议。
 - 兼容性：不修改旅行规划 API、SQLite schema、任务扫描频率或串行执行策略。
+
+## 2026-08-21 — iOS 上线第一阶段配置
+
+- 任务：优先上线 iOS，完成 App 身份、图标和 EAS 构建/提交配置。
+- 代码提交：`0f82de9`。
+- 修改内容：
+  - 配置 Bundle ID `com.chuxingdazi.app`、初始构建号、竖屏、iPhone-only 与加密出口声明。
+  - 新增原创高分辨率正方形 App 图标，接入 Expo `icon` 配置。
+  - 新增 EAS `preview` 内部分发、`production` TestFlight/App Store 和 production submit profile；构建号由 EAS remote source 递增。
+  - 移除无效的 localhost `extra.apiBaseUrl`；生产 API 由 EAS environment 注入。
+  - 将已被 Git 跟踪的 `.expo` 机器状态移出版本库，本机文件保留。
+- 验证：Expo config 解析通过；TypeScript 通过；helper tests 26 passed；iOS/Android/Web Expo export 通过；Expo Doctor 17/18。
+- 已知限制：Expo Doctor 仅剩 `expo 54.0.35` 到 `~54.0.37` 的补丁版本提示；当前 npm 网络/本地缓存缺包，未冒险改写锁文件。
