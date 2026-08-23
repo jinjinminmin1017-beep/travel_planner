@@ -45,3 +45,13 @@
   - 新增 EAS `preview` / `production` iOS 构建与 production submit profile。
   - 生产 API origin 改为由 EAS environment 注入，不在仓库内写死 localhost。
 - 验收：Expo config、TypeScript、helper tests、Expo export 与 Expo Doctor。
+
+## 2026-08-23 — 隔离 G6130 并继续铁路时刻导入
+
+- 用户需求：先隔离阻塞导入的 G6130，记录该车次时刻，然后从现有 checkpoint 继续导入后续车次。
+- 完成状态：已完成并启动低频单线程续跑。
+- 实现：新增“额外停站无法唯一对账”专用异常；导入器只隔离命中该异常的单一服务，从可激活发现集合及完整性计数中移除，同时保留车次、服务日、始发终到站、始发终到时间、发现/详情站数与 UTC 隔离时间。
+- 实际记录：2026-09-02 G6130，深圳北 18:22 发、长沙南 21:52 到；发现摘要 5 站，详情返回 8 站，隔离原因 `AMBIGUOUS_EXTRA_STOPS`。
+- 续跑结果：从 7,347 趟 checkpoint 恢复后，G6130 已写入隔离区，后续车次已继续写入 STAGING 批次，未再次在 G6130 失败。
+- 代码提交：`2c24bcf`。
+- 验证：铁路定向测试 24 passed；后端全量测试 301 passed；真实 checkpoint 与 SQLite STAGING 计数均已越过原故障点。

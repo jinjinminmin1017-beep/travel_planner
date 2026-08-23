@@ -868,3 +868,16 @@
   - 将已被 Git 跟踪的 `.expo` 机器状态移出版本库，本机文件保留。
 - 验证：Expo config 解析通过；TypeScript 通过；helper tests 26 passed；iOS/Android/Web Expo export 通过；Expo Doctor 17/18。
 - 已知限制：Expo Doctor 仅剩 `expo 54.0.35` 到 `~54.0.37` 的补丁版本提示；当前 npm 网络/本地缓存缺包，未冒险改写锁文件。
+
+## 2026-08-23 — 隔离 G6130 歧义停站并恢复铁路导入
+
+- 任务：隔离持续阻塞详情导入的 G6130，记录车次时间，并从既有 checkpoint 继续后续导入。
+- 代码提交：`2c24bcf`。
+- 修改内容：
+  - 新增 `RailTimetableAmbiguousStopsError`，在无法唯一对账额外停站时携带车次、服务日、始发终到站、时刻与站数证据。
+  - 导入器对该专用异常执行服务级隔离，写入 `discovery.quarantined_services`，同步缩减发现集合与完整性期望计数后继续后续车次。
+  - 隔离记录包含 UTC 时间戳；不保存原始响应，不把隔离服务写入 SQLite 路线快照。
+  - 新增 provider 元数据与 importer 隔离后继续激活的回归测试。
+- 实际审计：2026-09-02 G6130，深圳北 18:22 → 长沙南 21:52，发现 5 站、详情 8 站，原因 `AMBIGUOUS_EXTRA_STOPS`。
+- 验证：铁路定向测试 24 passed；后端全量测试 301 passed；真实低频单线程 resume 已越过原 7,347 趟故障点并继续写入 STAGING。
+- 兼容性：不修改 API 契约和 SQLite schema；访问控制、429、验证码、传输错误及其他数据异常仍保持暂停或失败关闭。
