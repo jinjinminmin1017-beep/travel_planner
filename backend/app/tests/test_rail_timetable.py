@@ -16,6 +16,7 @@ from app.data_sources.rail_12306_timetable_provider import (
     DiscoveredRailService,
     Rail12306TimetableProvider,
     RailTimetableAccessControlError,
+    RailTimetableAmbiguousStopsError,
     RailTimetableProviderError,
     RailTimetableServiceWithdrawnError,
     RailTimetableUnsupportedStationError,
@@ -338,6 +339,90 @@ def test_importer_quarantines_service_with_unsupported_station(tmp_path: Path) -
     }
 
 
+def test_importer_quarantines_ambiguous_extra_stops_and_continues(tmp_path: Path) -> None:
+    store = RailTimetableStore(tmp_path / "rail.sqlite3")
+    service_date = date(2026, 9, 2)
+    retained = DiscoveredRailService(
+        service_date=service_date,
+        train_no_internal="internal_G6131",
+        train_number="G6131",
+        origin_station_name="长沙南",
+        destination_station_name="深圳北",
+        total_stop_count=2,
+        summary_fingerprint="fingerprint_G6131",
+    )
+    ambiguous = DiscoveredRailService(
+        service_date=service_date,
+        train_no_internal="6i000G613000",
+        train_number="G6130",
+        origin_station_name="深圳北",
+        destination_station_name="长沙南",
+        total_stop_count=5,
+        summary_fingerprint="fingerprint_G6130",
+    )
+    ambiguous_rows = [
+        {"station_name": "深圳北", "start_time": "14:12"},
+        {"station_name": "长沙南", "arrive_time": "17:43", "arrive_day_diff": "0"},
+    ]
+
+    class FixtureProvider:
+        def discover_services(self, *_args, resume_state, checkpoint_callback, **_kwargs):
+            resume_state.update(
+                {
+                    "status": "COMPLETE",
+                    "services": {
+                        ambiguous.train_no_internal: {"train_number": ambiguous.train_number},
+                        retained.train_no_internal: {"train_number": retained.train_number},
+                    },
+                }
+            )
+            checkpoint_callback()
+            return [ambiguous, retained], DiscoveryDiagnostics(1, 0, 2, ("fixture",))
+
+        def fetch_complete_service(self, item: DiscoveredRailService) -> RailServiceInput:
+            if item.train_no_internal == ambiguous.train_no_internal:
+                raise RailTimetableAmbiguousStopsError(ambiguous, ambiguous_rows)
+            return _service(service_date, "G6131", "CWQ", "IOQ", "18:00", "21:30")
+
+    checkpoint = {"version": 1, "dates": {}}
+    summary = _import_date(
+        service_date=service_date,
+        provider=FixtureProvider(),  # type: ignore[arg-type]
+        store=store,
+        checkpoint=checkpoint,
+        checkpoint_path=tmp_path / "checkpoint.json",
+        resume=True,
+        dry_run=False,
+        train_numbers=(),
+        prefixes=("G", "D", "C"),
+        max_discovery_queries=None,
+        max_trains=None,
+        refresh=False,
+    )
+
+    date_state = checkpoint["dates"][service_date.isoformat()]
+    quarantine = date_state["discovery"]["quarantined_services"]
+    record = quarantine[ambiguous.train_no_internal]
+    assert summary["service_count"] == 1
+    assert date_state["status"] == "ACTIVE"
+    assert date_state["completed_train_nos"] == [retained.train_no_internal]
+    assert list(date_state["discovery"]["services"]) == [retained.train_no_internal]
+    assert record == {
+        "train_number": "G6130",
+        "service_date": "2026-09-02",
+        "origin_station_name": "深圳北",
+        "destination_station_name": "长沙南",
+        "origin_departure_time": "14:12",
+        "destination_arrival_time": "17:43",
+        "destination_arrival_day_offset": 0,
+        "expected_stop_count": 5,
+        "returned_stop_count": 2,
+        "reason": "AMBIGUOUS_EXTRA_STOPS",
+        "quarantined_at": record["quarantined_at"],
+    }
+    assert datetime.fromisoformat(record["quarantined_at"]).tzinfo is not None
+
+
 def test_checkpoint_atomic_replace_retries_temporary_windows_sharing_violation(monkeypatch, tmp_path: Path) -> None:
     checkpoint_path = tmp_path / "checkpoint.json"
     original_replace = Path.replace
@@ -651,6 +736,100 @@ def test_12306_provider_accepts_one_proven_discovery_stop_undercount() -> None:
     assert len(service.stops) == 5
     assert [stop.stop_sequence for stop in service.stops] == [1, 2, 3, 4, 5]
     assert service.stops[-1].station_code == "WAR"
+
+
+def test_12306_provider_exposes_auditable_ambiguous_extra_stops_error() -> None:
+    search_payload = {
+        "data": [
+            {
+                "date": "20260902",
+                "from_station": "深圳北",
+                "station_train_code": "G6130",
+                "to_station": "长沙南",
+                "total_num": "5",
+                "train_no": "6i000G613000",
+            }
+        ]
+    }
+    detail_rows = [
+        {
+            "station_name": "深圳北",
+            "station_train_code": "G6130",
+            "station_no": "01",
+            "arrive_time": "----",
+            "start_time": "14:12",
+            "arrive_day_diff": "0",
+            "running_time": "00:00",
+        },
+        {
+            "station_name": "虎门",
+            "station_train_code": "G6130",
+            "station_no": "02",
+            "arrive_time": "14:30",
+            "start_time": "14:32",
+            "arrive_day_diff": "0",
+            "running_time": "00:18",
+        },
+        {
+            "station_name": "广州南",
+            "station_train_code": "G6130",
+            "station_no": "03",
+            "arrive_time": "14:50",
+            "start_time": "14:52",
+            "arrive_day_diff": "0",
+            "running_time": "00:38",
+        },
+        {
+            "station_name": "衡阳东",
+            "station_train_code": "G6131",
+            "station_no": "04",
+            "arrive_time": "16:20",
+            "start_time": "16:22",
+            "arrive_day_diff": "0",
+            "running_time": "02:08",
+        },
+        {
+            "station_name": "株洲西",
+            "station_train_code": "G6130",
+            "station_no": "05",
+            "arrive_time": "17:10",
+            "start_time": "17:12",
+            "arrive_day_diff": "0",
+            "running_time": "02:58",
+        },
+        {
+            "station_name": "长沙南",
+            "station_train_code": "G6130",
+            "station_no": "06",
+            "arrive_time": "17:43",
+            "start_time": "----",
+            "arrive_day_diff": "0",
+            "running_time": "03:31",
+        },
+    ]
+    detail_payload = {"status": True, "httpstatus": 200, "data": {"data": detail_rows}}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = search_payload if "train/search" in str(request.url) else detail_payload
+        return httpx.Response(200, json=payload, headers={"content-type": "application/json"})
+
+    provider = Rail12306TimetableProvider(client=httpx.Client(transport=httpx.MockTransport(handler)))
+    provider._wait_for_interval = lambda: None  # type: ignore[method-assign]
+    discovered, _ = provider.discover_exact_services(date(2026, 9, 2), ("G6130",))
+
+    with pytest.raises(RailTimetableAmbiguousStopsError) as exc_info:
+        provider.fetch_complete_service(discovered[0])
+
+    error = exc_info.value
+    assert error.train_no_internal == "6i000G613000"
+    assert error.train_number == "G6130"
+    assert error.origin_station_name == "深圳北"
+    assert error.destination_station_name == "长沙南"
+    assert error.origin_departure_time == "14:12"
+    assert error.destination_arrival_time == "17:43"
+    assert error.destination_arrival_day_offset == 0
+    assert error.expected_stop_count == 5
+    assert error.returned_stop_count == 6
 
 
 def test_12306_provider_confirms_withdrawn_service_after_empty_detail() -> None:

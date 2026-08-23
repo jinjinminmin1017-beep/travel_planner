@@ -5,7 +5,7 @@ import json
 import logging
 import sys
 import time
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +17,7 @@ from app.data_sources.config_loader import load_project_env, load_rail_timetable
 from app.data_sources.rail_12306_timetable_provider import (  # noqa: E402
     Rail12306TimetableProvider,
     RailTimetableAccessControlError,
+    RailTimetableAmbiguousStopsError,
     RailTimetableProviderError,
     RailTimetableServiceWithdrawnError,
     RailTimetableUnsupportedStationError,
@@ -220,6 +221,44 @@ def _import_date(
                         service_date.isoformat(),
                         item.train_number,
                         item.train_no_internal,
+                    )
+                    _save_checkpoint(checkpoint_path, checkpoint)
+                    continue
+                except RailTimetableAmbiguousStopsError as exc:
+                    discovery_state = date_state.get("discovery")
+                    discovery_services = discovery_state.get("services") if isinstance(discovery_state, dict) else None
+                    if not isinstance(discovery_services, dict) or discovery_services.pop(item.train_no_internal, None) is None:
+                        raise RailTimetableProviderError(
+                            "ambiguous-stop service cannot be reconciled with discovery checkpoint"
+                        )
+                    quarantined = discovery_state.setdefault("quarantined_services", {})
+                    if not isinstance(quarantined, dict):
+                        raise RailTimetableProviderError("timetable discovery quarantine checkpoint is malformed")
+                    quarantined[item.train_no_internal] = {
+                        "train_number": item.train_number,
+                        "service_date": service_date.isoformat(),
+                        "origin_station_name": item.origin_station_name,
+                        "destination_station_name": item.destination_station_name,
+                        "origin_departure_time": exc.origin_departure_time,
+                        "destination_arrival_time": exc.destination_arrival_time,
+                        "destination_arrival_day_offset": exc.destination_arrival_day_offset,
+                        "expected_stop_count": exc.expected_stop_count,
+                        "returned_stop_count": exc.returned_stop_count,
+                        "reason": "AMBIGUOUS_EXTRA_STOPS",
+                        "quarantined_at": datetime.now(tz=timezone.utc).isoformat(),
+                    }
+                    expected_service_count -= 1
+                    logger.warning(
+                        "rail_timetable_service_quarantined service_date=%s train_number=%s "
+                        "train_no_internal=%s reason=AMBIGUOUS_EXTRA_STOPS origin_departure_time=%s "
+                        "destination_arrival_time=%s expected_stop_count=%s returned_stop_count=%s",
+                        service_date.isoformat(),
+                        item.train_number,
+                        item.train_no_internal,
+                        exc.origin_departure_time,
+                        exc.destination_arrival_time,
+                        exc.expected_stop_count,
+                        exc.returned_stop_count,
                     )
                     _save_checkpoint(checkpoint_path, checkpoint)
                     continue

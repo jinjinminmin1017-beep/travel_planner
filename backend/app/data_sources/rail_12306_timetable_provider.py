@@ -56,6 +56,24 @@ class DiscoveredRailService:
     summary_fingerprint: str
 
 
+class RailTimetableAmbiguousStopsError(RailTimetableProviderError):
+    def __init__(self, discovered: DiscoveredRailService, rows: list[Any]) -> None:
+        first = rows[0] if rows and isinstance(rows[0], dict) else {}
+        last = rows[-1] if rows and isinstance(rows[-1], dict) else {}
+        arrival_day_text = str(last.get("arrive_day_diff") or "").strip()
+        self.service_date = discovered.service_date
+        self.train_no_internal = discovered.train_no_internal
+        self.train_number = discovered.train_number
+        self.origin_station_name = discovered.origin_station_name
+        self.destination_station_name = discovered.destination_station_name
+        self.origin_departure_time = str(first.get("start_time") or "").strip() or None
+        self.destination_arrival_time = str(last.get("arrive_time") or "").strip() or None
+        self.destination_arrival_day_offset = int(arrival_day_text) if arrival_day_text.isdigit() else None
+        self.expected_stop_count = discovered.total_stop_count
+        self.returned_stop_count = len(rows)
+        super().__init__("12306 train detail extra stops cannot be reconciled unambiguously")
+
+
 @dataclass(frozen=True)
 class DiscoveryDiagnostics:
     query_count: int
@@ -515,7 +533,7 @@ def _reconcile_extra_detail_rows(rows: list[Any], discovered: DiscoveredRailServ
     kept_deviations = [value for index, value in deviations.items() if index not in dropped]
     dropped_deviations = [deviations[index] for index in dropped]
     if not dropped_deviations or min(dropped_deviations) < 30 or any(value > 15 for value in kept_deviations):
-        raise RailTimetableProviderError("12306 train detail extra stops cannot be reconciled unambiguously")
+        raise RailTimetableAmbiguousStopsError(discovered, rows)
     logger.warning(
         "rail_timetable_detail_extra_rows_reconciled train_number=%s expected=%s returned=%s dropped=%s",
         discovered.train_number,
