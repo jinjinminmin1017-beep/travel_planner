@@ -891,5 +891,6 @@
   - 新增 `--auto-resume-transient` 监督模式，按有界指数退避最多 resume 6 次。
   - Windows 计划任务默认启用监督模式，并在检查输出中展示执行参数和单实例策略。
   - 新增自动恢复、访问控制不恢复、确定性错误不恢复、预算耗尽及入口退出码回归。
+- 本机部署：`TravelPlannerRailTimetableRefresh` 已安装并启动，每天 03:30 本地时间触发；运行实例已开始构建当前 D+14（2026-09-14）checkpoint。
 - 验证：铁路定向测试 29 passed；后端全量测试 306 passed；Python compileall、PowerShell 语法检查与 `git diff --check` 通过。
 - 兼容性：无 API 和数据库迁移；未指定监督参数的手工命令保持一次性行为；429、验证码和访问控制继续立即停止。
