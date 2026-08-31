@@ -211,3 +211,12 @@
 - 问题解决方式：为 `RailTimetableTemporaryError` 增加独立退出码 3，并增加只识别该退出码的有界指数退避监督循环；计划任务安装参数默认启用监督循环和 `IgnoreNew` 单实例。访问控制与确定性错误不自动续跑。
 - 问题修改提交：`afb78cc`。
 - 验证：新增临时错误独立退出码、两次失败后成功、访问控制/确定性错误不重试、重试预算耗尽回归；铁路定向测试 29 passed，后端全量测试 306 passed。
+
+## 2026-08-31 Windows 默认电源策略终止铁路刷新计划任务
+
+- 用户提问时间：2026-08-31（建立自动续跑机制时的真实部署验证）。
+- 问题描述：计划任务已开始 2026-09-14 发现并写入14个查询 checkpoint，随后返回 `0xC000013A`，任务从 Running 变为 Ready。
+- 问题根因：`New-ScheduledTaskSettingsSet` 默认生成 `DisallowStartIfOnBatteries=true` 和 `StopIfGoingOnBatteries=true`；本机供电状态触发 Windows 主动终止 Python，未进入 importer 的异常处理。
+- 问题解决方式：安装脚本显式设置 `-AllowStartIfOnBatteries` 和 `-DontStopIfGoingOnBatteries`，检查模式同步展示实际电源与单实例设置。
+- 问题修改提交：`2b4d8e1`。
+- 验证：新增安装脚本电源策略回归；铁路定向测试 30 passed，后端全量测试 307 passed；重新安装后任务设置确认允许电池启动且供电切换不停止。

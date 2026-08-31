@@ -69,6 +69,7 @@ Windows Task Scheduler：
 - HTTP 429、验证码、401/403/418 或非 JSON 安全挑战返回退出码 2 并立即停止，不进入自动续跑。
 - 确定性解析、完整性和数据库错误返回退出码 1 并停止，避免在同一坏数据上循环。
 - Windows 任务设置为 `MultipleInstances=IgnoreNew`，已有导入实例运行时不会启动第二个实例。
+- Windows 任务明确允许使用电池启动，且切换到电池供电时不会终止正在写 checkpoint 的导入；超时和访问控制规则保持不变。
 
 Linux cron 等价配置示例：
 
