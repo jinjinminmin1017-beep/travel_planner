@@ -34,6 +34,7 @@ if ($Mode -eq "Check") {
         MultipleInstances = $task.Settings.MultipleInstances
         AllowStartOnBatteries = -not $task.Settings.DisallowStartIfOnBatteries
         StopOnBatteryChange = $task.Settings.StopIfGoingOnBatteries
+        ExecutionTimeLimit = $task.Settings.ExecutionTimeLimit
     }
     exit 0
 }
@@ -78,6 +79,6 @@ $arguments = (
 ) -f $importScript, $MaxTransientResumes, $TransientResumeBaseSeconds, $TransientResumeMaxSeconds
 $action = New-ScheduledTaskAction -Execute $pythonPath -Argument $arguments -WorkingDirectory $projectRoot
 $trigger = New-ScheduledTaskTrigger -Daily -At $parsedTime
-$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Hours 12)
+$settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit ([TimeSpan]::Zero)
 Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Settings $settings -Description "Refresh D0-D+14 G/D/C timetable snapshots for Travel Planner." -Force | Out-Null
 Write-Output "Installed scheduled task $TaskName at $RefreshAt local time."

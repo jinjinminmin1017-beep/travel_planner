@@ -204,6 +204,7 @@ def test_windows_refresh_task_does_not_stop_when_power_source_changes() -> None:
     assert "-AllowStartIfOnBatteries" in source
     assert "-DontStopIfGoingOnBatteries" in source
     assert "-MultipleInstances IgnoreNew" in source
+    assert "-ExecutionTimeLimit ([TimeSpan]::Zero)" in source
 
 
 def test_batch_activation_is_idempotent_and_failed_staging_preserves_active(tmp_path: Path) -> None:

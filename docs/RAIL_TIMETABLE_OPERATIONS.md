@@ -70,6 +70,7 @@ Windows Task Scheduler：
 - 确定性解析、完整性和数据库错误返回退出码 1 并停止，避免在同一坏数据上循环。
 - Windows 任务设置为 `MultipleInstances=IgnoreNew`，已有导入实例运行时不会启动第二个实例。
 - Windows 任务明确允许使用电池启动，且切换到电池供电时不会终止正在写 checkpoint 的导入；超时和访问控制规则保持不变。
+- Windows 任务不设置运行时长强制终止；长时间正常补库可持续运行，下一次日触发由 `IgnoreNew` 跳过。任务只由完成、受控重试耗尽、确定性失败或访问控制退出。
 
 Linux cron 等价配置示例：
 
