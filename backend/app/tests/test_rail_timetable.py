@@ -197,6 +197,15 @@ def test_importer_returns_distinct_exit_code_for_transient_transport_failure(mon
     assert import_timetable_main() == EXIT_TRANSIENT_FAILURE
 
 
+def test_windows_refresh_task_does_not_stop_when_power_source_changes() -> None:
+    installer = Path(__file__).resolve().parents[3] / "scripts" / "install_rail_timetable_refresh.ps1"
+    source = installer.read_text(encoding="utf-8")
+
+    assert "-AllowStartIfOnBatteries" in source
+    assert "-DontStopIfGoingOnBatteries" in source
+    assert "-MultipleInstances IgnoreNew" in source
+
+
 def test_batch_activation_is_idempotent_and_failed_staging_preserves_active(tmp_path: Path) -> None:
     store = RailTimetableStore(tmp_path / "rail.sqlite3")
     service_date = date(2026, 8, 12)
