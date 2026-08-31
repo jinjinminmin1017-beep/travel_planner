@@ -19,6 +19,7 @@ from app.data_sources.rail_12306_timetable_provider import (
     RailTimetableAmbiguousStopsError,
     RailTimetableProviderError,
     RailTimetableServiceWithdrawnError,
+    RailTimetableTemporaryError,
     RailTimetableUnsupportedStationError,
 )
 from app.data_sources.rail_providers import (
@@ -59,10 +60,15 @@ from app.services.rail_timetable_store import (
     RailTimetableStoreError,
 )
 from scripts.import_12306_timetable import (
+    EXIT_ACCESS_CONTROL,
+    EXIT_FAILED,
+    EXIT_TRANSIENT_FAILURE,
     _import_date,
     _mark_checkpoint_paused,
     _resume_or_begin_batch,
+    _run_with_transient_resume,
     _save_checkpoint,
+    main as import_timetable_main,
 )
 
 
@@ -94,6 +100,101 @@ def test_rail_timetable_settings_defaults_and_validation() -> None:
         load_rail_timetable_settings({"TRAVEL_RAIL_LOCAL_ROUTING_ENABLED": "true"})
     with pytest.raises(DataSourceConfigurationError, match="HH:mm"):
         load_rail_timetable_settings({"TRAVEL_RAIL_TIMETABLE_REFRESH_AT": "25:99"})
+
+
+def test_transient_supervisor_resumes_with_bounded_exponential_backoff() -> None:
+    exit_codes = iter((EXIT_TRANSIENT_FAILURE, EXIT_TRANSIENT_FAILURE, 0))
+    delays: list[float] = []
+
+    result = _run_with_transient_resume(
+        lambda: next(exit_codes),
+        enabled=True,
+        max_resumes=6,
+        base_delay_seconds=300,
+        max_delay_seconds=3600,
+        sleep=delays.append,
+    )
+
+    assert result == 0
+    assert delays == [300, 600]
+
+
+@pytest.mark.parametrize("exit_code", [EXIT_ACCESS_CONTROL, EXIT_FAILED])
+def test_transient_supervisor_does_not_resume_non_transient_failures(exit_code: int) -> None:
+    attempts = 0
+    delays: list[float] = []
+
+    def run_once() -> int:
+        nonlocal attempts
+        attempts += 1
+        return exit_code
+
+    result = _run_with_transient_resume(
+        run_once,
+        enabled=True,
+        max_resumes=6,
+        base_delay_seconds=300,
+        max_delay_seconds=3600,
+        sleep=delays.append,
+    )
+
+    assert result == exit_code
+    assert attempts == 1
+    assert delays == []
+
+
+def test_transient_supervisor_stops_after_configured_resume_budget() -> None:
+    attempts = 0
+    delays: list[float] = []
+
+    def run_once() -> int:
+        nonlocal attempts
+        attempts += 1
+        return EXIT_TRANSIENT_FAILURE
+
+    result = _run_with_transient_resume(
+        run_once,
+        enabled=True,
+        max_resumes=3,
+        base_delay_seconds=300,
+        max_delay_seconds=700,
+        sleep=delays.append,
+    )
+
+    assert result == EXIT_TRANSIENT_FAILURE
+    assert attempts == 4
+    assert delays == [300, 600, 700]
+
+
+def test_importer_returns_distinct_exit_code_for_transient_transport_failure(monkeypatch, tmp_path: Path) -> None:
+    class TemporaryFailureProvider:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        def discover_services(self, *_args, **_kwargs):
+            raise RailTimetableTemporaryError("12306 train_detail transport failure")
+
+    monkeypatch.setenv("TRAVEL_RAIL_TIMETABLE_SNAPSHOT_ENABLED", "true")
+    monkeypatch.setenv("TRAVEL_SQLITE_PATH", str(tmp_path / "rail.sqlite3"))
+    monkeypatch.setattr(
+        "scripts.import_12306_timetable.Rail12306TimetableProvider",
+        TemporaryFailureProvider,
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "import_12306_timetable.py",
+            "--date-from",
+            "2026-09-03",
+            "--days",
+            "1",
+            "--resume",
+            "--checkpoint",
+            str(tmp_path / "checkpoint.json"),
+        ],
+    )
+
+    assert import_timetable_main() == EXIT_TRANSIENT_FAILURE
 
 
 def test_batch_activation_is_idempotent_and_failed_staging_preserves_active(tmp_path: Path) -> None:

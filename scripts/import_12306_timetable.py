@@ -7,19 +7,24 @@ import sys
 import time
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 ROOT = Path(__file__).resolve().parents[1]
 BACKEND = ROOT / "backend"
 sys.path.insert(0, str(BACKEND))
 
-from app.data_sources.config_loader import load_project_env, load_rail_timetable_settings  # noqa: E402
+from app.data_sources.config_loader import (  # noqa: E402
+    RailTimetableSettings,
+    load_project_env,
+    load_rail_timetable_settings,
+)
 from app.data_sources.rail_12306_timetable_provider import (  # noqa: E402
     Rail12306TimetableProvider,
     RailTimetableAccessControlError,
     RailTimetableAmbiguousStopsError,
     RailTimetableProviderError,
     RailTimetableServiceWithdrawnError,
+    RailTimetableTemporaryError,
     RailTimetableUnsupportedStationError,
     SOURCE_VERSION,
 )
@@ -27,6 +32,9 @@ from app.services.rail_timetable_store import RailTimetableStore, RailTimetableS
 
 
 DEFAULT_CHECKPOINT = ROOT / "logs" / "rail_timetable_import_checkpoint.json"
+EXIT_FAILED = 1
+EXIT_ACCESS_CONTROL = 2
+EXIT_TRANSIENT_FAILURE = 3
 logger = logging.getLogger("app.rail_timetable_import")
 
 
@@ -43,6 +51,10 @@ def main() -> int:
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--scheduled", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--auto-resume-transient", action="store_true")
+    parser.add_argument("--max-transient-resumes", type=int, default=6)
+    parser.add_argument("--transient-resume-base-seconds", type=float, default=300.0)
+    parser.add_argument("--transient-resume-max-seconds", type=float, default=3600.0)
     parser.add_argument("--checkpoint", type=Path, default=DEFAULT_CHECKPOINT)
     parser.add_argument("--train-number", action="append", default=[])
     parser.add_argument("--prefix", action="append", default=[])
@@ -55,6 +67,12 @@ def main() -> int:
         parser.error("--interval-seconds must be at least 1")
     if args.max_trains is not None and args.max_trains < 1:
         parser.error("--max-trains must be positive")
+    if args.max_transient_resumes < 0:
+        parser.error("--max-transient-resumes cannot be negative")
+    if args.transient_resume_base_seconds < 1:
+        parser.error("--transient-resume-base-seconds must be at least 1")
+    if args.transient_resume_max_seconds < args.transient_resume_base_seconds:
+        parser.error("--transient-resume-max-seconds must be at least the base delay")
     if args.scheduled and args.mode != "refresh":
         parser.error("--scheduled is only valid with --mode refresh")
     if args.scheduled and not settings.refresh_enabled:
@@ -66,6 +84,16 @@ def main() -> int:
     if limited_run and not args.dry_run:
         parser.error("limited POC options require --dry-run so an incomplete batch cannot be activated")
 
+    return _run_with_transient_resume(
+        lambda: _run_import_once(args, settings),
+        enabled=args.auto_resume_transient,
+        max_resumes=args.max_transient_resumes,
+        base_delay_seconds=args.transient_resume_base_seconds,
+        max_delay_seconds=args.transient_resume_max_seconds,
+    )
+
+
+def _run_import_once(args: argparse.Namespace, settings: RailTimetableSettings) -> int:
     checkpoint = _load_checkpoint(args.checkpoint) if args.resume else {"version": 1, "dates": {}}
     provider = Rail12306TimetableProvider(interval_seconds=args.interval_seconds)
     store = RailTimetableStore()
@@ -96,17 +124,70 @@ def main() -> int:
         _mark_checkpoint_paused(checkpoint)
         _save_checkpoint(args.checkpoint, checkpoint)
         print(json.dumps({"status": "PAUSED", "error_code": "RAIL_TIMETABLE_ACCESS_CONTROL", "message": str(exc)}, ensure_ascii=False))
-        return 2
+        return EXIT_ACCESS_CONTROL
+    except RailTimetableTemporaryError as exc:
+        _save_checkpoint(args.checkpoint, checkpoint)
+        print(
+            json.dumps(
+                {
+                    "status": "RETRYABLE_FAILED",
+                    "error_code": "RAIL_TIMETABLE_TRANSIENT_FAILURE",
+                    "message": str(exc),
+                },
+                ensure_ascii=False,
+            )
+        )
+        return EXIT_TRANSIENT_FAILURE
     except (RailTimetableProviderError, RailTimetableStoreError) as exc:
         _save_checkpoint(args.checkpoint, checkpoint)
         print(json.dumps({"status": "FAILED", "error_code": "RAIL_TIMETABLE_IMPORT_FAILED", "message": str(exc)}, ensure_ascii=False))
-        return 1
+        return EXIT_FAILED
 
     if not args.dry_run:
         store.cleanup(window_start=args.date_from, retention_days=settings.retention_days)
     _save_checkpoint(args.checkpoint, checkpoint)
     print(json.dumps({"status": "DRY_RUN_COMPLETE" if args.dry_run else "COMPLETE", "dates": summaries}, ensure_ascii=False))
     return 0
+
+
+def _run_with_transient_resume(
+    run_once: Callable[[], int],
+    *,
+    enabled: bool,
+    max_resumes: int,
+    base_delay_seconds: float,
+    max_delay_seconds: float,
+    sleep: Callable[[float], None] = time.sleep,
+) -> int:
+    resume_count = 0
+    while True:
+        exit_code = run_once()
+        if exit_code != EXIT_TRANSIENT_FAILURE or not enabled:
+            return exit_code
+        if resume_count >= max_resumes:
+            print(
+                json.dumps(
+                    {
+                        "status": "RETRY_EXHAUSTED",
+                        "error_code": "RAIL_TIMETABLE_TRANSIENT_RETRY_EXHAUSTED",
+                        "resume_count": resume_count,
+                    }
+                )
+            )
+            return exit_code
+        delay_seconds = min(max_delay_seconds, base_delay_seconds * (2**resume_count))
+        resume_count += 1
+        print(
+            json.dumps(
+                {
+                    "status": "RETRY_WAIT",
+                    "reason": "transient transport or server failure",
+                    "resume_count": resume_count,
+                    "delay_seconds": delay_seconds,
+                }
+            )
+        )
+        sleep(delay_seconds)
 
 
 def _import_date(

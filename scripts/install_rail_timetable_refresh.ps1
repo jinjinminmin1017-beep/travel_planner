@@ -2,7 +2,13 @@ param(
     [ValidateSet("Install", "Check", "Uninstall")]
     [string]$Mode = "Check",
     [string]$TaskName = "TravelPlannerRailTimetableRefresh",
-    [string]$RefreshAt = ""
+    [string]$RefreshAt = "",
+    [ValidateRange(0, 24)]
+    [int]$MaxTransientResumes = 6,
+    [ValidateRange(60, 3600)]
+    [int]$TransientResumeBaseSeconds = 300,
+    [ValidateRange(60, 7200)]
+    [int]$TransientResumeMaxSeconds = 3600
 )
 
 $ErrorActionPreference = "Stop"
@@ -23,6 +29,9 @@ if ($Mode -eq "Check") {
         LastRunTime = $info.LastRunTime
         LastTaskResult = $info.LastTaskResult
         NextRunTime = $info.NextRunTime
+        Execute = $task.Actions[0].Execute
+        Arguments = $task.Actions[0].Arguments
+        MultipleInstances = $task.Settings.MultipleInstances
     }
     exit 0
 }
@@ -57,8 +66,14 @@ $parsedTime = [datetime]::MinValue
 if (-not [datetime]::TryParseExact($RefreshAt, "HH:mm", $null, [Globalization.DateTimeStyles]::None, [ref]$parsedTime)) {
     throw "RefreshAt must use HH:mm format."
 }
+if ($TransientResumeMaxSeconds -lt $TransientResumeBaseSeconds) {
+    throw "TransientResumeMaxSeconds must be at least TransientResumeBaseSeconds."
+}
 
-$arguments = '"{0}" --mode refresh --resume --scheduled' -f $importScript
+$arguments = (
+    '"{0}" --mode refresh --resume --scheduled --auto-resume-transient ' +
+    '--max-transient-resumes {1} --transient-resume-base-seconds {2} --transient-resume-max-seconds {3}'
+) -f $importScript, $MaxTransientResumes, $TransientResumeBaseSeconds, $TransientResumeMaxSeconds
 $action = New-ScheduledTaskAction -Execute $pythonPath -Argument $arguments -WorkingDirectory $projectRoot
 $trigger = New-ScheduledTaskTrigger -Daily -At $parsedTime
 $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -MultipleInstances IgnoreNew -ExecutionTimeLimit (New-TimeSpan -Hours 12)
