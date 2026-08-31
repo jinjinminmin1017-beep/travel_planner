@@ -55,3 +55,12 @@
 - 续跑结果：从 7,347 趟 checkpoint 恢复后，G6130 已写入隔离区，后续车次已继续写入 STAGING 批次，未再次在 G6130 失败。
 - 代码提交：`2c24bcf`。
 - 验证：铁路定向测试 24 passed；后端全量测试 301 passed；真实 checkpoint 与 SQLite STAGING 计数均已越过原故障点。
+
+## 2026-08-31 — 建立铁路导入自动续跑机制
+
+- 用户需求：导入跳过 G6130 后仍因后续网络传输失败退出，需要建立独立于 Codex 窗口的自动续跑机制。
+- 完成状态：已完成代码、测试和 Windows 计划任务支持。
+- 实现：将连接/超时/5xx 临时错误映射为独立退出码 3；启用 `--auto-resume-transient` 后按 5、10、20、40、60、60 分钟最多 resume 6 次。每次复用 checkpoint，并从最后完成车次继续。
+- 安全边界：访问控制退出码 2 和确定性错误退出码 1 均立即停止；不绕过 429、验证码或安全挑战。Windows Task Scheduler 使用 `IgnoreNew` 防止重复进程。
+- 代码提交：`afb78cc`。
+- 验证：铁路定向测试 29 passed；后端全量测试 306 passed；PowerShell 安装脚本语法检查和 `git diff --check` 通过。

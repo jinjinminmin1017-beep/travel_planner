@@ -1,6 +1,6 @@
 # Railway Timetable Operations
 
-更新日期：2026-08-04
+更新日期：2026-08-31
 
 ## 安全边界
 
@@ -37,7 +37,7 @@ TRAVEL_RAIL_TIMETABLE_IMPORT_INTERVAL_SECONDS=1.5
 再执行 D0～D+14 bootstrap：
 
 ```powershell
-.\.venv\Scripts\python scripts\import_12306_timetable.py --mode bootstrap --days 15 --resume
+.\.venv\Scripts\python scripts\import_12306_timetable.py --mode bootstrap --days 15 --resume --auto-resume-transient
 ```
 
 导入过程按服务日创建 STAGING 批次。只有车次发现完成、所有服务至少有两个合法经停、站序连续且到发时间完整时，才会在单个 SQLite 事务中切换为 ACTIVE。失败或中断不会替换上一 ACTIVE 批次。
@@ -62,10 +62,18 @@ Windows Task Scheduler：
 
 计划任务使用受控的 scheduled 入口；`TRAVEL_RAIL_TIMETABLE_REFRESH_ENABLED=false` 时会安全退出且不访问网络。手工 dry-run 不受刷新开关限制。
 
+计划任务默认启用受控自动续跑：
+
+- 只有连接中断、读取超时和 HTTP 5xx 等 `RAIL_TIMETABLE_TRANSIENT_FAILURE` 会触发进程级 resume。
+- 单次任务最多自动 resume 6 次，默认等待 5、10、20、40、60、60 分钟；每次都复用 checkpoint，不重复已完成车次。
+- HTTP 429、验证码、401/403/418 或非 JSON 安全挑战返回退出码 2 并立即停止，不进入自动续跑。
+- 确定性解析、完整性和数据库错误返回退出码 1 并停止，避免在同一坏数据上循环。
+- Windows 任务设置为 `MultipleInstances=IgnoreNew`，已有导入实例运行时不会启动第二个实例。
+
 Linux cron 等价配置示例：
 
 ```cron
-30 3 * * * cd /opt/travel_planner && ./.venv/bin/python scripts/import_12306_timetable.py --mode refresh --days 15 --resume --scheduled
+30 3 * * * cd /opt/travel_planner && ./.venv/bin/python scripts/import_12306_timetable.py --mode refresh --days 15 --resume --scheduled --auto-resume-transient
 ```
 
 systemd timer 应调用同一 refresh 命令并设置 `Persistent=true`，以便停机后 catch-up。导入不得在 FastAPI 请求或 lifespan 中启动。

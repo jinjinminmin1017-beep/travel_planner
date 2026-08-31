@@ -52,8 +52,8 @@
 - `backend/app/tests/`：后端 pytest 测试。
 - `schemas/`：导出的 API/schema JSON Schema。
 - `scripts/`：启动、schema 导出、Provider 配置检查、live smoke、数据导入、质量评估脚本。
-  - `scripts/import_12306_timetable.py`：15 天 bootstrap、每日 refresh、checkpoint/resume 和 dry-run。
-  - `scripts/install_rail_timetable_refresh.ps1`：Windows 每日刷新任务的安装、检查和卸载。
+  - `scripts/import_12306_timetable.py`：15 天 bootstrap、每日 refresh、checkpoint/resume、传输故障受控自动续跑和 dry-run。
+  - `scripts/install_rail_timetable_refresh.ps1`：Windows 每日刷新任务的安装、检查和卸载；使用 `IgnoreNew` 单实例与可配置续跑退避。
 - `tools/codex-task-dock/`：与旅行业务隔离的 Codex 桌面任务侧栏；增量读取 `docs/Dev/task*.md`，管理隔离开发、补丁状态与单任务回退。
 - `docs/`：产品任务拆分、架构索引、API 合同和历史文档归档。
 - `mock_data/`：路线 mock 数据目录。
