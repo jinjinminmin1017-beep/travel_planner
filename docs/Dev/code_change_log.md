@@ -895,3 +895,14 @@
 - 后续修复：真实启动暴露 Windows 默认电池策略会以 `0xC000013A` 终止任务；提交 `2b4d8e1` 显式允许电池启动和供电切换不中止，并增加静态回归。提交 `b2e241c` 为长时间首次补库取消 12 小时任务强制终止，结束条件交由受控 importer 管理。
 - 验证：铁路定向测试 30 passed；后端全量测试 307 passed；Python compileall、PowerShell 语法检查与 `git diff --check` 通过。
 - 兼容性：无 API 和数据库迁移；未指定监督参数的手工命令保持一次性行为；429、验证码和访问控制继续立即停止。
+
+
+## 2026-10-13 22:44:33 +08:00 — 完成铁路导入吞吐、刷新与恢复优化
+
+- 用户需求：解决定时导入失败、日期补不齐，并完成已确认的采集流水线优化。
+- 代码提交：`8ccef8c50da4d5eecb8ab958500f22e44d904207`。
+- 修改内容：v2 分日 checkpoint 与旧 v1 保留迁移；SQLite 权威断点、批量事务、准确增量计数及句柄关闭；近期/延期公平调度、单日错误隔离、访问限制全局停止；每日 generation 重发现、详情 TTL 和旧 STAGING 撤回行清理；整轮共享预算、指标、日志、回执及进程锁。
+- 本机部署：72 个服务日已迁移为分片，manifest 12,744 bytes，260,476,081 bytes 的旧文件 SHA-256 未变；恢复 TravelPlannerRailTimetableRefresh，每天 03:30，默认 8 小时程序内预算，下次 2026-10-14 03:30。
+- 验证：后端全量 372 passed（45.90s）；新增 65 项专项；PowerShell AST、Python compileall、diff-check 通过；G1 单车低频真实 dry-run 两个请求成功、无重试及 stderr；runner 的 0/2 退出码均正确传递。
+- 离线容量：1000 车次 fixture，旧逻辑预计 6,539,280,000 bytes，新周期分日实际 3,754,496 bytes；20 个 upsert 事务、无逐车 COUNT。报告见 docs/Test/rail_import_benchmark_20261013.json。
+- 边界：未改变 API 或数据库表结构，未放宽完整性/访问控制，也未把工程验收等同全国窗口覆盖完成；本次不启动全国窗口导入。

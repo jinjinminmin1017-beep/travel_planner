@@ -65,3 +65,13 @@
 - 本机部署：已安装并启动 `TravelPlannerRailTimetableRefresh`，每天 03:30 触发；首次运行已进入 2026-09-14 发现阶段并持续更新 checkpoint。任务允许电池启动和供电切换，不会再被 Windows 默认电源策略中止。
 - 代码提交：`afb78cc`、`2b4d8e1`、`b2e241c`。
 - 验证：铁路定向测试 30 passed；后端全量测试 307 passed；PowerShell 安装脚本语法检查和 `git diff --check` 通过。
+
+
+## 2026-10-13 — 完成铁路数据获取优化
+
+- 用户需求：完成此前分析的导入吞吐、日期调度、刷新正确性与恢复优化。
+- 完成状态：已完成，完成时间 2026-10-13 22:44:33 +08:00。
+- 任务与证据：docs/Dev/task_from_arc_for_dev_20261013_rail_import.md、docs/Test/task_from_arc_for_test_20261013_rail_import.md。
+- 代码提交：`8ccef8c50da4d5eecb8ab958500f22e44d904207`。
+- 验证：372 项后端测试、真实单车 dry-run、离线容量验证及本机旧 checkpoint 保留式迁移通过；已恢复每日 03:30 的计划任务。
+- 运行范围：本次完成优化与部署，实际日期缺口由后续定时运行补齐，没有把未完成数据标为 ACTIVE。
