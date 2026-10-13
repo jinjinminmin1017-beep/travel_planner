@@ -1,0 +1,85 @@
+{
+  "benchmark_kind": "offline_fixture_capacity",
+  "measurement_scope": "local JSON, SQLite, and importer orchestration; no real network throughput measured",
+  "fixture": {
+    "services_per_date": 1000,
+    "historical_dates": 15,
+    "stops_per_service": 8,
+    "checkpoint_every_services": 100,
+    "storage_batch_size": 50
+  },
+  "legacy_full_document_per_service": {
+    "method": "one_measured_final_serialization_plus_exact_completed_list_growth",
+    "physical_checkpoint_writes": 0,
+    "measured_final_serialization_bytes": 6552267,
+    "measured_final_serialization_seconds": 0.169118,
+    "projected_per_service_write_count": 1000,
+    "projected_logical_checkpoint_bytes": 6539280000,
+    "excluded_writes": "discovery callbacks, batch start, and final activation saves"
+  },
+  "current_date_files_periodic_writes": {
+    "elapsed_seconds": 0.685761,
+    "physical_checkpoint_bytes": 3754496,
+    "physical_checkpoint_writes": 28,
+    "checkpoint_write_seconds": 0.094,
+    "historical_seed_bytes_excluded": 4170480,
+    "historical_seed_writes_excluded": 30,
+    "pipeline_summary": {
+      "service_date": "2026-10-13",
+      "discovered_count": 1000,
+      "service_count": 1000,
+      "stop_count": 8000,
+      "query_count": 1,
+      "activated": true,
+      "metrics": {
+        "discovery_seconds": 0.0,
+        "detail_seconds": 0.04700000071898103,
+        "storage_seconds": 0.5459999996237457,
+        "checkpoint_seconds": 0.0939999995753169,
+        "checkpoint_writes": 28,
+        "checkpoint_bytes": 3754496,
+        "reused_count": 0,
+        "resumed_count": 0,
+        "fetched_count": 1000,
+        "requests": 0,
+        "discovery_requests": 0,
+        "detail_requests": 0,
+        "network_seconds": 0.0,
+        "elapsed_seconds": 0.6869999999180436
+      }
+    },
+    "sql_by_phase": {
+      "other": {
+        "begin": 1,
+        "commit": 1,
+        "rollback": 0,
+        "count_statements": 0
+      },
+      "upsert": {
+        "begin": 20,
+        "commit": 20,
+        "rollback": 0,
+        "count_statements": 0
+      },
+      "activation": {
+        "begin": 1,
+        "commit": 1,
+        "rollback": 0,
+        "count_statements": 3
+      }
+    },
+    "fixture_detail_calls": 1000,
+    "fixture_discovery_calls": 1,
+    "actual_network_requests": 0
+  },
+  "logical_byte_reduction_factor": 1741.72,
+  "network_spacing_estimate": {
+    "request_interval_seconds": 1.5,
+    "one_full_date_detail_seconds": 1500.0,
+    "full_window_detail_seconds": 22500.0,
+    "horizon_days": 15,
+    "formula": "services_per_date * dates * request_interval_seconds",
+    "assumptions": "one detail request per service after discovery; excludes latency, discovery spacing, retries and reuse"
+  },
+  "temporary_files_removed": true
+}

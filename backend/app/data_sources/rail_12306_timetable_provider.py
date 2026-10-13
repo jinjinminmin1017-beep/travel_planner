@@ -35,6 +35,10 @@ class RailTimetableTemporaryError(RailTimetableProviderError):
     pass
 
 
+class RailTimetableBudgetExceeded(RailTimetableProviderError):
+    pass
+
+
 class RailTimetableServiceWithdrawnError(RailTimetableProviderError):
     pass
 
@@ -93,19 +97,42 @@ class Rail12306TimetableProvider:
         interval_seconds: float = 1.5,
         timeout_seconds: float = 15.0,
         max_temporary_retries: int = 2,
+        remaining_budget: Callable[[], float | None] | None = None,
     ) -> None:
         if interval_seconds < 1.0:
             raise ValueError("12306 timetable import interval must be at least 1 second")
+        if timeout_seconds <= 0 or max_temporary_retries < 0:
+            raise ValueError("12306 timetable timeout must be positive and retries nonnegative")
         self.search_base_url = search_base_url.rstrip("/")
         self.ticket_base_url = ticket_base_url.rstrip("/")
         self.interval_seconds = interval_seconds
+        self.timeout_seconds = timeout_seconds
         self.max_temporary_retries = max_temporary_retries
+        self.remaining_budget = remaining_budget
         self.client = client or httpx.Client(
             timeout=timeout_seconds,
             follow_redirects=False,
             headers={"User-Agent": user_agent, "Accept": "application/json"},
         )
         self._last_request_at: float | None = None
+        self._request_metrics: dict[str, int | float] = {
+            "requests": 0,
+            "network_seconds": 0.0,
+            "discovery_requests": 0,
+            "detail_requests": 0,
+            "discovery_network_seconds": 0.0,
+            "detail_network_seconds": 0.0,
+            "temporary_retry_count": 0,
+            "retry_wait_seconds": 0.0,
+            "interval_wait_seconds": 0.0,
+        }
+
+    @property
+    def request_metrics(self) -> dict[str, int | float]:
+        return dict(self._request_metrics)
+
+    def metrics_snapshot(self) -> dict[str, int | float]:
+        return self.request_metrics
 
     def discover_services(
         self,
@@ -316,14 +343,30 @@ class Rail12306TimetableProvider:
     ) -> tuple[dict[str, Any], str]:
         headers = {"Referer": referer} if referer else None
         for attempt in range(self.max_temporary_retries + 1):
+            self._remaining_seconds()
             self._wait_for_interval()
+            remaining = self._remaining_seconds()
+            request_options: dict[str, Any] = {"params": params, "headers": headers}
+            if remaining is not None:
+                request_options["timeout"] = min(self.timeout_seconds, remaining)
+            phase = "detail" if operation == "train_detail" else "discovery"
+            self._request_metrics["requests"] += 1
+            self._request_metrics[f"{phase}_requests"] += 1
+            if attempt > 0:
+                self._request_metrics["temporary_retry_count"] += 1
             started = time.monotonic()
             try:
-                response = self.client.get(url, params=params, headers=headers)
+                try:
+                    response = self.client.get(url, **request_options)
+                finally:
+                    network_seconds = max(0.0, time.monotonic() - started)
+                    self._request_metrics["network_seconds"] += network_seconds
+                    self._request_metrics[f"{phase}_network_seconds"] += network_seconds
             except (httpx.TimeoutException, httpx.TransportError) as exc:
+                self._remaining_seconds()
                 if attempt >= self.max_temporary_retries:
                     raise RailTimetableTemporaryError(f"12306 {operation} transport failure") from exc
-                time.sleep(min(8.0, 2.0**attempt))
+                self._sleep(min(8.0, 2.0**attempt), "retry_wait_seconds")
                 continue
             elapsed_ms = round((time.monotonic() - started) * 1000, 2)
             response_hash = hashlib.sha256(response.content).hexdigest()
@@ -340,9 +383,10 @@ class Rail12306TimetableProvider:
             if response.status_code in {401, 403, 418}:
                 raise RailTimetableAccessControlError("12306 access control challenge encountered; import paused")
             if response.status_code >= 500:
+                self._remaining_seconds()
                 if attempt >= self.max_temporary_retries:
                     raise RailTimetableTemporaryError(f"12306 {operation} server failure")
-                time.sleep(min(8.0, 2.0**attempt))
+                self._sleep(min(8.0, 2.0**attempt), "retry_wait_seconds")
                 continue
             if response.status_code != 200:
                 raise RailTimetableProviderError(f"12306 {operation} returned HTTP {response.status_code}")
@@ -358,6 +402,7 @@ class Rail12306TimetableProvider:
                 raise RailTimetableProviderError(f"12306 {operation} response is not valid JSON") from exc
             if not isinstance(payload, dict):
                 raise RailTimetableProviderError(f"12306 {operation} response is not a JSON object")
+            self._remaining_seconds()
             return payload, response_hash
         raise RailTimetableTemporaryError(f"12306 {operation} exhausted retry budget")
 
@@ -366,8 +411,24 @@ class Rail12306TimetableProvider:
         if self._last_request_at is not None:
             remaining = self.interval_seconds - (now - self._last_request_at)
             if remaining > 0:
-                time.sleep(remaining)
+                self._sleep(remaining, "interval_wait_seconds")
         self._last_request_at = time.monotonic()
+
+    def _remaining_seconds(self) -> float | None:
+        remaining = self.remaining_budget() if self.remaining_budget is not None else None
+        if remaining is not None and remaining <= 0:
+            raise RailTimetableBudgetExceeded("12306 timetable import execution budget exhausted")
+        return remaining
+
+    def _sleep(self, seconds: float, metric: str) -> None:
+        remaining = self._remaining_seconds()
+        duration = min(seconds, remaining) if remaining is not None else seconds
+        started = time.monotonic()
+        try:
+            time.sleep(duration)
+        finally:
+            self._request_metrics[metric] += max(0.0, time.monotonic() - started)
+        self._remaining_seconds()
 
 
 def _parse_discovery_row(value: Any, service_date: date) -> DiscoveredRailService | None:
@@ -391,6 +452,19 @@ def _parse_discovery_row(value: Any, service_date: date) -> DiscoveredRailServic
         "destination": destination,
         "total_stop_count": total_count,
     }
+    # Search responses do not always include timing fields. When present they
+    # must invalidate detail reuse; absent fields cannot establish an unchanged
+    # intermediate timetable, which the importer's detail TTL checks separately.
+    timing_fields = {
+        key: str(value[key]).strip()
+        for key in (
+            "start_time", "arrive_time", "start_day_diff", "arrive_day_diff", "running_time",
+            "departure_time", "arrival_time", "departure_day_diff", "arrival_day_diff",
+        )
+        if key in value and value[key] is not None and str(value[key]).strip()
+    }
+    if timing_fields:
+        fingerprint_payload["timing_fields"] = timing_fields
     fingerprint = hashlib.sha256(
         json.dumps(fingerprint_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()

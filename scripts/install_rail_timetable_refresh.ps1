@@ -8,13 +8,19 @@ param(
     [ValidateRange(60, 3600)]
     [int]$TransientResumeBaseSeconds = 300,
     [ValidateRange(60, 7200)]
-    [int]$TransientResumeMaxSeconds = 3600
+    [int]$TransientResumeMaxSeconds = 3600,
+    [ValidateRange(60, 86400)]
+    [int]$MaxRunSeconds = 28800,
+    [ValidateRange(1, 168)]
+    [int]$DetailTtlHours = 36
 )
 
 $ErrorActionPreference = "Stop"
 $projectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $pythonPath = Join-Path $projectRoot ".venv\Scripts\python.exe"
 $importScript = Join-Path $projectRoot "scripts\import_12306_timetable.py"
+$runScript = Join-Path $projectRoot "scripts\run_rail_timetable_refresh.ps1"
+$powershellPath = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
 
 if ($Mode -eq "Check") {
     $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
@@ -35,6 +41,8 @@ if ($Mode -eq "Check") {
         AllowStartOnBatteries = -not $task.Settings.DisallowStartIfOnBatteries
         StopOnBatteryChange = $task.Settings.StopIfGoingOnBatteries
         ExecutionTimeLimit = $task.Settings.ExecutionTimeLimit
+        LogonType = $task.Principal.LogonType
+        Logs = Join-Path $projectRoot "logs\rail_refresh_*.stdout.log"
     }
     exit 0
 }
@@ -69,16 +77,26 @@ $parsedTime = [datetime]::MinValue
 if (-not [datetime]::TryParseExact($RefreshAt, "HH:mm", $null, [Globalization.DateTimeStyles]::None, [ref]$parsedTime)) {
     throw "RefreshAt must use HH:mm format."
 }
+if (-not (Test-Path -LiteralPath $runScript -PathType Leaf)) {
+    throw "Refresh runner not found at $runScript"
+}
 if ($TransientResumeMaxSeconds -lt $TransientResumeBaseSeconds) {
     throw "TransientResumeMaxSeconds must be at least TransientResumeBaseSeconds."
 }
 
 $arguments = (
-    '"{0}" --mode refresh --resume --scheduled --auto-resume-transient ' +
-    '--max-transient-resumes {1} --transient-resume-base-seconds {2} --transient-resume-max-seconds {3}'
-) -f $importScript, $MaxTransientResumes, $TransientResumeBaseSeconds, $TransientResumeMaxSeconds
-$action = New-ScheduledTaskAction -Execute $pythonPath -Argument $arguments -WorkingDirectory $projectRoot
-$trigger = New-ScheduledTaskTrigger -Daily -At $parsedTime
+    '-NoProfile -NonInteractive -WindowStyle Hidden -File "{0}" ' +
+    '-MaxTransientResumes {1} -TransientResumeBaseSeconds {2} -TransientResumeMaxSeconds {3} ' +
+    '-MaxRunSeconds {4} -DetailTtlHours {5}'
+) -f $runScript, $MaxTransientResumes, $TransientResumeBaseSeconds, $TransientResumeMaxSeconds, $MaxRunSeconds, $DetailTtlHours
+$action = New-ScheduledTaskAction -Execute $powershellPath -Argument $arguments -WorkingDirectory $projectRoot
+# Installing after today's slot starts tomorrow, without an accidental catch-up
+# against code or checkpoint files that are still being prepared.
+$firstRun = (Get-Date).Date.Add($parsedTime.TimeOfDay)
+if ($firstRun -le (Get-Date)) {
+    $firstRun = $firstRun.AddDays(1)
+}
+$trigger = New-ScheduledTaskTrigger -Daily -At $firstRun
 $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit ([TimeSpan]::Zero)
 Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Settings $settings -Description "Refresh D0-D+14 G/D/C timetable snapshots for Travel Planner." -Force | Out-Null
 Write-Output "Installed scheduled task $TaskName at $RefreshAt local time."

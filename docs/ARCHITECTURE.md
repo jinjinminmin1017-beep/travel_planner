@@ -541,6 +541,37 @@ Planner 只有在两个开关开启、目标日期存在有效 ACTIVE 批次时�
 - `docs/Test/task_from_arc_for_test_20260804_rail_timetable.md`
 - `docs/Test/task_from_arc_for_test_20260814_rail_station_geodata.md`
 
+### 10.10 铁路导入吞吐与刷新恢复（2026-10-13）
+
+当前问题：全历史 checkpoint 每车重写、逐车全批计数、最远日期优先及整轮失败退出，导致近期日期补齐不足；同一服务日的 COMPLETE discovery 被跨刷新复用，也会漏掉运行图变化。
+
+实现边界：不更换数据源、SQLite 或在线规划 API；不把 STAGING 当作完整覆盖，不降低访问控制与原子激活门禁。
+
+数据流：
+
+```text
+单实例锁 -> v2 小 manifest + 按服务日懒加载（保留旧 v1）
+  -> 近期缺口优先 / 推迟日期公平调度 / 远期扩展
+  -> 新每日 generation 重新发现，同 generation 断点续跑
+  -> 摘要 + 详情 fetched_at TTL 决定复用或重新请求
+  -> 小批事务写入、准确增量统计、SQLite 权威断点
+  -> 完整性核实与原子 ACTIVE 切换
+  -> 阶段 metrics、分日 checkpoint、运行日志与退出回执
+```
+
+- `rail_timetable_store.py` 保留现有表结构和单条接口，增加小批 upsert 与已提交服务进度读取。计数与服务/经停在同一事务更新；激活仍独立核实实际计数及站序/时刻。
+- `scripts/rail_timetable_checkpoint.py` 采用 v2 分日文件与小 manifest，原子写入、Windows 文件占用有限退避和跨进程锁。旧 v1 不被覆盖或删除，迁移后只加载当前日期详情。
+- 新每日 refresh 不依赖上次 COMPLETE discovery；单车详情只有摘要相符且在 TTL 内才复用。源摘要提供的实际时刻会参与指纹，缺失字段不编造。
+- 普通单日确定性失败继续处理窗口内其他日期；访问限制全局停止，系统性数据库/文件错误停止。监督、等待、请求和单日工作共享明确预算，到期保留可续跑状态。
+- Windows 计划入口默认每天 03:30、8 小时程序内预算，隐藏运行并保存日志及回执；任务不强制杀死数据库写入。该本机身份要求用户登录。
+- 离线容量脚本在临时目录比较写入量、事务和阶段耗时。网络间隔与来源响应仍决定实网容量，离线通过不代表全国窗口或来源可用性已经验收。
+
+影响文件：导入器、分日 checkpoint 模块、rail store、12306 时刻表 provider、Windows 安装/运行脚本、专项测试及离线基准；前端和 API 合同无变化。
+
+风险与回滚：每日重新发现及 TTL 到期会产生必要的复核请求，需按实测容量调预算；停止当前进程后可切回旧代码、原 v1 checkpoint 和同一 SQLite，旧代码可能幂等重写新版已提交的服务。覆盖缺口仍需后台实际运行补齐，不能把工程优化完成标记为数据覆盖完成。
+
+对应任务与验收：`docs/Dev/task_from_arc_for_dev_20261013_rail_import.md`、`docs/Test/task_from_arc_for_test_20261013_rail_import.md`。
+
 ## 11. 安全与可观测性（当前）
 
 ### 11.1 安全边界

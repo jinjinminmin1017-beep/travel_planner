@@ -53,7 +53,10 @@
 - `schemas/`：导出的 API/schema JSON Schema。
 - `scripts/`：启动、schema 导出、Provider 配置检查、live smoke、数据导入、质量评估脚本。
   - `scripts/import_12306_timetable.py`：15 天 bootstrap、每日 refresh、checkpoint/resume、传输故障受控自动续跑和 dry-run。
+  - `scripts/rail_timetable_checkpoint.py`：v2 小 manifest、分服务日断点、v1 保留式迁移、原子保存及跨进程写入锁。
   - `scripts/install_rail_timetable_refresh.ps1`：Windows 每日刷新任务的安装、检查和卸载；使用 `IgnoreNew` 单实例与可配置续跑退避。
+  - `scripts/run_rail_timetable_refresh.ps1`：隐藏运行、整轮预算、stdout/stderr 日志和退出回执。
+  - `scripts/benchmark_rail_timetable_import.py`：临时数据库上的离线写入/断点容量验证，不访问外部服务。
 - `tools/codex-task-dock/`：与旅行业务隔离的 Codex 桌面任务侧栏；增量读取 `docs/Dev/task*.md`，管理隔离开发、补丁状态与单任务回退。
 - `docs/`：产品任务拆分、架构索引、API 合同和历史文档归档。
 - `mock_data/`：路线 mock 数据目录。

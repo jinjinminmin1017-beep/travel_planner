@@ -1,0 +1,59 @@
+{
+  "mode": "single_train_low_frequency_dry_run",
+  "service_date": "2026-10-14",
+  "train_number": "G1",
+  "exit_code": 0,
+  "results": [
+    {
+      "status": "DRY_RUN_COMPLETE",
+      "generation": "2026-10-13",
+      "dates": [
+        {
+          "service_date": "2026-10-14",
+          "discovered_count": 1,
+          "fetched_count": 1,
+          "query_count": 1,
+          "activated": false,
+          "metrics": {
+            "discovery_seconds": 0.1559999999590218,
+            "detail_seconds": 1.6400000001303852,
+            "storage_seconds": 0.0,
+            "checkpoint_seconds": 0.015999999828636646,
+            "checkpoint_writes": 6,
+            "checkpoint_bytes": 2949,
+            "reused_count": 0,
+            "resumed_count": 0,
+            "fetched_count": 1,
+            "requests": 2,
+            "network_seconds": 0.375,
+            "discovery_requests": 1,
+            "detail_requests": 1,
+            "discovery_network_seconds": 0.1559999999590218,
+            "detail_network_seconds": 0.2190000000409782,
+            "temporary_retry_count": 0,
+            "retry_wait_seconds": 0.0,
+            "interval_wait_seconds": 1.3590000001713634,
+            "elapsed_seconds": 1.8119999999180436
+          }
+        }
+      ],
+      "metrics": {
+        "elapsed_seconds": 1.812,
+        "requests": 2,
+        "network_seconds": 0.375,
+        "discovery_requests": 1,
+        "detail_requests": 1,
+        "discovery_network_seconds": 0.1559999999590218,
+        "detail_network_seconds": 0.2190000000409782,
+        "temporary_retry_count": 0,
+        "retry_wait_seconds": 0.0,
+        "interval_wait_seconds": 1.3590000001713634,
+        "checkpoint_seconds": 0.016,
+        "checkpoint_writes": 7,
+        "checkpoint_bytes": 3222
+      }
+    }
+  ],
+  "stderr": "",
+  "production_database_untouched": true
+}

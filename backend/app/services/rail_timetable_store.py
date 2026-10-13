@@ -6,7 +6,8 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Literal, Sequence
+from types import TracebackType
+from typing import Iterable, Literal, Sequence
 from uuid import uuid4
 
 
@@ -34,6 +35,12 @@ class RailServiceInput:
     summary_fingerprint: str
     fetched_at: datetime
     stops: tuple[RailStopTimeInput, ...]
+
+
+@dataclass(frozen=True)
+class RailServiceProgress:
+    summary_fingerprint: str
+    fetched_at: datetime
 
 
 @dataclass(frozen=True)
@@ -176,63 +183,146 @@ class RailTimetableStore:
         return _batch_from_row(row) if row else None
 
     def upsert_service(self, batch_id: str, service: RailServiceInput) -> str:
-        batch = self.get_batch(batch_id)
-        if batch is None or batch.status != "STAGING":
-            raise RailTimetableStoreError("rail service can only be written to a STAGING batch")
-        if service.service_date != batch.service_date:
-            raise RailTimetableStoreError("rail service date does not match batch date")
-        _validate_service(service)
-        service_id = _service_id(batch_id, service.train_no_internal)
+        return self.upsert_services(batch_id, (service,))[0]
+
+    def upsert_services(self, batch_id: str, services: Sequence[RailServiceInput]) -> list[str]:
+        """Commit a chunk's validated services and counters together, or roll it all back."""
+        if not services:
+            return []
+        for service in services:
+            _validate_service(service)
+        service_ids: list[str] = []
         with _connect(self.path) as conn:
             conn.execute("BEGIN IMMEDIATE")
-            conn.execute(
-                """
-                INSERT INTO rail_service(
-                  service_id, batch_id, service_date, train_no_internal, train_number,
-                  origin_station_code, destination_station_code, summary_fingerprint, fetched_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(batch_id, train_no_internal) DO UPDATE SET
-                  train_number = excluded.train_number,
-                  origin_station_code = excluded.origin_station_code,
-                  destination_station_code = excluded.destination_station_code,
-                  summary_fingerprint = excluded.summary_fingerprint,
-                  fetched_at = excluded.fetched_at
-                """,
-                (
-                    service_id,
-                    batch_id,
-                    service.service_date.isoformat(),
-                    service.train_no_internal,
-                    service.train_number,
-                    service.origin_station_code,
-                    service.destination_station_code,
-                    service.summary_fingerprint,
-                    _aware(service.fetched_at).isoformat(),
-                ),
-            )
-            conn.execute("DELETE FROM rail_stop_time WHERE service_id = ?", (service_id,))
-            conn.executemany(
-                """
-                INSERT INTO rail_stop_time(
-                  service_id, stop_sequence, station_code, arrival_time,
-                  arrival_day_offset, departure_time, departure_day_offset
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
-                """,
-                [
+            batch = conn.execute(
+                "SELECT service_date, status FROM rail_timetable_batch WHERE batch_id = ?", (batch_id,)
+            ).fetchone()
+            if batch is None or batch[1] != "STAGING":
+                raise RailTimetableStoreError("rail service can only be written to a STAGING batch")
+            service_delta = 0
+            stop_delta = 0
+            for service in services:
+                if service.service_date.isoformat() != batch[0]:
+                    raise RailTimetableStoreError("rail service date does not match batch date")
+                existing = conn.execute(
+                    "SELECT service_id FROM rail_service WHERE batch_id = ? AND train_no_internal = ?",
+                    (batch_id, service.train_no_internal),
+                ).fetchone()
+                service_id = str(existing[0]) if existing else _service_id(batch_id, service.train_no_internal)
+                conn.execute(
+                    """
+                    INSERT INTO rail_service(
+                      service_id, batch_id, service_date, train_no_internal, train_number,
+                      origin_station_code, destination_station_code, summary_fingerprint, fetched_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(batch_id, train_no_internal) DO UPDATE SET
+                      train_number = excluded.train_number,
+                      origin_station_code = excluded.origin_station_code,
+                      destination_station_code = excluded.destination_station_code,
+                      summary_fingerprint = excluded.summary_fingerprint,
+                      fetched_at = excluded.fetched_at
+                    """,
                     (
                         service_id,
-                        stop.stop_sequence,
-                        stop.station_code,
-                        stop.arrival_time,
-                        stop.arrival_day_offset,
-                        stop.departure_time,
-                        stop.departure_day_offset,
-                    )
-                    for stop in service.stops
-                ],
+                        batch_id,
+                        service.service_date.isoformat(),
+                        service.train_no_internal,
+                        service.train_number,
+                        service.origin_station_code,
+                        service.destination_station_code,
+                        service.summary_fingerprint,
+                        _aware(service.fetched_at).isoformat(),
+                    ),
+                )
+                removed_stops = conn.execute(
+                    "DELETE FROM rail_stop_time WHERE service_id = ?", (service_id,)
+                ).rowcount
+                conn.executemany(
+                    """
+                    INSERT INTO rail_stop_time(
+                      service_id, stop_sequence, station_code, arrival_time,
+                      arrival_day_offset, departure_time, departure_day_offset
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    [
+                        (
+                            service_id,
+                            stop.stop_sequence,
+                            stop.station_code,
+                            stop.arrival_time,
+                            stop.arrival_day_offset,
+                            stop.departure_time,
+                            stop.departure_day_offset,
+                        )
+                        for stop in service.stops
+                    ],
+                )
+                service_delta += int(existing is None)
+                stop_delta += len(service.stops) - removed_stops
+                service_ids.append(service_id)
+            # Counters and rows commit together; activation independently recounts the batch.
+            conn.execute(
+                """
+                UPDATE rail_timetable_batch
+                   SET service_count = service_count + ?, stop_count = stop_count + ?
+                 WHERE batch_id = ?
+                """,
+                (service_delta, stop_delta, batch_id),
             )
-            self._refresh_batch_counts(conn, batch_id)
-        return service_id
+        return service_ids
+
+    def batch_service_progress(self, batch_id: str) -> dict[str, RailServiceProgress]:
+        """Return committed detail provenance; uncommitted importer buffers are excluded."""
+        with _connect(self.path) as conn:
+            rows = conn.execute(
+                "SELECT train_no_internal, summary_fingerprint, fetched_at FROM rail_service WHERE batch_id = ?",
+                (batch_id,),
+            ).fetchall()
+        return {
+            str(row[0]): RailServiceProgress(str(row[1]), _parse_datetime(str(row[2])))
+            for row in rows
+        }
+
+    def delete_services(self, batch_id: str, train_nos: Iterable[str]) -> int:
+        """Remove reconciled STAGING services and their stops in one transaction."""
+        requested = tuple(dict.fromkeys(value.strip() for value in train_nos if value.strip()))
+        removed_services = 0
+        removed_stops = 0
+        with _connect(self.path) as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            batch = conn.execute(
+                "SELECT status FROM rail_timetable_batch WHERE batch_id = ?", (batch_id,)
+            ).fetchone()
+            if batch is None or batch[0] != "STAGING":
+                raise RailTimetableStoreError("rail services can only be deleted from a STAGING batch")
+            for offset in range(0, len(requested), 500):
+                chunk = requested[offset : offset + 500]
+                placeholders = ",".join("?" for _ in chunk)
+                rows = conn.execute(
+                    f"SELECT service_id FROM rail_service WHERE batch_id = ? AND train_no_internal IN ({placeholders})",
+                    (batch_id, *chunk),
+                ).fetchall()
+                if not rows:
+                    continue
+                service_ids = tuple(str(row[0]) for row in rows)
+                stop_placeholders = ",".join("?" for _ in service_ids)
+                removed_stops += conn.execute(
+                    f"DELETE FROM rail_stop_time WHERE service_id IN ({stop_placeholders})", service_ids
+                ).rowcount
+                removed_services += conn.execute(
+                    f"DELETE FROM rail_service WHERE batch_id = ? AND train_no_internal IN ({placeholders})",
+                    (batch_id, *chunk),
+                ).rowcount
+            if removed_services:
+                conn.execute(
+                    """
+                    UPDATE rail_timetable_batch
+                       SET service_count = service_count - ?, stop_count = stop_count - ?
+                     WHERE batch_id = ?
+                    """,
+                    (removed_services, removed_stops, batch_id),
+                )
+        return removed_services
 
     def copy_service(self, source_batch_id: str, target_batch_id: str, train_no_internal: str) -> bool:
         with _connect(self.path) as conn:
@@ -322,6 +412,9 @@ class RailTimetableStore:
                     (source_batch_id, *chunk),
                 ).fetchall()
                 for row in rows:
+                    if source_batch_id == target_batch_id:
+                        copied.add(str(row[2]))
+                        continue
                     target_service_id = _service_id(target_batch_id, str(row[2]))
                     conn.execute(
                         """
@@ -547,10 +640,27 @@ class RailTimetableStore:
         )
 
 
+class _ClosingConnection(sqlite3.Connection):
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        exc_traceback: TracebackType | None,
+    ) -> bool:
+        try:
+            return super().__exit__(exc_type, exc_value, exc_traceback)
+        finally:
+            self.close()
+
+
 def _connect(path: Path) -> sqlite3.Connection:
-    conn = sqlite3.connect(path, timeout=30)
-    conn.execute("PRAGMA foreign_keys = ON")
-    conn.execute("PRAGMA busy_timeout = 30000")
+    conn = sqlite3.connect(path, timeout=30, factory=_ClosingConnection)
+    try:
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("PRAGMA busy_timeout = 30000")
+    except BaseException:
+        conn.close()
+        raise
     return conn
 
 
